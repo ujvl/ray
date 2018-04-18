@@ -138,11 +138,13 @@ flatbuffers::Offset<protocol::ForwardTaskRequest> Lineage::ToFlatbuffer(
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size)
+                           uint64_t max_lineage_size,
+                           bool disabled)
     : client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
-      max_lineage_size_(max_lineage_size) {}
+      max_lineage_size_(max_lineage_size),
+      disabled_(disabled) {}
 
 /// A helper function to merge one lineage into another, in DFS order.
 ///
@@ -181,6 +183,9 @@ void MergeLineageHelper(const TaskID &task_id, const Lineage &lineage_from,
 }
 
 bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_lineage) {
+  if (disabled_) {
+    return true;
+  }
   auto task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "add waiting task " << task_id << " on " << client_id_;
   // Merge the uncommitted lineage into the lineage cache.
@@ -211,6 +216,9 @@ bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_l
 }
 
 bool LineageCache::AddReadyTask(const Task &task) {
+  if (disabled_) {
+    return true;
+  }
   const TaskID task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "add ready task " << task_id << " on " << client_id_;
 
@@ -254,6 +262,9 @@ uint64_t LineageCache::CountUnsubscribedLineage(const TaskID &task_id,
 }
 
 bool LineageCache::RemoveWaitingTask(const TaskID &task_id) {
+  if (disabled_) {
+    return true;
+  }
   RAY_LOG(DEBUG) << "remove waiting task " << task_id << " on " << client_id_;
   auto entry = lineage_.GetEntryMutable(task_id);
   if (!entry) {
@@ -308,6 +319,9 @@ bool LineageCache::RemoveWaitingTask(const TaskID &task_id) {
 }
 
 void LineageCache::MarkTaskAsForwarded(const TaskID &task_id, const ClientID &node_id) {
+  if (disabled_) {
+    return;
+  }
   RAY_CHECK(!node_id.is_nil());
   lineage_.GetEntryMutable(task_id)->MarkExplicitlyForwarded(node_id);
 }
@@ -488,6 +502,9 @@ void LineageCache::EvictRemoteLineage(const TaskID &task_id) {
 }
 
 void LineageCache::HandleEntryCommitted(const TaskID &task_id) {
+  if (disabled_) {
+    return;
+  }
   RAY_LOG(DEBUG) << "task committed: " << task_id;
   auto entry = EvictTask(task_id);
   if (!entry) {

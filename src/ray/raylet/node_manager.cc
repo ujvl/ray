@@ -104,18 +104,22 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           RayConfig::instance().initial_reconstruction_timeout_milliseconds(),
           gcs_client_->client_table().GetLocalClientId(), gcs_client->task_lease_table(),
           std::make_shared<ObjectDirectory>(gcs_client),
-          gcs_client_->task_reconstruction_log()),
+          gcs_client_->task_reconstruction_log(),
+          /*disabled=*/(config.gcs_delay_ms >= 0)),
       task_dependency_manager_(
           object_manager, reconstruction_policy_, io_service,
           gcs_client_->client_table().GetLocalClientId(),
           RayConfig::instance().initial_reconstruction_timeout_milliseconds(),
-          gcs_client->task_lease_table()),
+          gcs_client->task_lease_table(),
+          /*disabled=*/(config.gcs_delay_ms >= 0)),
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client->raylet_task_table(), gcs_client->raylet_task_table(),
-                     config.max_lineage_size),
+                     config.max_lineage_size,
+                     /*disabled=*/(config.gcs_delay_ms >= 0)),
       remote_clients_(),
       remote_server_connections_(),
-      actor_registry_() {
+      actor_registry_(),
+      gcs_delay_ms_(config.gcs_delay_ms) {
   RAY_CHECK(heartbeat_period_.count() > 0);
   // Initialize the resource map with own cluster resource configuration.
   ClientID local_client_id = gcs_client_->client_table().GetLocalClientId();
@@ -417,7 +421,8 @@ void NodeManager::HandleActorCreation(const ActorID &actor_id,
     // The task's uncommitted lineage was already added to the local lineage
     // cache upon the initial submission, so it's okay to resubmit it with an
     // empty lineage this time.
-    SubmitTask(method, Lineage());
+    // Skip the write to the GCS.
+    _SubmitTask(method, Lineage(), /*forwarded=*/false);
   }
 }
 
@@ -873,7 +878,56 @@ void NodeManager::TreatTaskAsFailed(const TaskSpecification &spec) {
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded) {
-  const TaskID task_id = task.GetTaskSpecification().TaskId();
+  TaskID task_id = task.GetTaskSpecification().TaskId();
+  if (forwarded) {
+    // If the task was forwarded to us, then it's already been written to the
+    // GCS.
+    _SubmitTask(task, uncommitted_lineage, forwarded);
+  } else if (gcs_delay_ms_ == 0) {
+    gcs_task_cache_.emplace(task_id, task);
+    FlushTask(task_id);
+  } else if (gcs_delay_ms_ > 0) {
+    task_dependency_manager_.TaskPending(task);
+    auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
+    auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
+    gcs_timer->async_wait([this, gcs_timer, task_id](const boost::system::error_code &error) {
+      task_dependency_manager_.TaskCanceled(task_id);
+      RAY_CHECK(!error);
+      FlushTask(task_id);
+    });
+    gcs_task_cache_.emplace(task_id, task);
+  } else {
+    _SubmitTask(task, uncommitted_lineage, forwarded);
+  }
+}
+
+void NodeManager::FlushTask(const TaskID &task_id) {
+  auto task_entry = gcs_task_cache_.find(task_id);
+  RAY_CHECK(task_entry != gcs_task_cache_.end());
+
+  auto task = std::move(task_entry->second);
+  gcs_task_cache_.erase(task_entry);
+
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = task.ToFlatbuffer(fbb);
+  fbb.Finish(message);
+  auto task_data = std::make_shared<protocol::TaskT>();
+  auto root = flatbuffers::GetRoot<protocol::Task>(fbb.GetBufferPointer());
+  root->UnPackTo(task_data.get());
+
+  gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+      ray::gcs::AsyncGcsClient *client, const TaskID &id,
+      const protocol::TaskT &data) {
+    Task task(data);
+    _SubmitTask(task, Lineage(), /*forwarded=*/false);
+  };
+  RAY_CHECK_OK(gcs_client_->raylet_task_table().Add(
+      task.GetTaskSpecification().DriverId(), task_id, task_data, task_callback));
+}
+
+void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage, bool forwarded) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
+  const TaskID task_id = spec.TaskId();
   if (local_queues_.HasTask(task_id)) {
     RAY_LOG(WARNING) << "Submitted task " << task_id
                      << " is already queued and will not be reconstructed. This is most "
@@ -888,7 +942,6 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
         << " already in lineage cache. This is most likely due to reconstruction.";
   }
 
-  const TaskSpecification &spec = task.GetTaskSpecification();
   if (spec.IsActorTask()) {
     // Check whether we know the location of the actor.
     const auto actor_entry = actor_registry_.find(spec.ActorId());
@@ -1313,7 +1366,8 @@ void NodeManager::ResubmitTask(const Task &task) {
   // uncommitted lineage must already be in the lineage cache. At this point,
   // the task should not yet exist in the local scheduling queue. If it does,
   // then this is a spurious reconstruction.
-  SubmitTask(task, Lineage());
+  // Skip the write to the GCS.
+  _SubmitTask(task, Lineage(), /*forwarded=*/false);
 }
 
 void NodeManager::HandleObjectLocal(const ObjectID &object_id) {
@@ -1416,8 +1470,17 @@ ray::Status NodeManager::ForwardTask(const Task &task, const ClientID &node_id) 
   const auto &spec = task.GetTaskSpecification();
   auto task_id = spec.TaskId();
 
-  // Get and serialize the task's unforwarded, uncommitted lineage.
-  auto uncommitted_lineage = lineage_cache_.GetUncommittedLineage(task_id, node_id);
+  Lineage uncommitted_lineage;
+  // NOTE(swang): For benchmarking purposes only. If we're in write-to-GCS
+  // mode, remove the uncommitted entries from the lineage cache.
+  if (gcs_delay_ms_ >= 0) {
+    // TODO(swang): Don't get the uncommitted lineage for these tasks.
+    RAY_CHECK(uncommitted_lineage.SetEntry(task, GcsStatus::UNCOMMITTED_WAITING));
+  } else {
+    // Get and serialize the task's unforwarded, uncommitted lineage.
+    uncommitted_lineage = lineage_cache_.GetUncommittedLineage(task_id, node_id);
+  }
+
   Task &lineage_cache_entry_task =
       uncommitted_lineage.GetEntryMutable(task_id)->TaskDataMutable();
 

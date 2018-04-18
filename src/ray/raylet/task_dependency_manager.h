@@ -32,7 +32,8 @@ class TaskDependencyManager {
                         ReconstructionPolicyInterface &reconstruction_policy,
                         boost::asio::io_service &io_service, const ClientID &client_id,
                         int64_t initial_lease_period_ms,
-                        gcs::TableInterface<TaskID, TaskLeaseData> &task_lease_table);
+                        gcs::TableInterface<TaskID, TaskLeaseData> &task_lease_table,
+                        bool disabled = false);
 
   /// Check whether an object is locally available.
   ///
@@ -183,6 +184,7 @@ class TaskDependencyManager {
   /// The set of tasks that are pending execution. Any objects created by these
   /// tasks that are not already local are pending creation.
   std::unordered_map<ray::TaskID, PendingTask> pending_tasks_;
+  bool disabled_;
 };
 
 }  // namespace raylet

@@ -10,18 +10,23 @@ ReconstructionPolicy::ReconstructionPolicy(
     int64_t initial_reconstruction_timeout_ms, const ClientID &client_id,
     gcs::PubsubInterface<TaskID> &task_lease_pubsub,
     std::shared_ptr<ObjectDirectoryInterface> object_directory,
-    gcs::LogInterface<TaskID, TaskReconstructionData> &task_reconstruction_log)
+    gcs::LogInterface<TaskID, TaskReconstructionData> &task_reconstruction_log,
+    bool disabled)
     : io_service_(io_service),
       reconstruction_handler_(reconstruction_handler),
       initial_reconstruction_timeout_ms_(initial_reconstruction_timeout_ms),
       client_id_(client_id),
       task_lease_pubsub_(task_lease_pubsub),
       object_directory_(std::move(object_directory)),
-      task_reconstruction_log_(task_reconstruction_log) {}
+      task_reconstruction_log_(task_reconstruction_log),
+      disabled_(disabled) {}
 
 void ReconstructionPolicy::SetTaskTimeout(
     std::unordered_map<TaskID, ReconstructionTask>::iterator task_it,
     int64_t timeout_ms) {
+  if (disabled_) {
+    return;
+  }
   task_it->second.expires_at = current_time_ms() + timeout_ms;
   auto timeout = boost::posix_time::milliseconds(timeout_ms);
   task_it->second.reconstruction_timer->expires_from_now(timeout);

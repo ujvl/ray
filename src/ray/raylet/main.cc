@@ -6,7 +6,7 @@
 
 #ifndef RAYLET_TEST
 int main(int argc, char *argv[]) {
-  RAY_CHECK(argc == 10);
+  RAY_CHECK(argc >= 10);
 
   const std::string raylet_socket_name = std::string(argv[1]);
   const std::string store_socket_name = std::string(argv[2]);
@@ -17,6 +17,10 @@ int main(int argc, char *argv[]) {
   const std::string static_resource_list = std::string(argv[7]);
   const std::string python_worker_command = std::string(argv[8]);
   const std::string java_worker_command = std::string(argv[9]);
+  int gcs_delay_ms = -1;
+  if (argc == 11) {
+    gcs_delay_ms = std::stoi(argv[10]);
+  }
 
   // Configuration for the node manager.
   ray::raylet::NodeManagerConfig node_manager_config;
@@ -38,6 +42,7 @@ int main(int argc, char *argv[]) {
   node_manager_config.num_initial_workers = num_initial_workers;
   node_manager_config.num_workers_per_process =
       RayConfig::instance().num_workers_per_process();
+  node_manager_config.gcs_delay_ms = gcs_delay_ms;
   // Use a default worker that can execute empty tasks with dependencies.
 
   std::string worker_command;

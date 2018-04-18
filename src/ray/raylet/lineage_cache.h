@@ -191,7 +191,8 @@ class LineageCache {
   /// TODO(swang): Pass in the policy (interface?).
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
-               gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size);
+               gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
+               bool disabled = false);
 
   /// Add a task that is waiting for execution and its uncommitted lineage.
   /// These entries will not be written to the GCS until set to ready.
@@ -328,6 +329,7 @@ class LineageCache {
   /// The tasks that we've subscribed to notifications for from the pubsub
   /// storage system. We will receive a notification for these tasks on commit.
   std::unordered_set<TaskID> subscribed_tasks_;
+  bool disabled_;
 };
 
 }  // namespace raylet

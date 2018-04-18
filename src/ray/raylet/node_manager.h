@@ -30,6 +30,7 @@ struct NodeManagerConfig {
   uint64_t max_lineage_size;
   /// The store socket name.
   std::string store_socket_name;
+  int gcs_delay_ms;
 };
 
 class NodeManager {
@@ -154,6 +155,11 @@ class NodeManager {
   void HandleDriverTableUpdate(const ClientID &id,
                                const std::vector<DriverTableDataT> &driver_data);
 
+  /// Helper method for submitting a task. NOTE(swang): For benchmark
+  /// purposes only!
+  void _SubmitTask(const Task &task, const Lineage &uncommitted_lineage, bool forwarded);
+  void FlushTask(const TaskID &task_id);
+
   boost::asio::io_service &io_service_;
   ObjectManager &object_manager_;
   /// A Plasma object store client. This is used exclusively for creating new
@@ -191,6 +197,11 @@ class NodeManager {
   /// A mapping from actor ID to registration information about that actor
   /// (including which node manager owns it).
   std::unordered_map<ActorID, ActorRegistration> actor_registry_;
+
+  // NOTE(swang): For benchmark purposes only. -1 means use lineage stash. >= 0
+  // means sleep for that many ms before writing to the GCS.
+  int gcs_delay_ms_;
+  std::unordered_map<TaskID, Task> gcs_task_cache_;
 };
 
 }  // namespace raylet

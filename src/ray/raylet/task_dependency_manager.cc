@@ -9,13 +9,15 @@ TaskDependencyManager::TaskDependencyManager(
     ReconstructionPolicyInterface &reconstruction_policy,
     boost::asio::io_service &io_service, const ClientID &client_id,
     int64_t initial_lease_period_ms,
-    gcs::TableInterface<TaskID, TaskLeaseData> &task_lease_table)
+    gcs::TableInterface<TaskID, TaskLeaseData> &task_lease_table,
+    bool disabled)
     : object_manager_(object_manager),
       reconstruction_policy_(reconstruction_policy),
       io_service_(io_service),
       client_id_(client_id),
       initial_lease_period_ms_(initial_lease_period_ms),
-      task_lease_table_(task_lease_table) {}
+      task_lease_table_(task_lease_table),
+      disabled_(disabled) {}
 
 bool TaskDependencyManager::CheckObjectLocal(const ObjectID &object_id) const {
   return local_objects_.count(object_id) == 1;
@@ -237,6 +239,9 @@ void TaskDependencyManager::TaskPending(const Task &task) {
 }
 
 void TaskDependencyManager::AcquireTaskLease(const TaskID &task_id) {
+  if (disabled_) {
+    return;
+  }
   auto it = pending_tasks_.find(task_id);
   int64_t now_ms = current_time_ms();
   if (it == pending_tasks_.end()) {
