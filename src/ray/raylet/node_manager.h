@@ -31,6 +31,7 @@ struct NodeManagerConfig {
   /// The store socket name.
   std::string store_socket_name;
   int gcs_delay_ms;
+  LineageCachePolicy lineage_cache_policy;
 };
 
 class NodeManager {

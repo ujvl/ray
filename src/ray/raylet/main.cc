@@ -6,7 +6,7 @@
 
 #ifndef RAYLET_TEST
 int main(int argc, char *argv[]) {
-  RAY_CHECK(argc >= 10);
+  RAY_CHECK(argc >= 11);
 
   const std::string raylet_socket_name = std::string(argv[1]);
   const std::string store_socket_name = std::string(argv[2]);
@@ -17,9 +17,10 @@ int main(int argc, char *argv[]) {
   const std::string static_resource_list = std::string(argv[7]);
   const std::string python_worker_command = std::string(argv[8]);
   const std::string java_worker_command = std::string(argv[9]);
+  const int lineage_cache_policy = std::stoi(argv[10]);
   int gcs_delay_ms = -1;
-  if (argc == 11) {
-    gcs_delay_ms = std::stoi(argv[10]);
+  if (argc == 12) {
+    gcs_delay_ms = std::stoi(argv[11]);
   }
 
   // Configuration for the node manager.
@@ -64,6 +65,7 @@ int main(int argc, char *argv[]) {
       RayConfig::instance().heartbeat_timeout_milliseconds();
   node_manager_config.max_lineage_size = RayConfig::instance().max_lineage_size();
   node_manager_config.store_socket_name = store_socket_name;
+  node_manager_config.lineage_cache_policy = static_cast<ray::raylet::LineageCachePolicy>(lineage_cache_policy);
 
   // Configuration for the object manager.
   ray::ObjectManagerConfig object_manager_config;

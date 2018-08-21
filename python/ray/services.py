@@ -34,6 +34,15 @@ ch = logging.StreamHandler(sys.stderr)
 ch.setLevel(logging.INFO)
 logger.addHandler(ch)
 
+LINEAGE_CACHE = 0
+LINEAGE_CACHE_FLUSH = 1
+LINEAGE_CACHE_K_FLUSH = 2
+LINEAGE_CACHE_POLICIES = [
+        LINEAGE_CACHE,
+        LINEAGE_CACHE_FLUSH,
+        LINEAGE_CACHE_K_FLUSH,
+        ]
+
 PROCESS_TYPE_MONITOR = "monitor"
 PROCESS_TYPE_LOG_MONITOR = "log_monitor"
 PROCESS_TYPE_WORKER = "worker"
@@ -971,7 +980,8 @@ def start_raylet(redis_address,
                  stdout_file=None,
                  stderr_file=None,
                  cleanup=True,
-                 gcs_delay_ms=-1):
+                 gcs_delay_ms=-1,
+                 lineage_cache_policy=None):
     """Start a raylet, which is a combined local scheduler and object manager.
 
     Args:
@@ -997,6 +1007,10 @@ def start_raylet(redis_address,
     Returns:
         The raylet socket name.
     """
+    if lineage_cache_policy is None:
+        lineage_cache_policy = LINEAGE_CACHE
+    assert lineage_cache_policy in LINEAGE_CACHE_POLICIES
+
     if use_valgrind and use_profiler:
         raise Exception("Cannot use valgrind and profiler at the same time.")
 
@@ -1032,6 +1046,7 @@ def start_raylet(redis_address,
         resource_argument,
         start_worker_command,
         "",  # Worker command for Java, not needed for Python.
+        str(lineage_cache_policy),
         str(gcs_delay_ms),
     ]
 
@@ -1313,7 +1328,8 @@ def start_ray_processes(address_info=None,
                         huge_pages=False,
                         autoscaling_config=None,
                         use_raylet=False,
-                        gcs_delay_ms=-1):
+                        gcs_delay_ms=-1,
+                        lineage_cache_policy=None):
     """Helper method to start Ray processes.
 
     Args:
@@ -1572,7 +1588,8 @@ def start_ray_processes(address_info=None,
                     stdout_file=raylet_stdout_file,
                     stderr_file=raylet_stderr_file,
                     cleanup=cleanup,
-                    gcs_delay_ms=gcs_delay_ms))
+                    gcs_delay_ms=gcs_delay_ms,
+                    lineage_cache_policy=lineage_cache_policy))
 
     if not use_raylet:
         # Start any workers that the local scheduler has not already started.
@@ -1627,7 +1644,8 @@ def start_ray_node(node_ip_address,
                    plasma_directory=None,
                    huge_pages=False,
                    use_raylet=False,
-                   gcs_delay_ms=-1):
+                   gcs_delay_ms=-1,
+                   lineage_cache_policy=None):
     """Start the Ray processes for a single node.
 
     This assumes that the Ray processes on some master node have already been
@@ -1686,7 +1704,8 @@ def start_ray_node(node_ip_address,
         plasma_directory=plasma_directory,
         huge_pages=huge_pages,
         use_raylet=use_raylet,
-        gcs_delay_ms=gcs_delay_ms)
+        gcs_delay_ms=gcs_delay_ms,
+        lineage_cache_policy=lineage_cache_policy)
 
 
 def start_ray_head(address_info=None,
@@ -1710,7 +1729,8 @@ def start_ray_head(address_info=None,
                    huge_pages=False,
                    autoscaling_config=None,
                    use_raylet=False,
-                   gcs_delay_ms=-1):
+                   gcs_delay_ms=-1,
+                   lineage_cache_policy=None):
     """Start Ray in local mode.
 
     Args:
@@ -1792,7 +1812,8 @@ def start_ray_head(address_info=None,
         huge_pages=huge_pages,
         autoscaling_config=autoscaling_config,
         use_raylet=use_raylet,
-        gcs_delay_ms=gcs_delay_ms)
+        gcs_delay_ms=gcs_delay_ms,
+        lineage_cache_policy=lineage_cache_policy)
 
 
 def try_to_create_directory(directory_path):

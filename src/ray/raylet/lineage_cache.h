@@ -15,6 +15,12 @@ namespace ray {
 
 namespace raylet {
 
+enum class LineageCachePolicy {
+  kLineageCache = 0,
+  kLineageCacheFlush = 1,
+  kLineageCacheKFlush = 2,
+};
+
 /// The status of a lineage cache entry according to its status in the GCS.
 enum class GcsStatus {
   /// The task is not in the lineage cache.

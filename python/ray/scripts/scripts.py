@@ -154,11 +154,17 @@ def cli():
     required=False,
     type=int,
     help="the delay to inject when writing to the GCS task table")
+@click.option(
+    "--lineage-cache-policy",
+    required=False,
+    type=int,
+    default=0,
+    help="the flush policy to use for the lineage cache")
 def start(node_ip_address, redis_address, redis_port, num_redis_shards,
           redis_max_clients, redis_shard_ports, object_manager_port,
           object_store_memory, num_workers, num_cpus, num_gpus, resources,
           head, no_ui, block, plasma_directory, huge_pages, autoscaling_config,
-          use_raylet, gcs_delay_ms):
+          use_raylet, gcs_delay_ms, lineage_cache_policy):
     # Convert hostnames to numerical IP address.
     if node_ip_address is not None:
         node_ip_address = services.address_to_ip(node_ip_address)
@@ -240,7 +246,8 @@ def start(node_ip_address, redis_address, redis_port, num_redis_shards,
             huge_pages=huge_pages,
             autoscaling_config=autoscaling_config,
             use_raylet=use_raylet,
-            gcs_delay_ms=gcs_delay_ms)
+            gcs_delay_ms=gcs_delay_ms,
+            lineage_cache_policy=lineage_cache_policy)
         print(address_info)
         print("\nStarted Ray on this node. You can add additional nodes to "
               "the cluster by calling\n\n"
@@ -308,7 +315,8 @@ def start(node_ip_address, redis_address, redis_port, num_redis_shards,
             plasma_directory=plasma_directory,
             huge_pages=huge_pages,
             use_raylet=use_raylet,
-            gcs_delay_ms=gcs_delay_ms)
+            gcs_delay_ms=gcs_delay_ms,
+            lineage_cache_policy=lineage_cache_policy)
         print(address_info)
         print("\nStarted Ray on this node. If you wish to terminate the "
               "processes that have been started, run\n\n"

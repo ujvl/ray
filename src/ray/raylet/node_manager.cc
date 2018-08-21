@@ -83,6 +83,30 @@ namespace ray {
 
 namespace raylet {
 
+LineageCacheInterface *InitLineageCache(
+    LineageCachePolicy policy,
+    const ClientID &client_id,
+    gcs::TableInterface<TaskID, protocol::Task> &task_storage,
+    gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
+    bool disabled) {
+  switch (policy) {
+  case LineageCachePolicy::kLineageCache: {
+    RAY_LOG(INFO) << "Using LineageCache policy";
+    return new LineageCache(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
+  } break;
+  case LineageCachePolicy::kLineageCacheFlush: {
+    RAY_LOG(INFO) << "Using LineageCacheFlush policy";
+    return new LineageCacheFlush(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
+  } break;
+  case LineageCachePolicy::kLineageCacheKFlush: {
+    RAY_LOG(INFO) << "Using LineageCacheKFlush policy";
+    return new LineageCacheKFlush(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
+  } break;
+  default:
+    RAY_CHECK(false);
+  }
+}
+
 NodeManager::NodeManager(boost::asio::io_service &io_service,
                          const NodeManagerConfig &config, ObjectManager &object_manager,
                          std::shared_ptr<gcs::AsyncGcsClient> gcs_client)
@@ -112,10 +136,12 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           RayConfig::instance().initial_reconstruction_timeout_milliseconds(),
           gcs_client->task_lease_table(),
           /*disabled=*/(config.gcs_delay_ms >= 0)),
-      lineage_cache_(new LineageCache(gcs_client_->client_table().GetLocalClientId(),
-                     gcs_client->raylet_task_table(), gcs_client->raylet_task_table(),
-                     config.max_lineage_size,
-                     /*disabled=*/(config.gcs_delay_ms >= 0))),
+      lineage_cache_(InitLineageCache(config.lineage_cache_policy,
+                                      gcs_client_->client_table().GetLocalClientId(),
+                                      gcs_client->raylet_task_table(),
+                                      gcs_client->raylet_task_table(),
+                                      config.max_lineage_size,
+                                      /*disabled=*/(config.gcs_delay_ms >= 0))),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_(),
