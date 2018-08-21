@@ -113,6 +113,17 @@ const std::list<Task> &SchedulingQueue::GetBlockedTasks() const {
   return this->blocked_tasks_.GetTasks();
 }
 
+size_t SchedulingQueue::GetQueueSize() const {
+  size_t size = 0;
+  size += methods_waiting_for_actor_creation_.GetTasks().size();
+  size += waiting_tasks_.GetTasks().size();
+  size += placeable_tasks_.GetTasks().size();
+  size += ready_tasks_.GetTasks().size();
+  size += running_tasks_.GetTasks().size();
+  size += blocked_tasks_.GetTasks().size();
+  return size;
+}
+
 void SchedulingQueue::FilterState(std::unordered_set<TaskID> &task_ids,
                                   TaskState filter_state) const {
   switch (filter_state) {

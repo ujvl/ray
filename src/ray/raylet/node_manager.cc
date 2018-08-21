@@ -236,6 +236,12 @@ void NodeManager::HandleDriverTableUpdate(
 }
 
 void NodeManager::Heartbeat() {
+  heartbeats_++;
+  heartbeats_ = heartbeats_ % 10;
+  if (heartbeats_ % 10 == 0) {
+    RAY_LOG(INFO) << "Lineage cache size on " << gcs_client_->client_table().GetLocalClientId() << " is " << lineage_cache_.NumEntries();
+    RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << local_queues_.GetQueueSize();
+  }
   uint64_t now_ms = current_time_ms();
   uint64_t interval = now_ms - last_heartbeat_at_ms_;
   if (interval > RayConfig::instance().num_heartbeats_warning() *

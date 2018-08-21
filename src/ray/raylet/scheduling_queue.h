@@ -76,6 +76,8 @@ class SchedulingQueue {
   /// tasks used to represent drivers.
   const std::unordered_set<TaskID> &GetDriverTaskIds() const;
 
+  size_t GetQueueSize() const;
+
   /// Remove tasks from the task queue.
   ///
   /// \param tasks The set of task IDs to remove from the queue. The

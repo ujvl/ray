@@ -172,6 +172,7 @@ class NodeManager {
   boost::asio::steady_timer heartbeat_timer_;
   /// The period used for the heartbeat timer.
   std::chrono::milliseconds heartbeat_period_;
+  int heartbeats_;
   /// The time that the last heartbeat was sent at. Used to make sure we are
   /// keeping up with heartbeats.
   uint64_t last_heartbeat_at_ms_;

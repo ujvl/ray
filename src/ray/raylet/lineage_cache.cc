@@ -536,6 +536,10 @@ bool LineageCache::ContainsTask(const TaskID &task_id) const {
   return it != entries.end();
 }
 
+size_t LineageCache::NumEntries() const {
+  return lineage_.GetEntries().size();
+}
+
 }  // namespace raylet
 
 }  // namespace ray

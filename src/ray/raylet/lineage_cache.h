@@ -268,6 +268,8 @@ class LineageCache {
   /// \return Whether the task is in the lineage cache.
   bool ContainsTask(const TaskID &task_id) const;
 
+  size_t NumEntries() const;
+
  private:
   /// Try to flush a task that is in UNCOMMITTED_READY state. If the task has
   /// parents that are not committed yet, then the child will be flushed once
