@@ -501,7 +501,7 @@ void LineageCache::EvictRemoteLineage(const TaskID &task_id) {
   }
 }
 
-void LineageCache::HandleEntryCommitted(const TaskID &task_id) {
+void LineageCache::HandleEntryCommitted(const TaskID &task_id, bool lineage_committed) {
   if (disabled_) {
     return;
   }

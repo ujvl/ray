@@ -192,7 +192,7 @@ class NodeManager {
   /// A manager to make waiting tasks's missing object dependencies available.
   TaskDependencyManager task_dependency_manager_;
   /// The lineage cache for the GCS object and task tables.
-  LineageCache lineage_cache_;
+  std::unique_ptr<LineageCacheInterface> lineage_cache_;
   std::vector<ClientID> remote_clients_;
   std::unordered_map<ClientID, TcpServerConnection> remote_server_connections_;
   /// A mapping from actor ID to registration information about that actor

@@ -112,10 +112,10 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           RayConfig::instance().initial_reconstruction_timeout_milliseconds(),
           gcs_client->task_lease_table(),
           /*disabled=*/(config.gcs_delay_ms >= 0)),
-      lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
+      lineage_cache_(new LineageCache(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client->raylet_task_table(), gcs_client->raylet_task_table(),
                      config.max_lineage_size,
-                     /*disabled=*/(config.gcs_delay_ms >= 0)),
+                     /*disabled=*/(config.gcs_delay_ms >= 0))),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_(),
@@ -145,7 +145,7 @@ ray::Status NodeManager::RegisterGcs() {
   const auto task_committed_callback = [this](gcs::AsyncGcsClient *client,
                                               const TaskID &task_id,
                                               const ray::protocol::TaskT &task_data) {
-    lineage_cache_.HandleEntryCommitted(task_id);
+    lineage_cache_->HandleEntryCommitted(task_id, false);
   };
   RAY_RETURN_NOT_OK(gcs_client_->raylet_task_table().Subscribe(
       JobID::nil(), gcs_client_->client_table().GetLocalClientId(),
@@ -239,7 +239,7 @@ void NodeManager::Heartbeat() {
   heartbeats_++;
   heartbeats_ = heartbeats_ % 10;
   if (heartbeats_ % 10 == 0) {
-    RAY_LOG(INFO) << "Lineage cache size on " << gcs_client_->client_table().GetLocalClientId() << " is " << lineage_cache_.NumEntries();
+    RAY_LOG(INFO) << "Lineage cache size on " << gcs_client_->client_table().GetLocalClientId() << " is " << lineage_cache_->NumEntries();
     RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << local_queues_.GetQueueSize();
   }
   uint64_t now_ms = current_time_ms();
@@ -423,7 +423,7 @@ void NodeManager::HandleActorCreation(const ActorID &actor_id,
   // known.
   auto created_actor_methods = local_queues_.RemoveTasks(created_actor_method_ids);
   for (const auto &method : created_actor_methods) {
-    lineage_cache_.RemoveWaitingTask(method.GetTaskSpecification().TaskId());
+    lineage_cache_->RemoveWaitingTask(method.GetTaskSpecification().TaskId());
     // The task's uncommitted lineage was already added to the local lineage
     // cache upon the initial submission, so it's okay to resubmit it with an
     // empty lineage this time.
@@ -942,7 +942,7 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
   }
 
   // Add the task and its uncommitted lineage to the lineage cache.
-  if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
+  if (!lineage_cache_->AddWaitingTask(task, uncommitted_lineage)) {
     RAY_LOG(WARNING)
         << "Task " << task_id
         << " already in lineage cache. This is most likely due to reconstruction.";
@@ -1214,7 +1214,7 @@ void NodeManager::AssignTask(Task &task) {
       actor_entry->second.ExtendFrontier(spec.ActorHandleId(), spec.ActorDummyObject());
     }
     // We started running the task, so the task is ready to write to GCS.
-    if (!lineage_cache_.AddReadyTask(task)) {
+    if (!lineage_cache_->AddReadyTask(task)) {
       RAY_LOG(WARNING)
           << "Task " << spec.TaskId()
           << " already in lineage cache. This is most likely due to reconstruction.";
@@ -1317,7 +1317,7 @@ void NodeManager::HandleTaskReconstruction(const TaskID &task_id, int64_t recons
       [this, reconstruction_attempt](ray::gcs::AsyncGcsClient *client, const TaskID &task_id) {
         // The task was not in the GCS task table. It must therefore be in the
         // lineage cache.
-        if (!lineage_cache_.ContainsTask(task_id)) {
+        if (!lineage_cache_->ContainsTask(task_id)) {
           // The task was not in the lineage cache.
           // TODO(swang): This should not ever happen, but Java TaskIDs are
           // currently computed differently from Python TaskIDs, so
@@ -1329,7 +1329,7 @@ void NodeManager::HandleTaskReconstruction(const TaskID &task_id, int64_t recons
                                                     "job may hang.";
         } else {
           // Use a copy of the cached task spec to re-execute the task.
-          Task task = lineage_cache_.GetTask(task_id);
+          Task task = lineage_cache_->GetTask(task_id);
           task.SetNumExecutions(reconstruction_attempt + 1);
           ResubmitTask(task);
         }
@@ -1435,7 +1435,7 @@ void NodeManager::ForwardTaskOrResubmit(const Task &task,
     task_dependency_manager_.TaskPending(task);
     // Remove the task from the lineage cache. The task will get added back
     // once it is resubmitted.
-    lineage_cache_.RemoveWaitingTask(task_id);
+    lineage_cache_->RemoveWaitingTask(task_id);
 
     // Actor tasks can only be executed at the actor's location, so they are
     // retried after a timeout. All other tasks that fail to be forwarded are
@@ -1462,7 +1462,7 @@ void NodeManager::ForwardTaskOrResubmit(const Task &task,
           });
       // Remove the task from the lineage cache. The task will get added back
       // once it is resubmitted.
-      lineage_cache_.RemoveWaitingTask(task_id);
+      lineage_cache_->RemoveWaitingTask(task_id);
     //} else {
     //  // The task is not for an actor and may therefore be placed on another
     //  // node immediately. Send it to the scheduling policy to be placed again.
@@ -1484,7 +1484,7 @@ ray::Status NodeManager::ForwardTask(const Task &task, const ClientID &node_id) 
     RAY_CHECK(uncommitted_lineage.SetEntry(task, GcsStatus::UNCOMMITTED_WAITING));
   } else {
     // Get and serialize the task's unforwarded, uncommitted lineage.
-    uncommitted_lineage = lineage_cache_.GetUncommittedLineage(task_id, node_id);
+    uncommitted_lineage = lineage_cache_->GetUncommittedLineage(task_id, node_id);
   }
 
   Task &lineage_cache_entry_task =
@@ -1518,14 +1518,14 @@ ray::Status NodeManager::ForwardTask(const Task &task, const ClientID &node_id) 
     // If we were able to forward the task, remove the forwarded task from the
     // lineage cache since the receiving node is now responsible for writing
     // the task to the GCS.
-    if (!lineage_cache_.RemoveWaitingTask(task_id)) {
+    if (!lineage_cache_->RemoveWaitingTask(task_id)) {
       RAY_LOG(WARNING) << "Task " << task_id << " already removed from the lineage "
                                                 "cache. This is most likely due to "
                                                 "reconstruction.";
     }
     // Mark as forwarded so that the task and its lineage is not re-forwarded
     // in the future to the receiving node.
-    lineage_cache_.MarkTaskAsForwarded(task_id, node_id);
+    lineage_cache_->MarkTaskAsForwarded(task_id, node_id);
 
     // Notify the task dependency manager that we are no longer responsible
     // for executing this task.

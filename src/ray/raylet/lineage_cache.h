@@ -181,11 +181,25 @@ class Lineage {
   std::unordered_map<const TaskID, LineageEntry> entries_;
 };
 
+class LineageCacheInterface {
+ public:
+  virtual bool AddWaitingTask(const Task &task, const Lineage &uncommitted_lineage) = 0;
+  virtual Lineage GetUncommittedLineage(const TaskID &task_id, const ClientID &node_id) const = 0;
+  virtual void MarkTaskAsForwarded(const TaskID &task_id, const ClientID &node_id) = 0;
+  virtual bool RemoveWaitingTask(const TaskID &task_id) = 0;
+  virtual bool AddReadyTask(const Task &task) = 0;
+  virtual void HandleEntryCommitted(const TaskID &task_id, bool lineage_committed) = 0;
+  virtual bool ContainsTask(const TaskID &task_id) const = 0;
+  virtual const Task &GetTask(const TaskID &task_id) const = 0;
+  virtual size_t NumEntries() const = 0;
+  virtual ~LineageCacheInterface(){};
+};
+
 /// \class LineageCache
 ///
 /// A cache of the task table. This consists of all tasks that this node owns,
 /// as well as their lineage, that have not yet been added durably to the GCS.
-class LineageCache {
+class LineageCache : public LineageCacheInterface {
  public:
   /// Create a lineage cache for the given task storage system.
   /// TODO(swang): Pass in the policy (interface?).
@@ -254,7 +268,7 @@ class LineageCache {
   /// COMMITTED and cleans up any ancestor tasks that are in the cache.
   ///
   /// \param task_id The ID of the task entry that was committed.
-  void HandleEntryCommitted(const TaskID &task_id);
+  void HandleEntryCommitted(const TaskID &task_id, bool lineage_committed = true);
 
   /// Get a task. The task must be in the lineage cache.
   ///
