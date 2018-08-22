@@ -87,20 +87,25 @@ if __name__ == "__main__":
     parser.add_argument('--num-shards', type=int, default=None)
     parser.add_argument('--gcs', action='store_true')
     parser.add_argument('--policy', type=int, default=0)
+    parser.add_argument('--redis-address', type=str)
     args = parser.parse_args()
 
     gcs_delay_ms = -1
     if args.gcs:
         gcs_delay_ms = 0
 
-    ray.worker._init(start_ray_local=True, use_raylet=True, num_local_schedulers=args.num_raylets * 2,
-                     resources=[
-                        {
-                            "Node{}".format(i): args.num_workers,
-                        } for i in range(args.num_raylets * 2)],
-                     gcs_delay_ms=gcs_delay_ms,
-                     num_redis_shards=args.num_shards,
-                     lineage_cache_policy=args.policy)
+    if args.redis_address is None:
+        ray.worker._init(start_ray_local=True, use_raylet=True, num_local_schedulers=args.num_raylets * 2,
+                         resources=[
+                            {
+                                "Node{}".format(i): args.num_workers,
+                            } for i in range(args.num_raylets * 2)],
+                         gcs_delay_ms=gcs_delay_ms,
+                         num_redis_shards=args.num_shards,
+                         lineage_cache_policy=args.policy)
+    else:
+        ray.init(redis_address=args.redis_address + ":6379", use_raylet=True)
+
     actors = []
     for node in range(args.num_raylets):
         for _ in range(args.num_workers):
@@ -111,6 +116,5 @@ if __name__ == "__main__":
     total_time = ray.get([actor.ready.remote() for actor in actors])
     total_time = ray.get([actor.f.remote(args.target_throughput) for actor in actors])
     throughput = NUM_ITEMS * len(actors) / max(total_time)
-    print("DONE, target throughput:", args.target_throughput, "total throughput:", throughput, "latency:", 1 / throughput)
-    time.sleep(300)
-
+    latency = max(total_time) / NUM_ITEMS
+    print("DONE, target throughput:", args.target_throughput * len(actors), "total throughput:", throughput, "latency:",  latency)
