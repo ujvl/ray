@@ -201,11 +201,25 @@ Status RedisContext::RunAsync(const std::string &command, const UniqueID &id,
         return Status::RedisError(std::string(async_context_->errstr));
       }
     } else {
-      std::string redis_command = command + " %d %d %b %b";
-      int status = redisAsyncCommand(
+      std::string prefix_str = std::to_string(static_cast<int>(prefix));
+      std::string pubsub_str = std::to_string(static_cast<int>(pubsub_channel));
+      std::string redis_command = (
+          "*5\r\n$"
+          + std::to_string(command.length()) + "\r\n" + command + "\r\n"
+          + "$" + std::to_string(prefix_str.length()) + "\r\n" + prefix_str + "\r\n"
+          + "$" + std::to_string(pubsub_str.length()) + "\r\n" + pubsub_str + "\r\n"
+          + "$" + std::to_string(id.size()) + "\r\n");
+      redis_command.append(reinterpret_cast<const char *>(id.data()), id.size());
+      redis_command.append(
+          "\r\n$" + std::to_string(length) + "\r\n");
+      redis_command.append(reinterpret_cast<const char *>(data), length);
+      redis_command.append("\r\n");
+
+      //std::string redis_command = command + " %d %d %b %b";
+      int status = redisAsyncFormattedCommand(
           async_context_, reinterpret_cast<redisCallbackFn *>(&GlobalRedisCallback),
-          reinterpret_cast<void *>(callback_index), redis_command.c_str(), prefix,
-          pubsub_channel, id.data(), id.size(), data, length);
+          reinterpret_cast<void *>(callback_index), redis_command.c_str(),
+          redis_command.length());
       if (status == REDIS_ERR) {
         return Status::RedisError(std::string(async_context_->errstr));
       }
