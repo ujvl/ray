@@ -18,7 +18,8 @@ class A(object):
         ray.get(self.b.ready.remote())
 
     def ready(self):
-        return
+        time.sleep(1)
+        return True
 
     def f(self, target_throughput):
         time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
@@ -53,7 +54,8 @@ class B(object):
         #yep.start('actorB.prof')
 
     def ready(self):
-        return
+        time.sleep(1)
+        return True
 
     def f(self, object_id):
         #ray.get(object_id)
