@@ -3,7 +3,7 @@ import csv
 import subprocess
 import time
 
-MAX_EXPERIMENT_TIME = 60
+MAX_EXPERIMENT_TIME = 120
 SLEEP_TIME = 10
 
 LINEAGE_CACHE_POLICIES = [
@@ -12,8 +12,8 @@ LINEAGE_CACHE_POLICIES = [
         "lineage-cache-k-flush",
         ]
 
-TARGET_THROUGHPUTS = [3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
-RAYLETS = [1, 2, 4, 8, 16]
+TARGET_THROUGHPUTS = [5000, 6000, 7000, 8000, 9000, 10000]
+RAYLETS = [1, 2, 4, 8, 12]
 SHARDS = [1, 2, 4, 8, 16]
 
 
@@ -98,8 +98,11 @@ def run_experiment(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shard
         pid = subprocess.Popen(command, stdout=f, stderr=f)
         start = time.time()
 
-        # Number of items is 100000.
-        max_experiment_time = max(MAX_EXPERIMENT_TIME, (100000 / target_throughput) + 20)
+        # Number of items is 200000.
+        max_experiment_time = max(MAX_EXPERIMENT_TIME, (200000 / target_throughput) + 20)
+        # Allow 5s for each pair of raylets to start.
+        max_experiment_time += num_raylets * 5
+
         time.sleep(SLEEP_TIME)
         sleep_time = SLEEP_TIME
         while pid.poll() is None and (time.time() - start) < max_experiment_time:

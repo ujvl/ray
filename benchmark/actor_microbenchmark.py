@@ -9,7 +9,7 @@ import time
 import argparse
 
 BATCH_SIZE = 100
-NUM_ITEMS = 100 * 1000
+NUM_ITEMS = 200 * 1000
 
 class A(object):
     def __init__(self, node_resource):
