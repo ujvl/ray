@@ -34,20 +34,28 @@ def get_csv_filename(lineage_cache_policy, gcs_delay):
 def parse_experiment_throughput(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards, target_throughput):
     filename = get_filename(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards,
                             target_throughput)
+    lineage_overloaded = False
+    queue_overloaded = False
+    timed_out = False
     try:
         with open(filename, 'r') as f:
             header = f.readline()
             if not header.startswith('DONE'):
-                return -1
+                timed_out = True
+                return -1, lineage_overloaded, queue_overloaded, timed_out
             throughput = float(header.split()[6])
-            if f.readline():
-                # If the next line is not empty, then there were logs from the load
-                # building up.
-                return -1
-            else:
-                return throughput
+            line = f.readline()
+            while line:
+                if "Lineage" in line:
+                    lineage_overloaded = True
+                    throughput = -1
+                elif "Queue" in line:
+                    queue_overloaded = True
+                    throughput = -1
+                line = f.readline()
+            return throughput, lineage_overloaded, queue_overloaded, timed_out
     except:
-        return -1
+        return -1, lineage_overloaded, queue_overloaded, timed_out
 
 def parse_experiments(lineage_cache_policy, gcs_delay):
     filename = get_csv_filename(lineage_cache_policy, gcs_delay)
@@ -56,7 +64,10 @@ def parse_experiments(lineage_cache_policy, gcs_delay):
             'num_shards',
             'num_raylets',
             'target_throughput',
-            'throughput'
+            'throughput',
+            'lineage',
+            'queue',
+            'timed_out',
             ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -64,7 +75,7 @@ def parse_experiments(lineage_cache_policy, gcs_delay):
         for num_redis_shards in SHARDS:
             for num_raylets in RAYLETS:
                 for target_throughput in TARGET_THROUGHPUTS:
-                    throughput = parse_experiment_throughput(num_raylets,
+                    (throughput, lineage_overloaded, queue_overloaded, timed_out) = parse_experiment_throughput(num_raylets,
                             lineage_cache_policy, gcs_delay, num_redis_shards,
                             target_throughput)
                     writer.writerow({
@@ -72,6 +83,9 @@ def parse_experiments(lineage_cache_policy, gcs_delay):
                         'num_raylets': num_raylets,
                         'target_throughput': target_throughput * num_raylets,
                         'throughput': throughput,
+                        'lineage': lineage_overloaded,
+                        'queue': queue_overloaded,
+                        'timed_out': timed_out,
                         })
 
 def parse_all_experiments():
