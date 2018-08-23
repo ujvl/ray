@@ -12,9 +12,9 @@ LINEAGE_CACHE_POLICIES = [
         "lineage-cache-k-flush",
         ]
 
-TARGET_THROUGHPUTS = [5000, 6000, 7000, 8000, 9000, 10000]
-RAYLETS = [1, 2, 4, 8, 12]
-SHARDS = [1, 2, 4, 8, 16]
+TARGET_THROUGHPUTS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]
+RAYLETS = [12]
+SHARDS = [1, 2, 4, 8, 10, 12]
 
 
 def get_filename(num_raylets, lineage_cache_policy, gcs_delay,
