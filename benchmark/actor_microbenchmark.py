@@ -28,7 +28,7 @@ class A(object):
         start1 = time.time()
         start2 = time.time()
         for i in range(NUM_ITEMS):
-            self.b.f.remote(i)
+            self.b.f.remote()
             if i % BATCH_SIZE == 0 and i > 0:
                 end = time.time()
                 sleep_time = (BATCH_SIZE / target_throughput) - (end - start2)
@@ -57,21 +57,8 @@ class B(object):
         time.sleep(1)
         return True
 
-    def f(self, object_id):
-        #ray.get(object_id)
-        #print (object_id)
-        self.sum += 1
-        if (self.sum == 1) :
-            time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
-            print("read, start " + time_str)
-
-        if (self.sum == NUM_ITEMS) :
-            time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
-            print("read, end " + time_str)
-        if (self.sum % 10000 == 0) :
-            time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
-            print("read " + str(self.sum) + "  " + str(time_str))
-
+    def f(self):
+        return
 
     def get_sum(self):
         #import yep
