@@ -271,7 +271,7 @@ void NodeManager::Heartbeat() {
       RAY_LOG(INFO) << "Lineage cache size on " << gcs_client_->client_table().GetLocalClientId() << " is " << lineage_cache_->NumEntries();
     }
     if (local_queues_.GetQueueSize() > 20000) {
-      RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << local_queues_.GetQueueSize();
+      RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << local_queues_.GetQueueSize() + gcs_task_cache_.size();
     }
   }
   uint64_t now_ms = current_time_ms();
@@ -943,8 +943,7 @@ void NodeManager::FlushTask(const TaskID &task_id) {
   auto task_entry = gcs_task_cache_.find(task_id);
   RAY_CHECK(task_entry != gcs_task_cache_.end());
 
-  auto task = std::move(task_entry->second);
-  gcs_task_cache_.erase(task_entry);
+  auto task = task_entry->second;
 
   flatbuffers::FlatBufferBuilder fbb;
   auto message = task.ToFlatbuffer(fbb);
@@ -956,6 +955,7 @@ void NodeManager::FlushTask(const TaskID &task_id) {
   gcs::raylet::TaskTable::WriteCallback task_callback = [this](
       ray::gcs::AsyncGcsClient *client, const TaskID &id,
       const protocol::TaskT &data) {
+    gcs_task_cache_.erase(id);
     Task task(data);
     _SubmitTask(task, Lineage(), /*forwarded=*/false);
   };
