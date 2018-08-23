@@ -91,7 +91,7 @@ LineageCacheInterface *InitLineageCache(
     bool disabled) {
   switch (policy) {
   case LineageCachePolicy::kLineageCache: {
-    RAY_LOG(INFO) << "Using LineageCache policy";
+    RAY_LOG(INFO) << "Using LineageCache policy, k=" << max_lineage_size;
     return new LineageCache(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
   } break;
   case LineageCachePolicy::kLineageCacheFlush: {
@@ -99,7 +99,7 @@ LineageCacheInterface *InitLineageCache(
     return new LineageCacheFlush(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
   } break;
   case LineageCachePolicy::kLineageCacheKFlush: {
-    RAY_LOG(INFO) << "Using LineageCacheKFlush policy";
+    RAY_LOG(INFO) << "Using LineageCacheKFlush policy, k=" << max_lineage_size;
     return new LineageCacheKFlush(client_id, task_storage, task_pubsub, max_lineage_size, disabled);
   } break;
   default:
