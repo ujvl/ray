@@ -4,9 +4,8 @@ MAX_LINEAGE_SIZE=$3
 GCS_DELAY_MS=$4
 NUM_REDIS_SHARDS=$5
 
-HEAD_IP=$(tail -n 1 workers.txt)
-SENDING_WORKER_IP=$(head -n 1 workers.txt)
-RECEIVING_WORKER_IP=$(head -n 2 workers.txt | tail -n 1)
+HEAD_IP=$(head -n 1 workers.txt)
+WORKER_IPS=$(tail -n $(( $NUM_RAYLETS * 2 )) workers.txt)
 
 if [ $# -eq 5 ]
 then
@@ -17,13 +16,9 @@ else
 fi
 
 echo "Starting head with GCS delay $GCS_DELAY_MS and $NUM_REDIS_SHARDS Redis shards..."
-ssh -o "StrictHostKeyChecking no" -i ~/devenv-key.pem $HEAD_IP bash -s - < start_head.sh $LINEAGE_POLICY $MAX_LINEAGE_SIZE $GCS_DELAY_MS $NUM_REDIS_SHARDS
+./start_head.sh $LINEAGE_POLICY $MAX_LINEAGE_SIZE $GCS_DELAY_MS $NUM_REDIS_SHARDS
 echo "Done starting head"
 
-echo "Starting sending worker $SENDING_WORKER_IP with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
-ssh -o "StrictHostKeyChecking no" -i ~/devenv-key.pem $SENDING_WORKER_IP bash -s - < start_worker.sh $HEAD_IP 0 $NUM_RAYLETS $LINEAGE_POLICY $MAX_LINEAGE_SIZE $GCS_DELAY_MS
-echo "Done starting sending worker"
-
-echo "Starting receiving worker $RECEIVING_WORKER_IP with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
-ssh -o "StrictHostKeyChecking no" -i ~/devenv-key.pem $RECEIVING_WORKER_IP bash -s - < start_worker.sh $HEAD_IP 1 $NUM_RAYLETS $LINEAGE_POLICY $MAX_LINEAGE_SIZE $GCS_DELAY_MS
-echo "Done starting receiving worker"
+echo "Starting workers $WORKER_IPS with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -O "StrictHostKeyChecking=no" -O "IdentityFile=~/devenv-key.pem" -I 'bash -s - '$HEAD_IP '$PSSH_NODENUM' $NUM_RAYLETS $LINEAGE_POLICY $MAX_LINEAGE_SIZE $GCS_DELAY_MS < start_worker.sh
+echo "Done starting workers"

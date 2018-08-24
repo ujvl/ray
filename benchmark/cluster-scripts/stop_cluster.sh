@@ -1,3 +1,1 @@
-for host in $(cat workers.txt); do
-  ssh -o "StrictHostKeyChecking no" -i ~/devenv-key.pem $host < stop_worker.sh
-done
+parallel-ssh -t 0 -i -P -h workers.txt -O "StrictHostKeyChecking=no" -O "IdentityFile=~/devenv-key.pem" -I < stop_worker.sh

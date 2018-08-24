@@ -9,7 +9,6 @@ import time
 import argparse
 
 BATCH_SIZE = 100
-NUM_ITEMS = 200 * 1000
 
 class A(object):
     def __init__(self, node_resource):
@@ -21,30 +20,34 @@ class A(object):
         time.sleep(1)
         return True
 
-    def f(self, target_throughput):
+    def f(self, target_throughput, experiment_time):
         time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
         print("push, start " + time_str)
         start = time.time()
         start1 = time.time()
         start2 = time.time()
-        for i in range(NUM_ITEMS):
+        i = 0
+        while True:
             self.b.f.remote()
             if i % BATCH_SIZE == 0 and i > 0:
                 end = time.time()
                 sleep_time = (BATCH_SIZE / target_throughput) - (end - start2)
-                if sleep_time > 0:
+                if sleep_time > 0.00003:
                     time.sleep(sleep_time)
                 start2 = time.time()
             if i % 10000 == 0 and i > 0:
                 end = time.time()
                 print("push, throughput round ", i / 10000, ":", 10000 / (end - start1))
                 start1 = end
+                if end - start >= experiment_time:
+                    break
+            i += 1
         time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
         print("push, end " + time_str)
 
         ray.get(self.b.get_sum.remote())
         end = time.time()
-        return end - start
+        return i, end - start
 
 class B(object):
     def __init__(self):
@@ -69,6 +72,7 @@ class B(object):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--target-throughput', type=int, default=3000)
+    parser.add_argument('--experiment-time', type=int, default=10)
     parser.add_argument('--num-workers', type=int, default=1)
     parser.add_argument('--num-raylets', type=int, default=1)
     parser.add_argument('--num-shards', type=int, default=None)
@@ -102,8 +106,10 @@ if __name__ == "__main__":
                 "Node{}".format(node * 2): 1,
                 })(A)
             actors.append(actor_cls.remote("Node{}".format(node * 2 + 1)))
-    total_time = ray.get([actor.ready.remote() for actor in actors])
-    total_time = ray.get([actor.f.remote(args.target_throughput) for actor in actors])
-    throughput = NUM_ITEMS * len(actors) / max(total_time)
-    latency = max(total_time) / NUM_ITEMS
-    print("DONE, target throughput:", args.target_throughput * len(actors), "total throughput:", throughput, "latency:",  latency)
+    ray.get([actor.ready.remote() for actor in actors])
+    results = ray.get([actor.f.remote(args.target_throughput,
+                                      args.experiment_time) for actor in
+                                      actors])
+    num_items, total_time = zip(*results)
+    throughput = sum(num_items) / max(total_time)
+    print("DONE, target throughput:", args.target_throughput * len(actors), "total throughput:", throughput)

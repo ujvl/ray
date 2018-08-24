@@ -2,8 +2,9 @@ import argparse
 import csv
 import subprocess
 import time
+import os
 
-MAX_EXPERIMENT_TIME = 120
+EXPERIMENT_TIME = 60
 SLEEP_TIME = 10
 
 LINEAGE_CACHE_POLICIES = [
@@ -102,6 +103,7 @@ def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_dela
     filename = get_filename(num_raylets, lineage_cache_policy,
                             max_lineage_size, gcs_delay, num_redis_shards,
                             target_throughput)
+    success = True
     print("Running experiment, logging to {}".format(filename))
     command = [
             "bash",
@@ -112,16 +114,15 @@ def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_dela
             str(gcs_delay),
             str(num_redis_shards),
             str(target_throughput),
-            filename
+            filename,
+            str(EXPERIMENT_TIME),
             ]
     with open("job.out", 'a+') as f:
         pid = subprocess.Popen(command, stdout=f, stderr=f)
         start = time.time()
 
-        # Number of items is 200000.
-        max_experiment_time = max(MAX_EXPERIMENT_TIME, (200000 / target_throughput) + 20)
-        # Allow 5s for each pair of raylets to start.
-        max_experiment_time += num_raylets * 5
+        # Allow 30s for startup time.
+        max_experiment_time = EXPERIMENT_TIME + 30
 
         time.sleep(SLEEP_TIME)
         sleep_time = SLEEP_TIME
@@ -137,8 +138,20 @@ def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_dela
             f.write("\n")
             f.write("ERROR: Killed job with output {}\n".format(filename))
             print("ERROR: Killed job with output {}\n".format(filename))
-            return False
-    return True
+            success = False
+
+    # Collect the job's outputs, regardless of whether it completed.
+    command = [
+            "bash",
+            "./collect_output.sh",
+            str(num_raylets),
+            filename,
+            ]
+    with open(os.devnull, 'w') as fnull:
+        pid = subprocess.Popen(command, stdout=fnull, stderr=fnull)
+        pid.wait()
+
+    return success
 
 def run_all_experiments():
     policy = 2
