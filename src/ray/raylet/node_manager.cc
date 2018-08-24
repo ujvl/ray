@@ -835,7 +835,8 @@ void NodeManager::ProcessNodeManagerMessage(TcpClientConnection &node_manager_cl
   default:
     RAY_LOG(FATAL) << "Received unexpected message type " << message_type;
   }
-  node_manager_client.ProcessMessages();
+  bool sync = node_manager_client.Available();
+  node_manager_client.ProcessMessages(sync);
 }
 
 void NodeManager::ScheduleTasks() {
