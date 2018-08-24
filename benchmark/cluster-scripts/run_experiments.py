@@ -12,53 +12,59 @@ LINEAGE_CACHE_POLICIES = [
         "lineage-cache-k-flush",
         ]
 
-TARGET_THROUGHPUTS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]
+TARGET_THROUGHPUTS = [6000, 6500, 7000, 7500, 8000]
 RAYLETS = [12]
-SHARDS = [1, 2, 4, 8, 10, 12]
+SHARDS = [12]
+K = [1, 10, 100, 1000, 10000]
 
 
-def get_filename(num_raylets, lineage_cache_policy, gcs_delay,
-        num_redis_shards, target_throughput):
-    filename = "{}-raylets-{}-policy-{}-gcs-{}-shards-{}-throughput.out".format(
-            num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards,
-            target_throughput)
+def get_filename(num_raylets, lineage_cache_policy, max_lineage_size,
+        gcs_delay, num_redis_shards, target_throughput):
+    if max_lineage_size is None:
+        filename = "{}-raylets-{}-policy-{}-gcs-{}-shards-{}-throughput.out".format(
+                num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards,
+                target_throughput)
+    else:
+        filename = "{}-raylets-{}-policy-{}-k-{}-gcs-{}-shards-{}-throughput.out".format(
+                num_raylets, lineage_cache_policy, max_lineage_size, gcs_delay,
+                num_redis_shards, target_throughput)
     return filename
 
-def get_csv_filename(lineage_cache_policy, gcs_delay):
+def get_csv_filename(lineage_cache_policy, max_lineage_size, gcs_delay):
     if gcs_delay != -1:
         filename = "gcs.csv"
-    else:
+    elif max_lineage_size is None:
         filename = "{}.csv".format(LINEAGE_CACHE_POLICIES[lineage_cache_policy])
+    else:
+        filename = "{}-{}.csv".format(LINEAGE_CACHE_POLICIES[lineage_cache_policy], max_lineage_size)
     return filename
 
-def parse_experiment_throughput(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards, target_throughput):
-    filename = get_filename(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards,
-                            target_throughput)
+def parse_experiment_throughput(num_raylets, lineage_cache_policy, max_lineage_size, gcs_delay, num_redis_shards, target_throughput):
+    filename = get_filename(num_raylets, lineage_cache_policy,
+            max_lineage_size, gcs_delay, num_redis_shards, target_throughput)
     lineage_overloaded = False
     queue_overloaded = False
     timed_out = False
-    try:
-        with open(filename, 'r') as f:
-            header = f.readline()
-            if not header.startswith('DONE'):
-                timed_out = True
-                return -1, lineage_overloaded, queue_overloaded, timed_out
-            throughput = float(header.split()[6])
-            line = f.readline()
-            while line:
-                if "Lineage" in line:
-                    lineage_overloaded = True
-                    throughput = -1
-                elif "Queue" in line:
-                    queue_overloaded = True
-                    throughput = -1
-                line = f.readline()
-            return throughput, lineage_overloaded, queue_overloaded, timed_out
-    except:
-        return -1, lineage_overloaded, queue_overloaded, timed_out
 
-def parse_experiments(lineage_cache_policy, gcs_delay):
-    filename = get_csv_filename(lineage_cache_policy, gcs_delay)
+    with open(filename, 'r') as f:
+        header = f.readline()
+        if not header.startswith('DONE'):
+            timed_out = True
+            return -1, lineage_overloaded, queue_overloaded, timed_out
+        throughput = float(header.split()[6])
+        line = f.readline()
+        while line:
+            if "Lineage" in line:
+                lineage_overloaded = True
+                throughput = -1
+            elif "Queue" in line:
+                queue_overloaded = True
+                throughput = -1
+            line = f.readline()
+        return throughput, lineage_overloaded, queue_overloaded, timed_out
+
+def parse_experiments(lineage_cache_policy, max_lineage_size, gcs_delay):
+    filename = get_csv_filename(lineage_cache_policy, max_lineage_size, gcs_delay)
     with open(filename, 'w') as f:
         fieldnames = [
             'num_shards',
@@ -76,7 +82,7 @@ def parse_experiments(lineage_cache_policy, gcs_delay):
             for num_raylets in RAYLETS:
                 for target_throughput in TARGET_THROUGHPUTS:
                     (throughput, lineage_overloaded, queue_overloaded, timed_out) = parse_experiment_throughput(num_raylets,
-                            lineage_cache_policy, gcs_delay, num_redis_shards,
+                            lineage_cache_policy, max_lineage_size, gcs_delay, num_redis_shards,
                             target_throughput)
                     writer.writerow({
                         'num_shards': num_redis_shards,
@@ -89,13 +95,12 @@ def parse_experiments(lineage_cache_policy, gcs_delay):
                         })
 
 def parse_all_experiments():
-    parse_experiments(0, -1)
-    parse_experiments(1, -1)
-    parse_experiments(2, -1)
-    parse_experiments(0, 0)
+    for k in K:
+        parse_experiments(2, k, -1)
 
-def run_experiment(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards, target_throughput):
-    filename = get_filename(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shards,
+def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_delay, num_redis_shards, target_throughput):
+    filename = get_filename(num_raylets, lineage_cache_policy,
+                            max_lineage_size, gcs_delay, num_redis_shards,
                             target_throughput)
     print("Running experiment, logging to {}".format(filename))
     command = [
@@ -103,6 +108,7 @@ def run_experiment(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shard
             "./run_job.sh",
             str(num_raylets),
             str(lineage_cache_policy),
+            str(max_lineage_size),
             str(gcs_delay),
             str(num_redis_shards),
             str(target_throughput),
@@ -135,16 +141,12 @@ def run_experiment(num_raylets, lineage_cache_policy, gcs_delay, num_redis_shard
     return True
 
 def run_all_experiments():
-    for policy in [0, 1, 2]:
+    policy = 2
+    for k in K:
         for num_redis_shards in SHARDS:
             for target_throughput in TARGET_THROUGHPUTS:
                 for num_raylets in RAYLETS:
-                    run_experiment(num_raylets, policy, -1, num_redis_shards, target_throughput)
-
-    for num_redis_shards in SHARDS:
-        for target_throughput in TARGET_THROUGHPUTS:
-            for num_raylets in RAYLETS:
-                run_experiment(num_raylets, 0, 0, num_redis_shards, target_throughput)
+                    run_experiment(num_raylets, policy, k, -1, num_redis_shards, target_throughput)
 
 
 if __name__ == '__main__':

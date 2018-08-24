@@ -74,6 +74,7 @@ if __name__ == "__main__":
     parser.add_argument('--num-shards', type=int, default=None)
     parser.add_argument('--gcs', action='store_true')
     parser.add_argument('--policy', type=int, default=0)
+    parser.add_argument('--max-lineage-size', type=int, default=None)
     parser.add_argument('--redis-address', type=str)
     args = parser.parse_args()
 
@@ -89,7 +90,8 @@ if __name__ == "__main__":
                             } for i in range(args.num_raylets * 2)],
                          gcs_delay_ms=gcs_delay_ms,
                          num_redis_shards=args.num_shards,
-                         lineage_cache_policy=args.policy)
+                         lineage_cache_policy=args.policy,
+                         max_lineage_size=args.max_lineage_size)
     else:
         ray.init(redis_address=args.redis_address + ":6379", use_raylet=True)
 
