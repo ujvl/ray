@@ -110,8 +110,8 @@ table ResourceIdSetInfo {
 table GetTaskReply {
   // A string of bytes representing the task specification.
   task_spec: string;
-  // A list of the resources reserved for this worker.
-  fractional_resource_ids: [ResourceIdSetInfo];
+  //// A list of the resources reserved for this worker.
+  //fractional_resource_ids: [ResourceIdSetInfo];
 }
 
 // This struct is used to register a new worker with the local scheduler.

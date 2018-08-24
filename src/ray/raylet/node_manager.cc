@@ -1218,12 +1218,12 @@ void NodeManager::AssignTask(Task &task) {
     worker->SetTaskResourceIds(acquired_resources);
   }
 
-  ResourceIdSet resource_id_set =
-      worker->GetTaskResourceIds().Plus(worker->GetLifetimeResourceIds());
-  auto resource_id_set_flatbuf = resource_id_set.ToFlatbuf(fbb);
+  //ResourceIdSet resource_id_set =
+  //    worker->GetTaskResourceIds().Plus(worker->GetLifetimeResourceIds());
+  //auto resource_id_set_flatbuf = resource_id_set.ToFlatbuf(fbb);
 
-  auto message = protocol::CreateGetTaskReply(fbb, spec.ToFlatbuffer(fbb),
-                                              fbb.CreateVector(resource_id_set_flatbuf));
+  auto message = protocol::CreateGetTaskReply(fbb, spec.ToFlatbuffer(fbb));
+                                              //fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
   auto status = worker->Connection()->WriteMessage(
       static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
