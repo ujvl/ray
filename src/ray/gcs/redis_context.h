@@ -96,6 +96,7 @@ class RedisContext {
   redisContext *context_;
   redisAsyncContext *async_context_;
   redisAsyncContext *subscribe_context_;
+  std::string command_;
 };
 
 }  // namespace gcs
