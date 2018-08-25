@@ -57,10 +57,9 @@ def parse_experiment_throughput(num_raylets, lineage_cache_policy, max_lineage_s
         while line:
             if "Lineage" in line:
                 lineage_overloaded = True
-                throughput = -1
             elif "Queue" in line:
                 queue_overloaded = True
-                throughput = -1
+            throughput = -1
             line = f.readline()
         return throughput, lineage_overloaded, queue_overloaded, timed_out
 
