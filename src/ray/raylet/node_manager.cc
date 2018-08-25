@@ -1321,7 +1321,9 @@ void NodeManager::FinishAssignedTask(Worker &worker) {
   if (task.GetTaskSpecification().IsActorCreationTask() ||
       task.GetTaskSpecification().IsActorTask()) {
     auto dummy_object = task.GetTaskSpecification().ActorDummyObject();
-    HandleObjectLocal(dummy_object);
+    if (!task_dependency_manager_.CheckObjectLocal(dummy_object)) {
+      HandleObjectLocal(dummy_object);
+    }
   }
 
   // Notify the task dependency manager that this task has finished execution.
