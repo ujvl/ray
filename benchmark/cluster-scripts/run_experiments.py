@@ -13,10 +13,10 @@ LINEAGE_CACHE_POLICIES = [
         "lineage-cache-k-flush",
         ]
 
-TARGET_THROUGHPUTS = [6000, 6500, 7000, 7500, 8000]
-RAYLETS = [12]
-SHARDS = [12]
-K = [1, 10, 100, 1000, 10000]
+TARGET_THROUGHPUTS = [5500, 6000, 6500, 7000, 7500, 8000]
+RAYLETS = [64]
+SHARDS = [1, 2, 4, 8, 10, 12]
+K = [100]
 
 
 def get_filename(num_raylets, lineage_cache_policy, max_lineage_size,
@@ -47,21 +47,24 @@ def parse_experiment_throughput(num_raylets, lineage_cache_policy, max_lineage_s
     queue_overloaded = False
     timed_out = False
 
-    with open(filename, 'r') as f:
-        header = f.readline()
-        if not header.startswith('DONE'):
-            timed_out = True
-            return -1, lineage_overloaded, queue_overloaded, timed_out
-        throughput = float(header.split()[6])
-        line = f.readline()
-        while line:
-            if "Lineage" in line:
-                lineage_overloaded = True
-            elif "Queue" in line:
-                queue_overloaded = True
-            throughput = -1
+    try:
+        with open(filename, 'r') as f:
+            header = f.readline()
+            if not header.startswith('DONE'):
+                timed_out = True
+                return -1, lineage_overloaded, queue_overloaded, timed_out
+            throughput = float(header.split()[6])
             line = f.readline()
-        return throughput, lineage_overloaded, queue_overloaded, timed_out
+            while line:
+                if "Lineage" in line:
+                    lineage_overloaded = True
+                elif "Queue" in line:
+                    queue_overloaded = True
+                throughput = -1
+                line = f.readline()
+            return throughput, lineage_overloaded, queue_overloaded, timed_out
+    except:
+        return -1, True, True, True
 
 def parse_experiments(lineage_cache_policy, max_lineage_size, gcs_delay):
     filename = get_csv_filename(lineage_cache_policy, max_lineage_size, gcs_delay)
@@ -153,12 +156,18 @@ def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_dela
     return success
 
 def run_all_experiments():
-    policy = 2
-    for k in K:
-        for num_redis_shards in SHARDS:
-            for target_throughput in TARGET_THROUGHPUTS:
-                for num_raylets in RAYLETS:
-                    run_experiment(num_raylets, policy, k, -1, num_redis_shards, target_throughput)
+    for num_redis_shards in SHARDS:
+        for policy, gcs_delay in [
+                (0, -1),
+                (1, -1),
+                (2, -1)
+                (0, 0),
+                ]:
+            for num_raylets in RAYLETS:
+                for target_throughput in TARGET_THROUGHPUTS:
+                        success = run_experiment(num_raylets, policy, k, 0, num_redis_shards, target_throughput)
+                        if not success:
+                            break
 
 
 if __name__ == '__main__':
