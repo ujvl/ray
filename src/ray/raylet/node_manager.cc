@@ -265,13 +265,14 @@ void NodeManager::HandleDriverTableUpdate(
 
 void NodeManager::Heartbeat() {
   heartbeats_++;
-  heartbeats_ = heartbeats_ % 10;
-  if (heartbeats_ % 10 == 0) {
+  heartbeats_ = heartbeats_ % 1;
+  if (heartbeats_ % 1 == 0) {
     if (lineage_cache_->NumEntries() > 20000) {
       RAY_LOG(INFO) << "Lineage cache size on " << gcs_client_->client_table().GetLocalClientId() << " is " << lineage_cache_->NumEntries();
     }
-    if (local_queues_.GetQueueSize() > 20000) {
-      RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << local_queues_.GetQueueSize() + gcs_task_cache_.size();
+    size_t queue_size = local_queues_.GetQueueSize() + gcs_task_cache_.size();
+    if (queue_size > 20000) {
+      RAY_LOG(INFO) << "Queue length on " << gcs_client_->client_table().GetLocalClientId() << " is " << queue_size;
     }
   }
   uint64_t now_ms = current_time_ms();
