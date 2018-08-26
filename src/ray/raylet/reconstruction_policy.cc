@@ -81,7 +81,7 @@ void ReconstructionPolicy::HandleReconstructionLogAppend(const TaskID &task_id,
 
   if (success) {
     RAY_LOG(INFO) << "Reconstructing task " << task_id;
-    reconstruction_handler_(task_id, reconstruction_attempt);
+    //reconstruction_handler_(task_id, reconstruction_attempt);
   }
 }
 
