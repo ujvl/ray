@@ -104,6 +104,7 @@ AsyncGcsClient::AsyncGcsClient(const std::string &address, int port, const Clien
   client_table_.reset(new ClientTable({primary_context_}, this, client_id));
   error_table_.reset(new ErrorTable({primary_context_}, this));
   driver_table_.reset(new DriverTable({primary_context_}, this));
+  heartbeat_table_.reset(new HeartbeatTable({primary_context_}, this));
   // Tables below would be sharded.
   object_table_.reset(new ObjectTable(shard_contexts_, this, command_type));
   actor_table_.reset(new ActorTable(shard_contexts_, this));
@@ -111,7 +112,6 @@ AsyncGcsClient::AsyncGcsClient(const std::string &address, int port, const Clien
   raylet_task_table_.reset(new raylet::TaskTable(shard_contexts_, this, command_type));
   task_reconstruction_log_.reset(new TaskReconstructionLog(shard_contexts_, this));
   task_lease_table_.reset(new TaskLeaseTable(shard_contexts_, this));
-  heartbeat_table_.reset(new HeartbeatTable(shard_contexts_, this));
   profile_table_.reset(new ProfileTable(shard_contexts_, this));
   command_type_ = command_type;
 }
