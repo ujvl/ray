@@ -27,21 +27,27 @@ class A(object):
         start1 = time.time()
         start2 = time.time()
         i = 0
+        batch_size = BATCH_SIZE
+        if target_throughput < batch_size:
+            batch_size = int(target_throughput)
         while True:
             self.b.f.remote()
-            if i % BATCH_SIZE == 0 and i > 0:
+            if i % batch_size == 0 and i > 0:
                 end = time.time()
-                sleep_time = (BATCH_SIZE / target_throughput) - (end - start2)
+                sleep_time = (batch_size / target_throughput) - (end - start2)
                 if sleep_time > 0.00003:
                     time.sleep(sleep_time)
                 start2 = time.time()
+                if end - start >= experiment_time:
+                    break
+
             if i % 10000 == 0 and i > 0:
                 end = time.time()
                 print("push, throughput round ", i / 10000, ":", 10000 / (end - start1))
                 start1 = end
-                if end - start >= experiment_time:
-                    break
+
             i += 1
+
         time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')
         print("push, end " + time_str)
 
