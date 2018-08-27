@@ -80,6 +80,7 @@ if __name__ == "__main__":
     parser.add_argument('--target-throughput', type=int, default=3000)
     parser.add_argument('--experiment-time', type=int, default=10)
     parser.add_argument('--num-workers', type=int, default=1)
+    parser.add_argument('--pingpong', action='store_true')
     parser.add_argument('--num-raylets', type=int, default=1)
     parser.add_argument('--num-shards', type=int, default=None)
     parser.add_argument('--gcs', action='store_true')
@@ -87,6 +88,9 @@ if __name__ == "__main__":
     parser.add_argument('--max-lineage-size', type=int, default=None)
     parser.add_argument('--redis-address', type=str)
     args = parser.parse_args()
+
+    if args.pingpong:
+        args.num_workers //= 2
 
     gcs_delay_ms = -1
     if args.gcs:
@@ -108,10 +112,19 @@ if __name__ == "__main__":
     actors = []
     for node in range(args.num_raylets):
         for _ in range(args.num_workers):
+            send_resource = "Node{}".format(node * 2)
+            receive_resource = "Node{}".format(node * 2 + 1)
             actor_cls = ray.remote(resources={
-                "Node{}".format(node * 2): 1,
+                send_resource: 1,
                 })(A)
-            actors.append(actor_cls.remote("Node{}".format(node * 2 + 1)))
+            actors.append(actor_cls.remote(receive_resource))
+
+            if args.pingpong:
+                actor_cls = ray.remote(resources={
+                    receive_resource: 1
+                    })(A)
+                actors.append(actor_cls.remote(send_resource))
+
     ray.get([actor.ready.remote() for actor in actors])
     results = ray.get([actor.f.remote(args.target_throughput,
                                       args.experiment_time) for actor in

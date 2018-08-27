@@ -31,5 +31,5 @@ echo "Starting job..."
 if [ $THROUGHPUT = 0 ]; then
     python ~/ray/benchmark/latency_microbenchmark.py --redis-address $HEAD_IP --num-raylets $NUM_RAYLETS 2>&1 | tee $OUT_FILENAME
 else
-    python ~/ray/benchmark/actor_microbenchmark.py --target-throughput $(( $THROUGHPUT / 2 )) --redis-address $HEAD_IP --num-raylets $NUM_RAYLETS --experiment-time $EXPERIMENT_TIME --num-workers 2 2>&1 | tee $OUT_FILENAME
+    python ~/ray/benchmark/actor_microbenchmark.py --target-throughput $(( $THROUGHPUT / 2 )) --redis-address $HEAD_IP --num-raylets $NUM_RAYLETS --experiment-time $EXPERIMENT_TIME --num-workers 2 --pingpong 2>&1 | tee $OUT_FILENAME
 fi
