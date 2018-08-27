@@ -6,6 +6,7 @@ import os
 
 EXPERIMENT_TIME = 60
 SLEEP_TIME = 10
+NUM_TRIALS = 4
 
 LINEAGE_CACHE_POLICIES = [
         "lineage-cache",
@@ -14,9 +15,9 @@ LINEAGE_CACHE_POLICIES = [
         ]
 
 STEP_SIZE = 100
-TARGET_THROUGHPUTS = range(100, 4000, STEP_SIZE)
-RAYLETS = [64]
-SHARDS = [1, 2, 4, 8, 10, 12, 16]
+TARGET_THROUGHPUTS = range(500, 8000, STEP_SIZE)
+RAYLETS = [32]
+SHARDS = [1, 2, 4, 8, 16, 24, 32, 48, 64]
 K = [100]
 
 
@@ -92,7 +93,7 @@ def parse_experiments(lineage_cache_policy, max_lineage_size, gcs_delay):
                     (throughput, lineage_overloaded, queue_overloaded, timed_out) = parse_experiment_throughput(num_raylets,
                             lineage_cache_policy, max_lineage_size, gcs_delay, num_redis_shards,
                             target_throughput, trial)
-                    if throughput == -1:
+                    while throughput == -1 and trial < NUM_TRIALS:
                         trial += 1
                         (throughput, lineage_overloaded, queue_overloaded, timed_out) = parse_experiment_throughput(num_raylets,
                                 lineage_cache_policy, max_lineage_size, gcs_delay, num_redis_shards,
@@ -167,6 +168,9 @@ def run_experiment(num_raylets, lineage_cache_policy, max_lineage_size, gcs_dela
             str(num_raylets),
             filename,
             ]
+    # Try to collect any coredumps if the job timed out.
+    if not success:
+        command.append(filename.split('.')[0])
     with open(os.devnull, 'w') as fnull:
         pid = subprocess.Popen(command, stdout=fnull, stderr=fnull)
         pid.wait()
@@ -178,10 +182,10 @@ def run_all_experiments():
     max_throughputs = {
             }
     policies = [
+            (0, 0),
             (0, -1),
             (1, -1),
             (2, -1),
-            (0, 0),
             ]
     for policy in policies:
         max_throughputs[policy] = 0
@@ -194,7 +198,7 @@ def run_all_experiments():
                     if target_throughput < max_throughputs[(policy, gcs_delay)] - STEP_SIZE:
                         continue
                     # Run the trials.
-                    for trial in range(2):
+                    for trial in range(NUM_TRIALS):
                         # Run one trial. Returns true if the experiment did not
                         # time out.
                         success = run_experiment(num_raylets,
