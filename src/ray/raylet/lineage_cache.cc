@@ -834,6 +834,7 @@ void LineageCacheKFlush::EvictRemoteLineage(const TaskID &task_id) {
   if (!entry) {
     return;
   }
+  auto status = entry->GetStatus();
   committed_tasks_.insert(task_id);
   // Recurse and remove this task's ancestors. We recurse first before removing
   // the current task. Tasks can only be evicted if their parents are evicted,
@@ -844,7 +845,7 @@ void LineageCacheKFlush::EvictRemoteLineage(const TaskID &task_id) {
   }
   // Only evict tasks that are remote. Other tasks, and their lineage, will be
   // evicted once they are committed.
-  if (entry->GetStatus() == GcsStatus::UNCOMMITTED_REMOTE || entry->GetStatus() == GcsStatus::COMMITTING) {
+  if (status == GcsStatus::UNCOMMITTED_REMOTE || status == GcsStatus::COMMITTING) {
     // Remove the ancestor task.
     EvictTask(task_id);
   }
