@@ -195,10 +195,24 @@ def run_all_experiments():
                 for target_throughput in TARGET_THROUGHPUTS:
                     # For the next highest number of shards, start at 500 less
                     # than the throughput from the previous number of shards.
-                    if target_throughput < max_throughputs[(policy, gcs_delay)] - STEP_SIZE:
+                    if target_throughput < max_throughputs[(policy, gcs_delay)] - 5 * STEP_SIZE:
                         continue
                     # Run the trials.
                     for trial in range(NUM_TRIALS):
+                        # If the experiment did not time out, check the logs to
+                        # make sure that the job was stable. Only increase the
+                        # maximum recorded throughput for this policy if the
+                        # job was stable.
+                        (throughput, _, _, _) = parse_experiment_throughput(num_raylets, policy,
+                                max_lineage_size, gcs_delay, num_redis_shards, target_throughput,
+                                trial)
+                        if throughput != -1:
+                            print("Experiment found, logged at {}".format(get_filename(num_raylets, policy,
+                                max_lineage_size, gcs_delay, num_redis_shards, target_throughput,
+                                trial)))
+                            success = True
+                            break
+
                         # Run one trial. Returns true if the experiment did not
                         # time out.
                         success = run_experiment(num_raylets,
