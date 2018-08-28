@@ -224,13 +224,14 @@ ray::Status NodeManager::RegisterGcs() {
   };
   gcs_client_->client_table().RegisterClientRemovedCallback(node_manager_client_removed);
 
-  // Subscribe to node manager heartbeats.
-  const auto heartbeat_added = [this](gcs::AsyncGcsClient *client, const ClientID &id,
-                                      const HeartbeatTableDataT &heartbeat_data) {
-    HeartbeatAdded(client, id, heartbeat_data);
+  // Subscribe to node manager heartbeat batch.
+  const auto heartbeat_batch_added =
+      [this](gcs::AsyncGcsClient *client, const ClientID &id,
+             const HeartbeatBatchTableDataT &heartbeat_batch) {
+    HeartbeatBatchAdded(client, id, heartbeat_batch);
   };
-  RAY_RETURN_NOT_OK(gcs_client_->heartbeat_table().Subscribe(
-      UniqueID::nil(), UniqueID::nil(), heartbeat_added, nullptr,
+  RAY_RETURN_NOT_OK(gcs_client_->heartbeat_batch_table().Subscribe(
+      UniqueID::nil(), UniqueID::nil(), heartbeat_batch_added, nullptr,
       [](gcs::AsyncGcsClient *client) {
         RAY_LOG(DEBUG) << "heartbeat table subscription done callback called.";
       }));
@@ -288,7 +289,7 @@ void NodeManager::Heartbeat() {
   auto heartbeat_data = std::make_shared<HeartbeatTableDataT>();
   auto client_id = gcs_client_->client_table().GetLocalClientId();
   const SchedulingResources &local_resources = cluster_resource_map_[client_id];
-  heartbeat_data->client_id = client_id.hex();
+  heartbeat_data->client_id = client_id.binary();
   // TODO(atumanov): modify the heartbeat table protocol to use the ResourceSet directly.
   // TODO(atumanov): implement a ResourceSet const_iterator.
   for (const auto &resource_pair :
@@ -410,6 +411,15 @@ void NodeManager::HeartbeatAdded(gcs::AsyncGcsClient *client, const ClientID &cl
                   heartbeat_data.resources_available_capacity));
   RAY_CHECK(this->cluster_resource_map_[client_id].GetAvailableResources() ==
             heartbeat_resource_available);
+}
+
+void NodeManager::HeartbeatBatchAdded(gcs::AsyncGcsClient *client,
+                                      const UniqueID &publish_key,
+                                      const HeartbeatBatchTableDataT& heartbeat_batch) {
+  for (auto& heartbeat_data : heartbeat_batch.batch) {
+    ClientID client_id = ClientID::from_binary(heartbeat_data->client_id);
+    this->HeartbeatAdded(client, client_id, *heartbeat_data);
+  }
 }
 
 void NodeManager::HandleActorCreation(const ActorID &actor_id,

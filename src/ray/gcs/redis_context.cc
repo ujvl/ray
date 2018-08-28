@@ -48,6 +48,7 @@ static const std::string prefixes[] = {
     "10",
     "11",
     "12",
+    "13",
 };
 
 static const std::string lengths[] = {
@@ -61,6 +62,7 @@ static const std::string lengths[] = {
     "1",
     "1",
     "1",
+    "2",
     "2",
     "2",
     "2",
