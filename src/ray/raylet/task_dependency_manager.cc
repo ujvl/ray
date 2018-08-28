@@ -268,7 +268,7 @@ void TaskDependencyManager::AcquireTaskLease(const TaskID &task_id) {
   }
 
   auto task_lease_data = std::make_shared<TaskLeaseDataT>();
-  task_lease_data->node_manager_id = client_id_.hex();
+  task_lease_data->node_manager_id = client_id_.binary();
   task_lease_data->acquired_at = current_sys_time_ms();
   task_lease_data->timeout = it->second.lease_period;
   RAY_CHECK_OK(task_lease_table_.Add(DriverID::nil(), task_id, task_lease_data, nullptr));
