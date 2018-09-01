@@ -60,7 +60,7 @@ build_arrow() {
   fi
 
   pushd $TP_DIR/build/arrow
-  git fetch origin ysb-fix
+  git fetch https://github.com/stephanie-wang/arrow.git ysb-fix
 
   git checkout $TARGET_COMMIT_ID
 

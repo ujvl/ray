@@ -37,7 +37,7 @@ for host in `echo "$HOSTLIST"|sed  "s/#.*$//;/^$/d"`; do
         ssh $SSH_OPTS "$host" $"${@// /\\ }" \
             2>&1 | sed "s/^/$host: /" &
     else
-        ssh $SSH_OPTS "$host" $"${@// /\\ }" 2>&1 &
+        ssh $SSH_OPTS "$host" $"source ~/py-env/venv3/bin/activate; ${@// /\\ }" 2>&1 &
     fi
 done
 

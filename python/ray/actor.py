@@ -992,7 +992,7 @@ def make_actor(cls, num_cpus, num_gpus, resources, actor_method_cpus,
     # Modify the class to have an additional method that will be used for
     # terminating the worker.
     class Class(cls):
-        S3_BUCKET_NAME = "actor-checkpoints"
+        S3_BUCKET_NAME = "ysb-actor-checkpoints"
 
         def __ray_init_s3_client__(self):
             if S3_CHECKPOINTING:
