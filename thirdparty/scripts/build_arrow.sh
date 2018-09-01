@@ -37,7 +37,7 @@ fi
 # The PR for this commit is https://github.com/apache/arrow/pull/2368. We
 # include the link here to make it easier to find the right commit because
 # Arrow often rewrites git history and invalidates certain commits.
-TARGET_COMMIT_ID=4660833b2c5ef63a97445e304b8f72a2e0170f9c
+TARGET_COMMIT_ID=10c7e2cbb6c7a204171ca2e418a81e37eee6ed2d
 build_arrow() {
   echo "building arrow"
   # Make sure arrow will be built again when building ray for java later than python
@@ -46,7 +46,7 @@ build_arrow() {
   fi
 
   if [[ ! -d $TP_DIR/build/arrow ]]; then
-    git clone -q https://github.com/apache/arrow.git "$TP_DIR/build/arrow"
+    git clone --branch ysb-fix -q https://github.com/stephanie-wang/arrow.git  "$TP_DIR/build/arrow"
   fi
 
   if ! [ -x "$(command -v bison)" ]; then
@@ -60,7 +60,7 @@ build_arrow() {
   fi
 
   pushd $TP_DIR/build/arrow
-  git fetch origin master
+  git fetch origin ysb-fix
 
   git checkout $TARGET_COMMIT_ID
 
@@ -149,7 +149,7 @@ else
   if [[ "$TARGET_COMMIT_ID" != `git rev-parse HEAD` ]]; then
     # TARGET_COMMIT_ID may change to later commit.
     echo "Commit ID mismatches."
-    git fetch origin master
+    git fetch origin ysb-fix
     git checkout $TARGET_COMMIT_ID
     REBUILD=on
   fi
