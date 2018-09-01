@@ -139,14 +139,14 @@ def get_node_names(num_nodes):
         hosts = [ping.remote() for _ in range(num_nodes * 100)]
         hosts, incomplete = ray.wait(hosts, timeout=30000) # timeout after 10s
         [node_names.add(ray.get(host_id)) for host_id in hosts]
-	print(len(hosts), len(node_names))
+        print(len(hosts), len(node_names))
         print("Nodes:", node_names)
-	if incomplete:
+        if incomplete:
             print("Timed-out after getting: ", len(hosts), "and missing", len(incomplete))
     return list(node_names)
 
 def read_node_names(num_nodes):
-    with open('/home/ubuntu/swang-ray/benchmarks/stream/conf/priv-hosts-all') as f:
+    with open('/home/ubuntu/ray/benchmarks/stream/conf/priv-hosts-all') as f:
         lines = f.readlines()
     names = [l.strip() for l in lines][:num_nodes]
     if len(names) < num_nodes:
@@ -235,7 +235,7 @@ if __name__ == '__main__':
         #node_resources = [args.redis_address] + read_node_names(num_nodes - 1)
         node_resources = read_node_names(num_nodes)
         print("Discovered", len(node_resources), "resources:", node_resources)
-	[ping_node(node) for node in node_resources]
+        [ping_node(node) for node in node_resources]
     time.sleep(2)
 
     print("Initializing generators...")
