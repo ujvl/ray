@@ -31,13 +31,16 @@ if [ "$SSH_OPTS" = "" ]; then
   SSH_OPTS="-o StrictHostKeyChecking=no -i ~/key.pem"
 fi
 
-FORMAT=false
+if [ "$VENV" = "" ]; then
+  VENV="source ~/py-env/venv3/bin/activate"
+fi
+
 for host in `echo "$HOSTLIST"|sed  "s/#.*$//;/^$/d"`; do
-    if [ "$FORMAT" = true ] ; then
-        ssh $SSH_OPTS "$host" $"${@// /\\ }" \
-            2>&1 | sed "s/^/$host: /" &
+    if [ "$FORMAT" = "" ] ; then
+        ssh $SSH_OPTS "$host" $"$VENV; ${@// /\\ }" 2>&1 &
     else
-        ssh $SSH_OPTS "$host" $"source ~/py-env/venv3/bin/activate; ${@// /\\ }" 2>&1 &
+        ssh $SSH_OPTS "$host" $"$VENV; ${@// /\\ }" \
+            2>&1 | sed "s/^/$host: /" &
     fi
 done
 

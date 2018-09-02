@@ -65,7 +65,7 @@ def init_actor(node_index, node_resources, actor_cls, checkpoint, args=None):
 ############### Tasks ###############
 
 @ray.remote
-def ping(time_to_sleep=1):
+def ping(time_to_sleep=0.01):
     time.sleep(time_to_sleep)
     return socket.gethostname()
 

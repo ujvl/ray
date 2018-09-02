@@ -6,6 +6,10 @@ conf="`cd "$sbin/../conf/"; pwd`"
 #$sbin/sync ~/ray/benchmarks/stream/conf/
 #$sbin/sync ~/ray/python/ray/actor.py
 
+# delete log files
+rm -rf /tmp/raylogs/*
+$sbin/hosts.sh rm -rf '/tmp/raylogs/*'
+
 # restart head
 ulimit -n 65536 
 ray stop
