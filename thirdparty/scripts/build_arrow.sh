@@ -38,6 +38,14 @@ fi
 # include the link here to make it easier to find the right commit because
 # Arrow often rewrites git history and invalidates certain commits.
 TARGET_COMMIT_ID=10c7e2cbb6c7a204171ca2e418a81e37eee6ed2d
+TARGET_COMMIT_ID=47355372722365916963e3318f5355536b93f4b8
+
+REPO=https://github.com/stephanie-wang/arrow.git
+REPO=https://github.com/ujvl/arrow.git
+
+BRANCH=ysb-fix
+BRANCH=ysb-fix-log
+
 build_arrow() {
   echo "building arrow"
   # Make sure arrow will be built again when building ray for java later than python
@@ -46,7 +54,7 @@ build_arrow() {
   fi
 
   if [[ ! -d $TP_DIR/build/arrow ]]; then
-    git clone --branch ysb-fix -q https://github.com/stephanie-wang/arrow.git  "$TP_DIR/build/arrow"
+    git clone --branch $BRANCH -q $REPO "$TP_DIR/build/arrow"
   fi
 
   if ! [ -x "$(command -v bison)" ]; then
@@ -60,7 +68,7 @@ build_arrow() {
   fi
 
   pushd $TP_DIR/build/arrow
-  git fetch https://github.com/stephanie-wang/arrow.git ysb-fix
+  git fetch $REPO $BRANCH
 
   git checkout $TARGET_COMMIT_ID
 
