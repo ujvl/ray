@@ -7,6 +7,15 @@ import ray
 import conf
 
 
+default_log_level = logging.DEBUG if conf.DEBUG else logging.INFO
+
+
+def get_logger(name, level=default_log_level):
+    logging.basicConfig(level=level)
+    logger = logging.getLogger(name)
+    return logger
+
+
 def init_ray(args, node_resources):
     if args.redis_address:
         ray.init(redis_address="{}:6379".format(args.redis_address))
@@ -33,14 +42,4 @@ def parse_args():
     parser.add_argument('--redis-address', type=str)
     args = parser.parse_args()
     return args
-
-
-def get_logger(name):
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(name)
-    return logger
-
-def flatten(lst):
- return [item for sublist in lst for item in sublist]
-
 
