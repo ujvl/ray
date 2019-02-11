@@ -1,0 +1,55 @@
+#!/bin/bash
+
+sbin="`dirname "$0"`"
+sbin="`cd "$sbin"; pwd`"
+
+# . "$sbin/succinct-config.sh"
+# . "$SUCCINCT_PREFIX/sbin/load-succinct-env.sh"
+
+DELETE_FLAG=""
+
+usage() {
+  echo "Usage: sync [--delete] <dir>"
+  exit 1
+}
+
+while :
+do
+  case $1 in
+    --delete)
+      DELETE_FLAG="--delete"
+      shift
+      ;;
+    -*)
+      echo "ERROR: Unknown option: $1" >&2
+      usage
+      ;;
+    *) # End of options
+      break
+      ;;
+  esac
+done
+
+if [[ "$#" != "1" ]] ; then
+  usage
+fi
+
+if [[ ! -e "$1" ]] ; then
+  echo "File or directory $1 doesn't exist!"
+  exit 1
+fi
+
+DIR=`readlink -f "$1"`
+DIR=`echo "$DIR"|sed 's@/$@@'`
+DEST=`dirname "$DIR"`
+
+HOSTS=`cat $sbin/../conf/hosts`
+
+SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/key.pem"
+
+echo "RSYNC'ing $DIR to slaves..."
+for slave in $HOSTS; do
+    echo $slave
+    rsync -e "ssh $SSH_OPTS" -az $DELETE_FLAG "$DIR" "$slave:$DEST" & sleep 0.2
+done
+wait

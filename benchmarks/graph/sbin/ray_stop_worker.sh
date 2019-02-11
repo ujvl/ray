@@ -1,0 +1,2 @@
+ray="ray"
+$ray stop
