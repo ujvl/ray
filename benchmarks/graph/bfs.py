@@ -55,13 +55,33 @@ def bfs_level_parallel(graph, src_vertex):
     """
     # have the src_vertex state updated to 0
     context = BFSContext(-1)
-    frontier = [Vertex(src_vertex, context.level, [src_vertex])]
-    
+    frontier = [Vertex(None, context.level, [src_vertex])]
+
     while frontier:
         next_frontier_ids = []
         for v in frontier:
             ids = [graph.apply(increment_level, w, context) for w in v.neighbours]
-            next_frontier_ids.extend(ids)
+            next_frontier_ids += ids
+        context.level += 1
+        frontier = ray.get(next_frontier_ids)
+
+
+def bfs_batch_level_parallel(graph, src_vertex):
+    """
+    Batched BFS over graph.
+    """
+    # have the src_vertex state updated to 0
+    context = BFSContext(-1)
+    frontier = [[Vertex(None, context.level, [src_vertex])]]
+    
+    while frontier:
+        batches = [[] for _ in range(graph.num_subgraphs)]
+        for result_batch in frontier:
+            for v in result_batch:
+                for w in v.neighbours:
+                    batches[graph.subgraph_of(w)].append(w)
+        next_frontier_ids = [graph.batch_apply(increment_level, b, context) for b in batches if len(b)]
+
         context.level += 1
         frontier = ray.get(next_frontier_ids)
 
@@ -95,7 +115,8 @@ if __name__ == '__main__':
     logger.info("Arguments: " + str(args))
     node_resources = ["Node{}".format(i) for i in range(args.num_nodes)]
     util.init_ray(args, node_resources)
-    ray.get(warmup_objectstore.remote())
+    logger.info("Warming up...")
+    # ray.get(warmup_objectstore.remote())
 
     src_vertex = 1
  
@@ -105,7 +126,7 @@ if __name__ == '__main__':
         time.sleep(1)
         logger.info("Running BFS...")
         a = time.time()
-        bfs_level_parallel(g, src_vertex)
+        bfs_batch_level_parallel(g, src_vertex)
         b = time.time()
         logger.info("Time taken: %s ms", (b - a) * 1000)
         logger.info("Calls: %s", g.calls())
@@ -127,7 +148,7 @@ if __name__ == '__main__':
             assert uncoordinated_state == state
             logger.debug("%sv: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
             return state
-        g.foreach_vertex(verify)
+        g2.foreach_vertex(print_vertex)
 
     except KeyError:
         logger.info("Dumping state...")
