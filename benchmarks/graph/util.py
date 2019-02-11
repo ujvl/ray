@@ -33,7 +33,7 @@ def init_ray(args, node_resources):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dump', type=str, default=None)
+    parser.add_argument('--dump', type=str, default="dump.json")
     parser.add_argument('--graph-fname', type=str, default=None)
     parser.add_argument('--huge-pages', type=str)
     parser.add_argument('--num-nodes', type=int, required=True)

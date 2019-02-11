@@ -23,13 +23,11 @@ class Graph(object):
 
     @property
     def num_vertices(self):
-        total = 0
         subgraph_count_ids = [subgraph.num_vertices.remote() for subgraph in self.subgraphs]
         return sum(ray.get(subgraph_count_ids))
 
     @property
     def num_edges(self):
-        total = 0
         subgraph_count_ids = [subgraph.num_edges.remote() for subgraph in self.subgraphs]
         return sum(ray.get(subgraph_count_ids))
 
@@ -92,6 +90,9 @@ class Graph(object):
         """
         ray.get([self.subgraphs[i].load_from_file.remote(file_path, delim) for i in range(self.num_subgraphs)])
 
+    def calls(self):
+        return sum(ray.get([self.subgraphs[i].num_calls.remote() for i in range(self.num_subgraphs)]))
+
 
 class Subgraph(object):
     """
@@ -103,6 +104,8 @@ class Subgraph(object):
         self.logger = util.get_logger(__name__)
         self.vertices = {}
         self.edges = defaultdict(set)
+
+        self.calls = 0
 
     def init_refs(self, idx, *subgraphs):
         self.my_idx = idx
@@ -119,6 +122,9 @@ class Subgraph(object):
         vertex_subgraph_idx = vertex % self.num_subgraphs
         assert vertex_subgraph_idx == self.my_idx
         self.vertices[vertex] = state
+
+    def num_calls(self):
+        return self.calls
 
     def add_edge(self, src_vertex, dst_vertex, state=None):
         src_subgraph_idx = src_vertex % self.num_subgraphs
@@ -145,6 +151,7 @@ class Subgraph(object):
         new_state = f(vertex, state, graph_context)
         self.vertices[vertex] = new_state 
         neighbours = self.edges[vertex] if state != new_state else []
+        self.calls += 1
         return Vertex(vertex, new_state, neighbours)
 
     def foreach_vertex(self, f, graph_context):
@@ -168,6 +175,7 @@ class Subgraph(object):
         new_state = f(vertex, state, graph_context)
         self.vertices[vertex] = new_state
 
+        self.calls += 1
         if state == new_state:
             return []
         else:
@@ -176,17 +184,8 @@ class Subgraph(object):
             for neighbour in self.edges[vertex]:
                 # TODO batch calls
                 neighbour_subgraph_idx = neighbour % self.num_subgraphs
-                if neighbour_subgraph_idx == self.my_idx:
-                    # We need to make a copy of the context for each neighbour
-                    # so that it doesn't remain mutated after the call returns.
-                    # However, maybe these semantics are wrong for some use-cases (?)
-                    # TODO Probably not though but make sure
-                    context_copy = copy.copy(graph_context)
-                    ids += self.recursive_foreach_vertex(f, neighbour, context_copy)
-                else:
-                    subgraph = self.subgraphs[neighbour_subgraph_idx]
-                    # We don't need to copy the context since it is copied by default over IPC.
-                    ids.append(subgraph.recursive_foreach_vertex.remote(f, neighbour, graph_context))
+                subgraph = self.subgraphs[neighbour_subgraph_idx]
+                ids.append(subgraph.recursive_foreach_vertex.remote(f, neighbour, graph_context))
             return ids
 
     def load_from_file(self, file_path, delim='\t'):
@@ -210,6 +209,7 @@ class Subgraph(object):
                     self.add_edge(src_vertex, dst_vertex)
                 if dst_subgraph_idx == self.my_idx:
                     self.add_vertex(dst_vertex)
+        self.logger.info("[%s] sub-graph size: |V|=%s,|E|=%s", self.my_idx, self.num_vertices(), self.num_edges())
 
 
 def init_subgraph(node_index):

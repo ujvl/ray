@@ -5,6 +5,7 @@ import logging
 import time
 import sys
 
+import numpy as np
 import ray
 
 from graph import Graph, Vertex
@@ -13,6 +14,13 @@ import util
 
 # Disambiguation: node refers to an instance running Ray, 
 #                 vertex refers to a Graph vertex
+
+
+@ray.remote
+def warmup_objectstore():
+    x = np.ones(10 ** 8)
+    for _ in range(100):
+        ray.put(x)
 
 
 def load_graph(file_path, num_subgraphs, num_nodes, init_state=sys.maxint):
@@ -50,13 +58,12 @@ def bfs_level_parallel(graph, src_vertex):
     frontier = [Vertex(src_vertex, context.level, [src_vertex])]
     
     while frontier:
-        neighbour_ids = []
-        # Bind parent state param
+        next_frontier_ids = []
         for v in frontier:
             ids = [graph.apply(increment_level, w, context) for w in v.neighbours]
-            neighbour_ids.extend(ids)
+            next_frontier_ids.extend(ids)
         context.level += 1
-        frontier = ray.get(neighbour_ids)
+        frontier = ray.get(next_frontier_ids)
 
 
 class BFSContext:
@@ -70,8 +77,10 @@ def increment_level(v, state, context):
     Increment level if it leads to a new smaller level.
     """
     logger.debug("v%s, state = %s, parent level = %s", v, state, context.level)
-    time.sleep(0.01)
     context.level = min(state, context.level + 1)
+    if state != context.level:
+        # simulate some computation for vertex update
+        time.sleep(0.01)
     return context.level
 
 
@@ -86,34 +95,44 @@ if __name__ == '__main__':
     logger.info("Arguments: " + str(args))
     node_resources = ["Node{}".format(i) for i in range(args.num_nodes)]
     util.init_ray(args, node_resources)
+    ray.get(warmup_objectstore.remote())
 
-    # Create graphs
-    g = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
-    g2 = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
     src_vertex = 1
  
-    # Do coordinated BFS
-    logger.info("Running BFS...")
-    a = time.time()
-    bfs_level_parallel(g, src_vertex)
-    b = time.time()
-    logger.info("Time taken: %s ms", (b - a) * 1000)
+    try:
+        # Do coordinated BFS
+        g = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
+        time.sleep(1)
+        logger.info("Running BFS...")
+        a = time.time()
+        bfs_level_parallel(g, src_vertex)
+        b = time.time()
+        logger.info("Time taken: %s ms", (b - a) * 1000)
+        logger.info("Calls: %s", g.calls())
 
-    # Do uncoordinated BFS
-    logger.info("Running recursive BFS...")
-    a = time.time()
-    g2.recursive_foreach_vertex(increment_level, src_vertex, BFSContext(-1))
-    b = time.time()
-    logger.info("Time taken: %s ms", (b - a) * 1000)
+        # Do uncoordinated BFS
+        time.sleep(1)
+        g2 = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
+        time.sleep(1)
+        logger.info("Running recursive BFS...")
+        a = time.time()
+        g2.recursive_foreach_vertex(increment_level, src_vertex, BFSContext(-1))
+        b = time.time()
+        logger.info("Time taken: %s ms", (b - a) * 1000)
+        logger.info("Calls: %s", g2.calls())
 
-    # Verify correctness
-    def verify(v, state, context):
-        uncoordinated_state = g2.get_vertex_state(v)
-        assert uncoordinated_state == state
-        logger.debug("%sv: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
-        return state
-    g.foreach_vertex(verify)
+        # Verify correctness
+        def verify(v, state, context):
+            uncoordinated_state = g2.get_vertex_state(v)
+            assert uncoordinated_state == state
+            logger.debug("%sv: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
+            return state
+        g.foreach_vertex(verify)
 
-    if args.dump:
+    except KeyError:
+        logger.info("Dumping state...")
         ray.global_state.chrome_tracing_dump(filename=args.dump)
+
+    logger.info("Dumping state...")
+    ray.global_state.chrome_tracing_dump(filename=args.dump)
 
