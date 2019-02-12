@@ -98,9 +98,9 @@ def increment_level(v, state, context):
     """
     logger.debug("v%s, state = %s, parent level = %s", v, state, context.level)
     context.level = min(state, context.level + 1)
-    if state != context.level:
+    # if state != context.level:
         # simulate some computation for vertex update
-        time.sleep(0.01)
+        # time.sleep(0.1)
     return context.level
 
 
@@ -137,18 +137,19 @@ if __name__ == '__main__':
         time.sleep(1)
         logger.info("Running recursive BFS...")
         a = time.time()
-        g2.recursive_foreach_vertex(increment_level, src_vertex, BFSContext(-1))
+        g2.batch_recursive_foreach_vertex(increment_level, src_vertex, BFSContext(-1))
         b = time.time()
         logger.info("Time taken: %s ms", (b - a) * 1000)
         logger.info("Calls: %s", g2.calls())
 
         # Verify correctness
+        time.sleep(1)
         def verify(v, state, context):
             uncoordinated_state = g2.get_vertex_state(v)
             assert uncoordinated_state == state
             logger.debug("%sv: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
             return state
-        g2.foreach_vertex(print_vertex)
+        g.foreach_vertex(verify)
 
     except KeyError:
         logger.info("Dumping state...")

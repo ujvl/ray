@@ -96,6 +96,16 @@ class Graph(object):
         while ids:
             ids += ray.get(ids.pop(-1))
 
+    def batch_recursive_foreach_vertex(self, f, src_vertex, graph_context=None):
+        """
+        """
+        subgraph_idx = self.subgraph_of(src_vertex)
+        arg = BatchArg(src_vertex, graph_context)
+        ids = [self.subgraphs[subgraph_idx].batch_recursive_foreach_vertex.remote(f, [arg])]
+        while ids:
+            ids += ray.get(ids.pop(-1))
+
+
     def load_from_file(self, file_path, delim='\t'):
         """
         Loads edges from file. 
@@ -104,7 +114,9 @@ class Graph(object):
         ray.get([self.subgraphs[i].load_from_file.remote(file_path, delim) for i in range(self.num_subgraphs)])
 
     def calls(self):
-        return sum(ray.get([self.subgraphs[i].num_calls.remote() for i in range(self.num_subgraphs)]))
+        return sum(
+            ray.get([self.subgraphs[i].num_calls.remote() for i in range(self.num_subgraphs)])
+        )
 
 
 class Subgraph(object):
@@ -195,39 +207,43 @@ class Subgraph(object):
         self.calls += 1
         # Recurse on neighbours
         if state != new_state:
-            # Batch if there are enough edges for it to be helpful
-            # This is just a heuristic.
-            if len(self.edges[vertex]) / self.num_subgraphs > 1:
-                batches = [[] for _ in range(self.num_subgraphs)]
-                for neighbour in self.edges[vertex]:
-                    batches[neighbour % self.num_subgraphs].append(neighbour)
-                for batch in range(self.num_subgraphs):
-                    if len(batches[batch]):
-                        ids.append(self.subgraphs[batch].batch_recursive_foreach_vertex.remote(
-                            f,
-                            batches[batch],
-                            graph_context,
-                        ))
-            else:
-                for neighbour in self.edges[vertex]:
-                    neighbour_subgraph_idx = neighbour % self.num_subgraphs
-                    subgraph = self.subgraphs[neighbour_subgraph_idx]
-                    ids.append(subgraph.recursive_foreach_vertex.remote(
-                        f,
-                        neighbour,
-                        graph_context,
-                    ))
+            for neighbour in self.edges[vertex]:
+                neighbour_subgraph_idx = neighbour % self.num_subgraphs
+                subgraph = self.subgraphs[neighbour_subgraph_idx]
+                ids.append(subgraph.recursive_foreach_vertex.remote(
+                    f,
+                    neighbour,
+                    graph_context,
+                ))
         return ids
 
-    def batch_recursive_foreach_vertex(self, f, vertices, graph_context):
+    def batch_recursive_foreach_vertex(self, f, arg_batch):
         """
         Applies function to batch of vertices and their neighbours recursively.
         Forwards call to other sub-graphs if necessary.
         vertex_state <- f(vertex, vertex_state, graph_context)
         """
         ids = []
-        for vertex in vertices:
-            ids += self.recursive_foreach_vertex(f, vertex, copy.copy(graph_context))
+        batches = [[] for _ in range(self.num_subgraphs)]
+        for arg in arg_batch:
+            vertex, ctxt = arg.vertex, arg.graph_context
+            self.calls += 1
+
+            state = self.vertices[vertex]
+            new_state = f(vertex, state, ctxt)
+            self.vertices[vertex] = new_state
+
+            if state != new_state:
+                for neighbour in self.edges[vertex]:
+                    arg = BatchArg(neighbour, ctxt)
+                    batches[neighbour % self.num_subgraphs].append(arg)
+
+        for batch in range(self.num_subgraphs):
+            if len(batches[batch]):
+                ids.append(self.subgraphs[batch].batch_recursive_foreach_vertex.remote(
+                    f,
+                    batches[batch],
+                ))
         return ids
 
     def load_from_file(self, file_path, delim='\t'):
@@ -256,6 +272,13 @@ class Subgraph(object):
 
 def init_subgraph(node_index):
     return ray.remote(num_cpus=0, resources={"Node{}".format(node_index): 1,})(Subgraph).remote()
+
+
+class BatchArg(object):
+
+    def __init__(self, vertex, graph_context):
+        self.vertex = vertex
+        self.graph_context = graph_context
 
 
 class Vertex(object):
