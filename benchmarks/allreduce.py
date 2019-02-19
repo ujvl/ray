@@ -62,16 +62,16 @@ class WeightPartition(object):
         self.set_weights(buffer_data)
 
     def set_weights(self, buffer_data):
-        self.buffer_data = buffer_data
         for i in range(len(self.batch_intervals)):
             s, e = self.batch_intervals[i]
             self.batches[i] = buffer_data[s:e]
 
     def get_weights(self):
+        buffer_data = np.zeros(self.buffer_size).astype(np.float32)
         for i in range(len(self.batch_intervals)):
             s, e = self.batch_intervals[i]
-            self.buffer_data[s:e] = self.batches[i]
-        return self.buffer_data
+            buffer_data[s:e] = self.batches[i]
+        return buffer_data
 
     def get_partition(self, i):
         return self.batches[i]
@@ -151,22 +151,10 @@ class RingAllReduceWorker(object):
 
         # Process the received data.
         if aggregate:
+            # We received a partially reduced chunk. Add the partition.
             with ray.profiling.profile("add_partition"):
                 self.weight_partition.add_partition(index, batch_buffer)
             received = self.aggregate_received
-        else:
-            with ray.profiling.profile("set_partition"):
-                self.weight_partition.set_partition(index, batch_buffer)
-            received = self.broadcast_received
-
-        if DEBUG:
-            debug(self.worker_index, index, self.aggregate_received,
-                  self.broadcast_received, aggregate)
-            assert index not in received
-        received.append(index)
-
-        if aggregate:
-            # We received a partially reduced chunk.
             # If this is the last chunk to be sent by our sender, then this
             # chunk has been fully reduced. Send it to the next worker, but
             # signal it to just overwrite its value instead of aggregating.
@@ -177,12 +165,21 @@ class RingAllReduceWorker(object):
             # was fully reduced.
             batch_id = self.send(index, aggregate)
         else:
-            # We received a fully reduced chunk.
+            # We received a fully reduced chunk. Overwrite our partition.
+            with ray.profiling.profile("set_partition"):
+                self.weight_partition.set_partition(index, batch_buffer)
+            received = self.broadcast_received
+            # Only forward the chunk to the next worker if they haven't already
+            # seen it.
             if index != (self.worker_index + 2) % self.num_workers:
-                # Only forward the chunk to the next worker if they haven't
-                # already seen it.
                 self.send(index, aggregate)
             batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
+
+        if DEBUG:
+            debug(self.worker_index, index, self.aggregate_received,
+                  self.broadcast_received, aggregate)
+            assert index not in received
+        received.append(index)
 
         if not aggregate:
             # The sent or received chunk was fully reduced, so remember it.
@@ -213,8 +210,10 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 10,
     }
+    plasma_store_memory_gb = 5
     ray.init(
         redis_address=redis_address,
+        object_store_memory=plasma_store_memory_gb * 10 ** 9,
         _internal_config=json.dumps(internal_config))
 
     # Create workers.
