@@ -7,6 +7,8 @@ import logging
 import os
 import time
 import sys
+import signal
+import json
 
 import numpy as np
 import ray
@@ -199,15 +201,23 @@ class RingAllReduceWorker(object):
 
         self.done = True
 
+    def get_pid(self):
+        return os.getpid()
 
-def main(redis_address, num_workers, data_size, num_iterations, debug, dump):
-    ray.init(redis_address=redis_address)
+
+def main(redis_address, num_workers, data_size, num_iterations, debug, dump, test_failure):
+    internal_config = {
+        "initial_reconstruction_timeout_milliseconds": 200,
+        "num_heartbeats_timeout": 10,
+    }
+    ray.init(redis_address=redis_address,
+             _internal_config=json.dumps(internal_config))
 
     # Create workers.
     workers = []
     for worker_index in range(num_workers):
         if redis_address is None:
-            cls = ray.remote(RingAllReduceWorker)
+            cls = ray.remote(max_reconstructions=1)(RingAllReduceWorker)
         else:
             cls = ray.remote(resources={'Actor' + str(worker_index+1): 1})(RingAllReduceWorker)
         workers.append(cls.remote(worker_index, num_workers, data_size))
@@ -239,6 +249,15 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump):
             done_oids.append(done_oid)
             worker.execute.remote(done_oid)
 
+        # If we are testing locally with failures on, kill a worker halfway
+        # through.
+        if (i == num_iterations // 2 and test_failure and redis_address is not
+                None):
+            worker = workers[-1]
+            pid = ray.get(workers.get_pid.remote())
+            os.kill(pid, signal.SIGKILL)
+
+        # Wait for the allreduce to complete.
         done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
         all_output_oids = ray.get(done_oids)
         log.info("Finished iteration %d in %f", i, time.time() - start)
@@ -259,6 +278,7 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump):
 
         ray.get([worker.reset.remote(data_size, None) for worker in workers])
 
+
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)
 
@@ -276,7 +296,9 @@ if __name__ == "__main__":
                         help='The address of the redis server.')
     parser.add_argument('--dump', default=None, type=str,
                         help='A filename to dump the task timeline')
+    parser.add_argument('--test-failure', action='store_true',
+                        help='Whether or not to test worker failure')
     args = parser.parse_args()
 
     main(args.redis_address, args.num_workers, args.size, args.num_iterations,
-         args.check_results, args.dump)
+         args.check_results, args.dump, args.test_failure)
