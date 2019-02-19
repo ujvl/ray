@@ -438,6 +438,12 @@ class FunctionActorManager(object):
         """
         function_id = function_descriptor.function_id
 
+        try:
+            info = self._function_execution_info[driver_id][function_id]
+            return info
+        except KeyError as e:
+            pass
+
         # Wait until the function to be executed has actually been
         # registered on this worker. We will push warnings to the user if
         # we spend too long in this loop.
