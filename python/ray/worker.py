@@ -194,6 +194,10 @@ class Worker(object):
             self._task_context.task_index = 0
             self._task_context.put_index = 1
             self._task_context.initialized = True
+            # A list of (object ID, argument) for the current task's arguments.
+            # This is used to forward arguments that get passed into a nested
+            # task.
+            self._task_context.arguments = []
         return self._task_context
 
     @property
@@ -603,7 +607,13 @@ class Worker(object):
                 elif ray._raylet.check_simple_value(arg):
                     args_for_local_scheduler.append(arg)
                 else:
-                    args_for_local_scheduler.append(put(arg))
+                    # Check if we can forward any arguments.
+                    forwarded = [object_id for object_id, argument in self.task_context.arguments if arg is argument]
+                    if forwarded:
+                        object_id = forwarded[0]
+                    else:
+                        object_id = put(arg)
+                    args_for_local_scheduler.append(object_id)
 
             # By default, there are no execution dependencies.
             if execution_dependencies is None:
@@ -750,6 +760,7 @@ class Worker(object):
             if isinstance(arg, ObjectID):
                 # get the object from the local object store
                 argument = self.get_object([arg])[0]
+                self.task_context.arguments.append((arg, argument))
                 if isinstance(argument, RayError):
                     raise argument
             else:
@@ -799,6 +810,7 @@ class Worker(object):
         assert self.current_task_id.is_nil()
         assert self.task_context.task_index == 0
         assert self.task_context.put_index == 1
+        assert self.task_context.arguments == []
         if task.actor_id().is_nil():
             # If this worker is not an actor, check that `task_driver_id`
             # was reset when the worker finished the previous task.
@@ -955,6 +967,7 @@ class Worker(object):
                 self.task_context.current_task_id = TaskID.nil()
                 self.task_context.task_index = 0
                 self.task_context.put_index = 1
+                self.task_context.arguments.clear()
                 if self.actor_id.is_nil():
                     # Don't need to reset task_driver_id if the worker is an
                     # actor. Because the following tasks should all have the
