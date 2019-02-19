@@ -100,8 +100,8 @@ class RingAllReduceWorker(object):
 
     def reset(self, buffer_size, weights):
         self.weight_partition = WeightPartition(buffer_size, self.num_workers, weights)
-        self.out_oids = None
         self.done_oid = None
+        self.out_oids = [None] * self.num_workers
         self.aggregate_received = []
         self.broadcast_received = []
         self.done = False
@@ -109,12 +109,11 @@ class RingAllReduceWorker(object):
         self.execute_received = False
         self.receives = []
 
-    def execute(self, out_oids, done_oid):
+    def execute(self, done_oid):
         debug("EXECUTE: worker", self.worker_index)
         assert not self.execute_received
 
         self.execute_received = True
-        self.out_oids = out_oids
         self.done_oid = done_oid
         self.send(self.worker_index, True)
         # Resend any buffered data that was received before the allreduce
@@ -128,7 +127,15 @@ class RingAllReduceWorker(object):
         debug("SEND: worker", self.worker_index, "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.workers[(self.worker_index + 1) % self.num_workers]
-        receiver.receive.remote(index, aggregate, batch_buffer)
+        # Check if the data was received by someone else. Then, we can forward
+        # it.
+        batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
+        if batch_id is None:
+            # The data was not received by someone else, so we cannot forward
+            # it. Put the object in the local object store first.
+            batch_id = ray.put(batch_buffer)
+        receiver.receive.remote(index, aggregate, batch_id)
+        return batch_id
 
     def receive(self, index, aggregate, batch_buffer):
         assert not self.done
@@ -142,35 +149,42 @@ class RingAllReduceWorker(object):
 
         # Process the received data.
         if aggregate:
-            self.weight_partition.add_partition(index, batch_buffer)
+            with ray.profiling.profile("add_partition"):
+                self.weight_partition.add_partition(index, batch_buffer)
             received = self.aggregate_received
         else:
-            self.weight_partition.set_partition(index, batch_buffer)
+            with ray.profiling.profile("set_partition"):
+                self.weight_partition.set_partition(index, batch_buffer)
             received = self.broadcast_received
 
-        debug(self.worker_index, index, self.aggregate_received,
-              self.broadcast_received, aggregate)
         if DEBUG:
+            debug(self.worker_index, index, self.aggregate_received,
+                  self.broadcast_received, aggregate)
             assert index not in received
         received.append(index)
 
         if aggregate:
+            # We received a partially reduced chunk.
             # If this is the last chunk to be sent by our sender, then this
-            # chunk has been fully reduced. Send it to the next worker and
-            # signal it to just apply the value instead of aggregating.
+            # chunk has been fully reduced. Send it to the next worker, but
+            # signal it to just overwrite its value instead of aggregating.
             if index == (self.worker_index + 1) % self.num_workers:
                 aggregate = False
-            # Forward the chunk to the next worker.
-            self.send(index, aggregate)
-        elif index != (self.worker_index + 2) % self.num_workers:
-            # This chunk has been fully reduced. Only forward the chunk to the
-            # next worker if they haven't already seen it.
-            self.send(index, aggregate)
+            # Forward the chunk to the next worker. Get the object ID where the
+            # sent data was stored since we need to remember it if the chunk
+            # was fully reduced.
+            batch_id = self.send(index, aggregate)
+        else:
+            # We received a fully reduced chunk.
+            if index != (self.worker_index + 2) % self.num_workers:
+                # Only forward the chunk to the next worker if they haven't
+                # already seen it.
+                self.send(index, aggregate)
+            batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
 
         if not aggregate:
-            # This chunk has been reduced. Store it in the object store.
-            out_oid = ray.ObjectID(self.out_oids[index])
-            ray.worker.global_worker.put_object(out_oid, self.weight_partition.get_partition(index))
+            # The sent or received chunk was fully reduced, so remember it.
+            self.out_oids[index] = batch_id
 
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(self.broadcast_received) + 2 == self.num_workers * 2:
@@ -178,9 +192,10 @@ class RingAllReduceWorker(object):
 
     def finish(self):
         debug("FINISH: worker", self.worker_index)
-        # Put the final values.
+        assert all(out_oid is not None for out_oid in self.out_oids)
+        # Store pointers to the shards to notify any callers that we've received.
         done_oid = ray.ObjectID(self.done_oid)
-        ray.worker.global_worker.put_object(done_oid, True)
+        ray.worker.global_worker.put_object(done_oid, self.out_oids)
 
         self.done = True
 
@@ -218,30 +233,29 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump):
 
         # Start the send on each worker.
         start = time.time()
-        all_output_oids = []
         done_oids = []
         for worker in workers:
-            output_oids = [np.random.bytes(20) for _ in range(num_workers)]
-            all_output_oids += output_oids
             done_oid = np.random.bytes(20)
             done_oids.append(done_oid)
-            worker.execute.remote(output_oids, done_oid)
+            worker.execute.remote(done_oid)
 
         done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
-        ray.get(done_oids)
+        all_output_oids = ray.get(done_oids)
         log.info("Finished iteration %d in %f", i, time.time() - start)
 
         # Check the results on each of the workers.
         if debug:
+            # Check that all of the workers end up with the same shards.
+            assert all([output_oids == all_output_oids[0] for output_oids in all_output_oids])
+
+            # Check that the shards contain the correct values.
             expected = sum(weights)
-            for i in range(num_workers):
-                output_oids = all_output_oids[i * num_workers : (i + 1) * num_workers]
-                all_reduced = ray.get([ray.ObjectID(output_oid) for output_oid in output_oids])
-                chunk_start = 0
-                for j, reduced in enumerate(all_reduced):
-                    expected_chunk = expected[chunk_start:chunk_start + len(reduced)]
-                    assert np.allclose(expected_chunk, reduced)
-                    chunk_start += len(reduced)
+            outputs = ray.get(all_output_oids[0])
+            chunk_start = 0
+            for output in outputs:
+                expected_chunk = expected[chunk_start:chunk_start + len(output)]
+                assert np.allclose(expected_chunk, output)
+                chunk_start += len(output)
 
         ray.get([worker.reset.remote(data_size, None) for worker in workers])
 

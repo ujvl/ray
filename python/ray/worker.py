@@ -196,13 +196,20 @@ class Worker(object):
             self._task_context.initialized = True
             # A list of (object ID, argument) for the current task's arguments.
             # This is used to forward arguments that get passed into a nested
-            # task.
+            # task. NOTE: This can only be used for immutable arguments.
             self._task_context.arguments = []
         return self._task_context
 
     @property
     def current_task_id(self):
         return self.task_context.current_task_id
+
+    def get_argument_id(self, argument):
+        forwarded = [object_id for object_id, arg in self.task_context.arguments if arg is argument]
+        if forwarded:
+            return forwarded[0]
+        else:
+            return None
 
     def mark_actor_init_failed(self, error):
         """Called to mark this actor as failed during initialization."""
@@ -607,13 +614,7 @@ class Worker(object):
                 elif ray._raylet.check_simple_value(arg):
                     args_for_local_scheduler.append(arg)
                 else:
-                    # Check if we can forward any arguments.
-                    forwarded = [object_id for object_id, argument in self.task_context.arguments if arg is argument]
-                    if forwarded:
-                        object_id = forwarded[0]
-                    else:
-                        object_id = put(arg)
-                    args_for_local_scheduler.append(object_id)
+                    args_for_local_scheduler.append(put(arg))
 
             # By default, there are no execution dependencies.
             if execution_dependencies is None:
@@ -2271,6 +2272,7 @@ def put(value):
         if worker.mode == LOCAL_MODE:
             # In LOCAL_MODE, ray.put is the identity operation.
             return value
+
         object_id = ray._raylet.compute_put_id(
             worker.current_task_id,
             worker.task_context.put_index,
