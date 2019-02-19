@@ -29,6 +29,7 @@ class Task {
   Task(const TaskExecutionSpecification &execution_spec,
        const TaskSpecification &task_spec)
       : task_execution_spec_(execution_spec), task_spec_(task_spec) {
+    ComputeImmutableDependencies();
     ComputeDependencies();
   }
 
@@ -74,6 +75,8 @@ class Task {
   /// Increment the number of times this task has been forwarded.
   void IncrementNumForwards();
 
+  const std::vector<ObjectID> &GetImmutableDependencies() const;
+
   /// Get the task's object dependencies. This comprises the immutable task
   /// arguments and the mutable execution dependencies.
   ///
@@ -85,6 +88,7 @@ class Task {
   void CopyTaskExecutionSpec(const Task &task);
 
  private:
+  void ComputeImmutableDependencies();
   void ComputeDependencies();
 
   /// Task execution specification, consisting of all dynamic/mutable
@@ -94,6 +98,7 @@ class Task {
   /// task determined at submission time. Includes resource demand, object
   /// dependencies, etc.
   TaskSpecification task_spec_;
+  std::vector<ObjectID> immutable_dependencies_;
   /// A cached copy of the task's object dependencies, including arguments from
   /// the TaskSpecification and execution dependencies from the
   /// TaskExecutionSpecification.

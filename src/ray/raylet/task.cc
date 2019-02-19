@@ -24,16 +24,25 @@ void Task::SetExecutionDependencies(const std::vector<ObjectID> &dependencies) {
 
 void Task::IncrementNumForwards() { task_execution_spec_.IncrementNumForwards(); }
 
+const std::vector<ObjectID> &Task::GetImmutableDependencies() const {
+  return immutable_dependencies_;
+}
+
 const std::vector<ObjectID> &Task::GetDependencies() const { return dependencies_; }
 
-void Task::ComputeDependencies() {
-  dependencies_.clear();
+void Task::ComputeImmutableDependencies() {
+  immutable_dependencies_.clear();
   for (int i = 0; i < task_spec_.NumArgs(); ++i) {
     int count = task_spec_.ArgIdCount(i);
     for (int j = 0; j < count; j++) {
-      dependencies_.push_back(task_spec_.ArgId(i, j));
+      immutable_dependencies_.push_back(task_spec_.ArgId(i, j));
     }
   }
+}
+
+void Task::ComputeDependencies() {
+  dependencies_.clear();
+  dependencies_.assign(immutable_dependencies_.begin(), immutable_dependencies_.end());
   // TODO(atumanov): why not just return a const reference to ExecutionDependencies() and
   // avoid a copy.
   auto execution_dependencies = task_execution_spec_.ExecutionDependencies();

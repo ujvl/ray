@@ -176,7 +176,8 @@ void ReconstructionPolicy::HandleTaskLeaseNotification(const TaskID &task_id,
   }
 }
 
-void ReconstructionPolicy::ListenAndMaybeReconstruct(const ObjectID &object_id) {
+void ReconstructionPolicy::ListenAndMaybeReconstruct(const ObjectID &object_id,
+                                                     bool fast_reconstruction) {
   TaskID task_id = ComputeTaskId(object_id);
   auto it = listening_tasks_.find(task_id);
   // Add this object to the list of objects created by the same task.
@@ -185,7 +186,11 @@ void ReconstructionPolicy::ListenAndMaybeReconstruct(const ObjectID &object_id) 
     it = inserted.first;
     // Set a timer for the task that created the object. If the lease for that
     // task expires, then reconstruction of that task will be triggered.
-    SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
+    if (fast_reconstruction) {
+      SetTaskTimeout(it, 0);
+    } else {
+      SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
+    }
   }
   it->second.created_objects.insert(object_id);
 }

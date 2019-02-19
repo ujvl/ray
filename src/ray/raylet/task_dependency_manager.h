@@ -54,7 +54,8 @@ class TaskDependencyManager {
   /// \return Whether all of the given dependencies for the given task are
   /// local.
   bool SubscribeDependencies(const TaskID &task_id,
-                             const std::vector<ObjectID> &required_objects);
+                             const std::vector<ObjectID> &required_objects,
+                             bool fast_reconstruction = false);
 
   /// Unsubscribe from the object dependencies required by this task. If the
   /// objects were remote and are no longer required by any subscribed task,
@@ -120,7 +121,10 @@ class TaskDependencyManager {
   std::string DebugString() const;
 
  private:
-  using ObjectDependencyMap = std::unordered_map<ray::ObjectID, std::vector<ray::TaskID>>;
+  struct RequiredTask {
+    std::unordered_map<ray::ObjectID, std::vector<ray::TaskID>> required_objects;
+    bool fast_reconstruction;
+  };
 
   /// A struct to represent the object dependencies of a task.
   struct TaskDependencies {
@@ -151,7 +155,7 @@ class TaskDependencyManager {
   /// transfer or reconstruction. These are objects for which: (1) there is a
   /// subscribed task dependent on it, (2) the object is not local, and (3) the
   /// task that creates the object is not pending execution locally.
-  bool CheckObjectRequired(const ObjectID &object_id) const;
+  bool CheckObjectRequired(const ObjectID &object_id, bool *fast_reconstruction) const;
   /// If the given object is required, then request that the object be made
   /// available through object transfer or reconstruction.
   void HandleRemoteDependencyRequired(const ObjectID &object_id);
@@ -189,7 +193,7 @@ class TaskDependencyManager {
   /// mapping from task ID to information about the objects that the task
   /// creates, either by return value or by `ray.put`. For each object, we
   /// store the IDs of the subscribed tasks that are dependent on the object.
-  std::unordered_map<ray::TaskID, ObjectDependencyMap> required_tasks_;
+  std::unordered_map<ray::TaskID, RequiredTask> required_tasks_;
   /// Objects that are required by a subscribed task, are not local, and are
   /// not created by a pending task. For these objects, there are pending
   /// operations to make the object available.

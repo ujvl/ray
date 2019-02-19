@@ -19,7 +19,8 @@ namespace raylet {
 
 class ReconstructionPolicyInterface {
  public:
-  virtual void ListenAndMaybeReconstruct(const ObjectID &object_id) = 0;
+  virtual void ListenAndMaybeReconstruct(const ObjectID &object_id,
+                                         bool fast_reconstruction = false) = 0;
   virtual void Cancel(const ObjectID &object_id) = 0;
   virtual ~ReconstructionPolicyInterface(){};
 };
@@ -52,7 +53,10 @@ class ReconstructionPolicy : public ReconstructionPolicyInterface {
   /// for the task that created the object.
   ///
   /// \param object_id The object to check for reconstruction.
-  void ListenAndMaybeReconstruct(const ObjectID &object_id);
+  /// \param fast_reconstruction If this is set, then we will not wait for the
+  /// initial reconstruction timeout before requesting notifications.
+  void ListenAndMaybeReconstruct(const ObjectID &object_id,
+                                 bool fast_reconstruction = false);
 
   /// Cancel listening for an object. Notifications for the object will be
   /// ignored. This does not cancel a reconstruction attempt that is already in
