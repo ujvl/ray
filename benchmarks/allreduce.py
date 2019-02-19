@@ -6,12 +6,19 @@ import argparse
 import logging
 import os
 import time
+import sys
 
 import numpy as np
 import ray
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+DEBUG = False
+
+def debug(*args):
+    if DEBUG:
+        print(*args, flush=True)
 
 
 def compute_batch_indices(total_size, num_batches):
@@ -28,6 +35,7 @@ def compute_batch_indices(total_size, num_batches):
     start_index = 0
     batches = []
     for i in range(num_batches):
+        # Use round-robin to determine batch sizes.
         end_index = start_index + batch_size
         if remainder > 0:
             remainder -= 1
@@ -46,26 +54,31 @@ class WeightPartition(object):
         self.batch_intervals = compute_batch_indices(self.buffer_size, self.num_batches)
 
         if buffer_data is None:
-            buffer_data = np.random.rand(self.buffer_size)
+            buffer_data = np.ones(self.buffer_size).astype(np.float32)
+        # Cache the batches.
+        self.batches = [None] * self.num_batches
         self.set_weights(buffer_data)
 
     def set_weights(self, buffer_data):
         self.buffer_data = buffer_data
+        for i in range(len(self.batch_intervals)):
+            s, e = self.batch_intervals[i]
+            self.batches[i] = buffer_data[s:e]
 
     def get_weights(self):
+        for i in range(len(self.batch_intervals)):
+            s, e = self.batch_intervals[i]
+            self.buffer_data[s:e] = self.batches[i]
         return self.buffer_data
 
     def get_partition(self, i):
-        start, end = self.batch_intervals[i]
-        return self.buffer_data[start:end]
+        return self.batches[i]
 
     def set_partition(self, i, batch):
-        start, end = self.batch_intervals[i]
-        self.buffer_data[start:end] = batch
+        self.batches[i] = batch
 
     def add_partition(self, i, batch):
-        partition = self.get_partition(i)
-        partition += batch
+        self.batches[i] += batch
 
 
 class RingAllReduceWorker(object):
@@ -91,22 +104,43 @@ class RingAllReduceWorker(object):
         self.done_oid = None
         self.aggregate_received = []
         self.broadcast_received = []
-        self.aggregate_done = False
+        self.done = False
+
+        self.execute_received = False
+        self.receives = []
 
     def execute(self, out_oid, done_oid):
-        #print("EXECUTE: worker", self.worker_index)
+        debug("EXECUTE: worker", self.worker_index)
+        assert not self.execute_received
+
+        self.execute_received = True
         self.out_oid = out_oid
         self.done_oid = done_oid
         self.send(self.worker_index, True)
+        # Resend any buffered data that was received before the allreduce
+        # started.
+        while self.receives:
+            index, aggregate, batch_buffer = self.receives.pop(0)
+            self.receive(index, aggregate, batch_buffer)
 
     def send(self, index, aggregate):
-        #print("SEND: worker", self.worker_index, "batch", index, aggregate, flush=True)
+        assert not self.done
+        debug("SEND: worker", self.worker_index, "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.workers[(self.worker_index + 1) % self.num_workers]
         receiver.receive.remote(index, aggregate, batch_buffer)
 
     def receive(self, index, aggregate, batch_buffer):
-        #print("RECEIVE: worker", self.worker_index, "batch", index, aggregate, flush=True)
+        assert not self.done
+        debug("RECEIVE: worker", self.worker_index, "batch", index, aggregate)
+        if not self.execute_received:
+            # If we haven't received the allreduce start message yet, buffer
+            # the received data. It will be resent once we get the first
+            # `execute` task.
+            self.receives.append((index, aggregate, batch_buffer))
+            return
+
+        # Process the received data.
         if aggregate:
             self.weight_partition.add_partition(index, batch_buffer)
             received = self.aggregate_received
@@ -115,24 +149,35 @@ class RingAllReduceWorker(object):
             received = self.broadcast_received
 
         #print(self.worker_index, index, self.aggregate_received, self.broadcast_received, aggregate, flush=True)
-        assert index not in received
+        if DEBUG:
+            assert index not in received
         received.append(index)
 
         if aggregate:
+            # If this is the last chunk to be sent by our sender, then this
+            # chunk has been fully reduced. Send it to the next worker and
+            # signal it to just apply the value instead of aggregating.
             if index == (self.worker_index + 1) % self.num_workers:
                 aggregate = False
+            # Forward the chunk to the next worker.
             self.send(index, aggregate)
         elif index != (self.worker_index + 2) % self.num_workers:
+            # This chunk has been fully reduced. Only forward the chunk to the
+            # next worker if they haven't already seen it.
             self.send(index, aggregate)
 
-        if len(self.aggregate_received) + 1 == self.num_workers and len(self.broadcast_received) + 1 == self.num_workers:
+        if len(self.aggregate_received) + len(self.broadcast_received) + 2 == self.num_workers * 2:
             self.finish()
 
     def finish(self):
-        #print("FINISH: worker", self.worker_index, flush=True)
+        debug("FINISH: worker", self.worker_index)
         # Put the final values.
+        out_oid = ray.ObjectID(self.out_oid)
+        ray.worker.global_worker.put_object(out_oid, self.weight_partition.get_weights())
         done_oid = ray.ObjectID(self.done_oid)
         ray.worker.global_worker.put_object(done_oid, True)
+
+        self.done = True
 
 
 def main(redis_address, num_workers, data_size, num_iterations, debug):
@@ -168,11 +213,14 @@ def main(redis_address, num_workers, data_size, num_iterations, debug):
 
         # Start the send on each worker.
         start = time.time()
+        output_oids = []
         done_oids = []
         for worker in workers:
+            output_oid = np.random.bytes(20)
             done_oid = np.random.bytes(20)
+            output_oids.append(output_oid)
             done_oids.append(done_oid)
-            ray.get(worker.execute.remote(None, done_oid))
+            worker.execute.remote(output_oid, done_oid)
 
         done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
         ray.get(done_oids)
@@ -181,13 +229,13 @@ def main(redis_address, num_workers, data_size, num_iterations, debug):
         # Check the results on each of the workers.
         if debug:
             expected = sum(weights)
-            all_reduced = ray.get([worker.get_weights.remote() for worker in workers])
+            all_reduced = ray.get([ray.ObjectID(output_oid) for output_oid in output_oids])
             for reduced in all_reduced:
                 assert np.allclose(expected, reduced)
         ray.get([worker.reset.remote(data_size, None) for worker in workers])
 
-    ray.global_state.chrome_tracing_dump(filename="new-allreduce.json")
-
+    if DEBUG:
+        ray.global_state.chrome_tracing_dump(filename="allreduce.json")
 
 
 if __name__ == "__main__":
@@ -202,4 +250,5 @@ if __name__ == "__main__":
     parser.add_argument('--redis-address', default=None, type=str,
                         help='The address of the redis server.')
     args = parser.parse_args()
+
     main(args.redis_address, args.num_workers, args.size, args.num_iterations, args.check_results)
