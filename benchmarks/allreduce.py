@@ -100,7 +100,7 @@ class RingAllReduceWorker(object):
 
     def reset(self, buffer_size, weights):
         self.weight_partition = WeightPartition(buffer_size, self.num_workers, weights)
-        self.out_oid = None
+        self.out_oids = None
         self.done_oid = None
         self.aggregate_received = []
         self.broadcast_received = []
@@ -109,12 +109,12 @@ class RingAllReduceWorker(object):
         self.execute_received = False
         self.receives = []
 
-    def execute(self, out_oid, done_oid):
+    def execute(self, out_oids, done_oid):
         debug("EXECUTE: worker", self.worker_index)
         assert not self.execute_received
 
         self.execute_received = True
-        self.out_oid = out_oid
+        self.out_oids = out_oids
         self.done_oid = done_oid
         self.send(self.worker_index, True)
         # Resend any buffered data that was received before the allreduce
@@ -148,7 +148,8 @@ class RingAllReduceWorker(object):
             self.weight_partition.set_partition(index, batch_buffer)
             received = self.broadcast_received
 
-        #print(self.worker_index, index, self.aggregate_received, self.broadcast_received, aggregate, flush=True)
+        debug(self.worker_index, index, self.aggregate_received,
+              self.broadcast_received, aggregate)
         if DEBUG:
             assert index not in received
         received.append(index)
@@ -166,21 +167,25 @@ class RingAllReduceWorker(object):
             # next worker if they haven't already seen it.
             self.send(index, aggregate)
 
+        if not aggregate:
+            # This chunk has been reduced. Store it in the object store.
+            out_oid = ray.ObjectID(self.out_oids[index])
+            ray.worker.global_worker.put_object(out_oid, self.weight_partition.get_partition(index))
+
+        # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(self.broadcast_received) + 2 == self.num_workers * 2:
             self.finish()
 
     def finish(self):
         debug("FINISH: worker", self.worker_index)
         # Put the final values.
-        out_oid = ray.ObjectID(self.out_oid)
-        ray.worker.global_worker.put_object(out_oid, self.weight_partition.get_weights())
         done_oid = ray.ObjectID(self.done_oid)
         ray.worker.global_worker.put_object(done_oid, True)
 
         self.done = True
 
 
-def main(redis_address, num_workers, data_size, num_iterations, debug):
+def main(redis_address, num_workers, data_size, num_iterations, debug, dump):
     ray.init(redis_address=redis_address)
 
     # Create workers.
@@ -213,14 +218,14 @@ def main(redis_address, num_workers, data_size, num_iterations, debug):
 
         # Start the send on each worker.
         start = time.time()
-        output_oids = []
+        all_output_oids = []
         done_oids = []
         for worker in workers:
-            output_oid = np.random.bytes(20)
+            output_oids = [np.random.bytes(20) for _ in range(num_workers)]
+            all_output_oids += output_oids
             done_oid = np.random.bytes(20)
-            output_oids.append(output_oid)
             done_oids.append(done_oid)
-            worker.execute.remote(output_oid, done_oid)
+            worker.execute.remote(output_oids, done_oid)
 
         done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
         ray.get(done_oids)
@@ -229,13 +234,19 @@ def main(redis_address, num_workers, data_size, num_iterations, debug):
         # Check the results on each of the workers.
         if debug:
             expected = sum(weights)
-            all_reduced = ray.get([ray.ObjectID(output_oid) for output_oid in output_oids])
-            for reduced in all_reduced:
-                assert np.allclose(expected, reduced)
+            for i in range(num_workers):
+                output_oids = all_output_oids[i * num_workers : (i + 1) * num_workers]
+                all_reduced = ray.get([ray.ObjectID(output_oid) for output_oid in output_oids])
+                chunk_start = 0
+                for j, reduced in enumerate(all_reduced):
+                    expected_chunk = expected[chunk_start:chunk_start + len(reduced)]
+                    assert np.allclose(expected_chunk, reduced)
+                    chunk_start += len(reduced)
+
         ray.get([worker.reset.remote(data_size, None) for worker in workers])
 
-    if DEBUG:
-        ray.global_state.chrome_tracing_dump(filename="allreduce.json")
+    if dump is not None:
+        ray.global_state.chrome_tracing_dump(filename=dump)
 
 
 if __name__ == "__main__":
@@ -249,6 +260,9 @@ if __name__ == "__main__":
                         help='The number of iterations.')
     parser.add_argument('--redis-address', default=None, type=str,
                         help='The address of the redis server.')
+    parser.add_argument('--dump', default=None, type=str,
+                        help='A filename to dump the task timeline')
     args = parser.parse_args()
 
-    main(args.redis_address, args.num_workers, args.size, args.num_iterations, args.check_results)
+    main(args.redis_address, args.num_workers, args.size, args.num_iterations,
+         args.check_results, args.dump)
