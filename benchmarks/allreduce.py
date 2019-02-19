@@ -6,7 +6,6 @@ import argparse
 import logging
 import os
 import time
-import sys
 import signal
 import json
 
@@ -18,6 +17,7 @@ log = logging.getLogger(__name__)
 
 DEBUG = False
 
+
 def debug(*args):
     if DEBUG:
         print(*args, flush=True)
@@ -28,8 +28,8 @@ def compute_batch_indices(total_size, num_batches):
     :param total_size: Total number of items to split into batches.
     :param batch_size: Size of each batch.
     :return: A list of 2-tuples.
-             Each 2-tuple is a segment of indices corresponding to items of size batch_size.
-             The size of the list is total_size / batch_size.
+             Each 2-tuple is a segment of indices corresponding to items of
+             size batch_size. The size of the list is total_size / batch_size.
     """
     batch_size = int(np.floor(total_size / num_batches))
     remainder = total_size % num_batches
@@ -49,11 +49,11 @@ def compute_batch_indices(total_size, num_batches):
 
 
 class WeightPartition(object):
-
     def __init__(self, buffer_size, num_batches, buffer_data=None):
         self.buffer_size = buffer_size
         self.num_batches = num_batches
-        self.batch_intervals = compute_batch_indices(self.buffer_size, self.num_batches)
+        self.batch_intervals = compute_batch_indices(self.buffer_size,
+                                                     self.num_batches)
 
         if buffer_data is None:
             buffer_data = np.ones(self.buffer_size).astype(np.float32)
@@ -84,7 +84,6 @@ class WeightPartition(object):
 
 
 class RingAllReduceWorker(object):
-
     def __init__(self, worker_index, num_workers, buffer_size):
         self.worker_index = worker_index
         self.num_workers = num_workers
@@ -101,7 +100,8 @@ class RingAllReduceWorker(object):
         return self.weight_partition.get_weights()
 
     def reset(self, buffer_size, weights):
-        self.weight_partition = WeightPartition(buffer_size, self.num_workers, weights)
+        self.weight_partition = WeightPartition(buffer_size, self.num_workers,
+                                                weights)
         self.done_oid = None
         self.out_oids = [None] * self.num_workers
         self.aggregate_received = []
@@ -189,13 +189,15 @@ class RingAllReduceWorker(object):
             self.out_oids[index] = batch_id
 
         # We've received all of the reduced chunks. Finish the allreduce.
-        if len(self.aggregate_received) + len(self.broadcast_received) + 2 == self.num_workers * 2:
+        if len(self.aggregate_received) + len(
+                self.broadcast_received) + 2 == self.num_workers * 2:
             self.finish()
 
     def finish(self):
         debug("FINISH: worker", self.worker_index)
         assert all(out_oid is not None for out_oid in self.out_oids)
-        # Store pointers to the shards to notify any callers that we've received.
+        # Store pointers to the shards to notify any callers that we've
+        # received.
         done_oid = ray.ObjectID(self.done_oid)
         ray.worker.global_worker.put_object(done_oid, self.out_oids)
 
@@ -205,13 +207,15 @@ class RingAllReduceWorker(object):
         return os.getpid()
 
 
-def main(redis_address, num_workers, data_size, num_iterations, debug, dump, test_failure):
+def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
+         test_failure):
     internal_config = {
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 10,
     }
-    ray.init(redis_address=redis_address,
-             _internal_config=json.dumps(internal_config))
+    ray.init(
+        redis_address=redis_address,
+        _internal_config=json.dumps(internal_config))
 
     # Create workers.
     workers = []
@@ -219,7 +223,8 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump, tes
         if redis_address is None:
             cls = ray.remote(max_reconstructions=1)(RingAllReduceWorker)
         else:
-            cls = ray.remote(resources={'Actor' + str(worker_index+1): 1})(RingAllReduceWorker)
+            cls = ray.remote(resources={'Actor' + str(worker_index + 1): 1})(
+                                            RingAllReduceWorker)
         workers.append(cls.remote(worker_index, num_workers, data_size))
 
     # Exchange actor handles.
@@ -229,8 +234,9 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump, tes
 
     # Ensure workers are assigned to unique nodes.
     if redis_address is not None:
-        node_ips = ray.get([worker.node_address.remote() for worker in workers])
-        assert(len(set(node_ips)) == args.num_workers)
+        node_ips = ray.get(
+            [worker.node_address.remote() for worker in workers])
+        assert (len(set(node_ips)) == args.num_workers)
 
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
@@ -239,7 +245,8 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump, tes
         # results.
         weights = []
         if debug:
-            weights = ray.get([worker.get_weights.remote() for worker in workers])
+            weights = ray.get(
+                [worker.get_weights.remote() for worker in workers])
 
         # Start the send on each worker.
         start = time.time()
@@ -251,33 +258,38 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump, tes
 
         # If we are testing locally with failures on, kill a worker halfway
         # through.
-        if (i == num_iterations // 2 and test_failure and redis_address is not
-                None):
+        if (i == num_iterations // 2 and test_failure
+                and redis_address is None):
             worker = workers[-1]
-            pid = ray.get(workers.get_pid.remote())
+            pid = ray.get(worker.get_pid.remote())
             os.kill(pid, signal.SIGKILL)
 
         # Wait for the allreduce to complete.
         done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
-        all_output_oids = ray.get(done_oids)
+        # Suppress reconstruction since these object IDs were generated
+        # out-of-band.
+        all_output_oids = ray.get(done_oids, suppress_reconstruction=True)
         log.info("Finished iteration %d in %f", i, time.time() - start)
 
         # Check the results on each of the workers.
         if debug:
             # Check that all of the workers end up with the same shards.
-            assert all([output_oids == all_output_oids[0] for output_oids in all_output_oids])
+            assert all([
+                output_oids == all_output_oids[0]
+                for output_oids in all_output_oids
+            ])
 
             # Check that the shards contain the correct values.
             expected = sum(weights)
             outputs = ray.get(all_output_oids[0])
             chunk_start = 0
             for output in outputs:
-                expected_chunk = expected[chunk_start:chunk_start + len(output)]
+                expected_chunk = expected[chunk_start:
+                                          chunk_start + len(output)]
                 assert np.allclose(expected_chunk, output)
                 chunk_start += len(output)
 
         ray.get([worker.reset.remote(data_size, None) for worker in workers])
-
 
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)
@@ -286,18 +298,39 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump, tes
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Benchmarks.')
-    parser.add_argument('--check-results', action='store_true', help='Whether to check results.')
-    parser.add_argument('--num-workers', default=3, type=int, help='The number of workers to use.')
-    parser.add_argument('--size', default=25000000, type=int,
-                        help='The number of 32bit floats to use.')
-    parser.add_argument('--num-iterations', default=10, type=int,
-                        help='The number of iterations.')
-    parser.add_argument('--redis-address', default=None, type=str,
-                        help='The address of the redis server.')
-    parser.add_argument('--dump', default=None, type=str,
-                        help='A filename to dump the task timeline')
-    parser.add_argument('--test-failure', action='store_true',
-                        help='Whether or not to test worker failure')
+    parser.add_argument(
+        '--check-results',
+        action='store_true',
+        help='Whether to check results.')
+    parser.add_argument(
+        '--num-workers',
+        default=3,
+        type=int,
+        help='The number of workers to use.')
+    parser.add_argument(
+        '--size',
+        default=25000000,
+        type=int,
+        help='The number of 32bit floats to use.')
+    parser.add_argument(
+        '--num-iterations',
+        default=10,
+        type=int,
+        help='The number of iterations.')
+    parser.add_argument(
+        '--redis-address',
+        default=None,
+        type=str,
+        help='The address of the redis server.')
+    parser.add_argument(
+        '--dump',
+        default=None,
+        type=str,
+        help='A filename to dump the task timeline')
+    parser.add_argument(
+        '--test-failure',
+        action='store_true',
+        help='Whether or not to test worker failure')
     args = parser.parse_args()
 
     main(args.redis_address, args.num_workers, args.size, args.num_iterations,

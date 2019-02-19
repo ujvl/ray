@@ -205,7 +205,10 @@ class Worker(object):
         return self.task_context.current_task_id
 
     def get_argument_id(self, argument):
-        forwarded = [object_id for object_id, arg in self.task_context.arguments if arg is argument]
+        forwarded = [
+            object_id for object_id, arg in self.task_context.arguments
+            if arg is argument
+        ]
         if forwarded:
             return forwarded[0]
         else:
@@ -460,7 +463,7 @@ class Worker(object):
             # Object isn't available in plasma.
             return plasma.ObjectNotAvailable
 
-    def get_object(self, object_ids):
+    def get_object(self, object_ids, suppress_reconstruction=False):
         """Get the value or values in the object store associated with the IDs.
 
         Return the values from the local object store for object_ids. This will
@@ -516,7 +519,7 @@ class Worker(object):
                                fetch_request_size):
                     self.raylet_client.fetch_or_reconstruct(
                         ray_object_ids_to_fetch[i:(i + fetch_request_size)],
-                        False,
+                        suppress_reconstruction,
                         self.current_task_id,
                     )
                 results = self.retrieve_and_deserialize(
@@ -537,7 +540,8 @@ class Worker(object):
 
             # If there were objects that we weren't able to get locally,
             # let the local scheduler know that we're now unblocked.
-            self.raylet_client.notify_unblocked(self.current_task_id)
+            if not suppress_reconstruction:
+                self.raylet_client.notify_unblocked(self.current_task_id)
 
         assert len(final_results) == len(object_ids)
         return final_results
@@ -846,9 +850,10 @@ class Worker(object):
                 arguments = self._get_arguments_for_execution(
                     function_name, args)
         except Exception as e:
-            self._handle_process_task_failure(
-                function_descriptor, return_object_ids, e,
-                ray.utils.format_error_message(traceback.format_exc()))
+            self._handle_process_task_failure(function_descriptor,
+                                              return_object_ids, e,
+                                              ray.utils.format_error_message(
+                                                  traceback.format_exc()))
             return
 
         # Execute the task.
@@ -885,9 +890,10 @@ class Worker(object):
                     outputs = (outputs, )
                 self._store_outputs_in_object_store(return_object_ids, outputs)
         except Exception as e:
-            self._handle_process_task_failure(
-                function_descriptor, return_object_ids, e,
-                ray.utils.format_error_message(traceback.format_exc()))
+            self._handle_process_task_failure(function_descriptor,
+                                              return_object_ids, e,
+                                              ray.utils.format_error_message(
+                                                  traceback.format_exc()))
 
     def _handle_process_task_failure(self, function_descriptor,
                                      return_object_ids, error, backtrace):
@@ -2211,7 +2217,7 @@ def register_custom_serializer(cls,
         register_class_for_serialization({"worker": worker})
 
 
-def get(object_ids):
+def get(object_ids, suppress_reconstruction=False):
     """Get a remote object or a list of remote objects from the object store.
 
     This method blocks until the object corresponding to the object ID is
@@ -2240,7 +2246,8 @@ def get(object_ids):
             return object_ids
         global last_task_error_raise_time
         if isinstance(object_ids, list):
-            values = worker.get_object(object_ids)
+            values = worker.get_object(
+                object_ids, suppress_reconstruction=suppress_reconstruction)
             for i, value in enumerate(values):
                 if isinstance(value, RayError):
                     last_task_error_raise_time = time.time()
