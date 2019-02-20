@@ -15,21 +15,25 @@ class Graph(object):
     """
 
     def __init__(self, num_subgraphs=1, num_nodes=1):
-        self.num_subgraphs = num_subgraphs 
+        self.num_subgraphs = num_subgraphs
         self.subgraphs = [init_subgraph(i % num_nodes) for i in range(num_subgraphs)]
         for idx in range(self.num_subgraphs):
             ray.get(self.subgraphs[idx].init_refs.remote(idx, *self.subgraphs))
         self.logger = util.get_logger(__name__)
 
+    def register_function(self, func):
+        """
+        Broadcasts a function for better perf
+        """
+        ray.get([sub.register_function.remote(func) for sub in self.subgraphs])
+
     @property
     def num_vertices(self):
-        subgraph_count_ids = [subgraph.num_vertices.remote() for subgraph in self.subgraphs]
-        return sum(ray.get(subgraph_count_ids))
+        return sum(ray.get([sub.num_vertices.remote() for sub in self.subgraphs]))
 
     @property
     def num_edges(self):
-        subgraph_count_ids = [subgraph.num_edges.remote() for subgraph in self.subgraphs]
-        return sum(ray.get(subgraph_count_ids))
+        return sum(ray.get([sub.num_edges.remote() for sub in self.subgraphs]))
 
     def subgraph_of(self, vertex):
         # TODO move this into some policy/config
@@ -60,63 +64,73 @@ class Graph(object):
         subgraph_idx = self.subgraph_of(vertex)
         return ray.get(self.subgraphs[subgraph_idx].get_vertex_state.remote(vertex))
 
-    def apply(self, f, vertex, graph_context=None):
+    def apply(self, vertex, f=None, graph_context=None):
         """
-        Returns a future to the vertex with its neighbors if state is updated,
+        Returns object ID to the vertex with its neighbors if state is updated,
         or with an empty list if the state does not change.
         vertex_state <- f(vertex, vertex_state, graph_context)
         """
-        return self.subgraphs[vertex % self.num_subgraphs].apply.remote(f, vertex, graph_context)
+        sub = self.subgraphs[self.subgraph_of(vertex)]
+        if f:
+            return sub.apply.remote(vertex, f, graph_context)
+        else:
+            return sub._apply.remote(vertex, graph_context)
 
-    def batch_apply(self, f, vertices, graph_context=None):
+    def batch_apply(self, vertices, f=None, graph_context=None):
         """
-        Returns a future to the vertices whose states are updated.
+        Returns object IDs to the vertices whose states are updated.
         """
         assert len(vertices)
-        subgraph_idx = self.subgraph_of(vertices[0])
-        return self.subgraphs[subgraph_idx].batch_apply.remote(f, vertices, graph_context)
+        # TODO Assumes entire batch belongs to the same subgraph
+        sub = self.subgraphs[self.subgraph_of(vertices[0])]
+        if f:
+            return sub.batch_apply.remote(vertices, f, graph_context)
+        else:
+            return sub._batch_apply.remote(vertices, graph_context)
 
-    def foreach_vertex(self, f, graph_context=None):
+    def foreach_vertex(self, f=None, graph_context=None):
         """
         Applies function to each vertex.
         vertex_state <- f(vertex, vertex_state, graph_context) for each vertex in the graph
         Blocks until completion.
         """
-        ray.get([subgraph.foreach_vertex.remote(f, graph_context) for subgraph in self.subgraphs])
+        if f:
+            ray.get([sub.foreach_vertex.remote(f, graph_context) for sub in self.subgraphs])
+        else:
+            ray.get([sub._foreach_vertex.remote(graph_context) for sub in self.subgraphs])
 
-    def recursive_foreach_vertex(self, f, src_vertex, graph_context=None):
+    def recursive_foreach_vertex(self, src_vertex, f=None, graph_context=None, batch=True):
         """
         Recursively applies function to each vertex, starting at vertex.
         f: vertex_state <- f(vertex, vertex_state)
         Blocks until completion.
         """
         subgraph_idx = self.subgraph_of(src_vertex)
-        subgraph = self.subgraphs[subgraph_idx]
-        ids = [subgraph.recursive_foreach_vertex.remote(f, src_vertex, graph_context)]
+        sub = self.subgraphs[subgraph_idx]
+        if batch:
+            arg = BatchArg(src_vertex, graph_context)
+            if f:
+                ids = [sub.batch_recursive_foreach_vertex.remote(f, [arg])]
+            else:
+                ids = [sub._batch_recursive_foreach_vertex.remote([arg])]
+        else:
+            if f:
+                ids = [sub.recursive_foreach_vertex.remote(src_vertex, f, graph_context)]
+            else:
+                ids = [sub._recursive_foreach_vertex.remote(src_vertex, graph_context)]
+
         while ids:
             ids += ray.get(ids.pop(-1))
-
-    def batch_recursive_foreach_vertex(self, f, src_vertex, graph_context=None):
-        """
-        """
-        subgraph_idx = self.subgraph_of(src_vertex)
-        arg = BatchArg(src_vertex, graph_context)
-        ids = [self.subgraphs[subgraph_idx].batch_recursive_foreach_vertex.remote(f, [arg])]
-        while ids:
-            ids += ray.get(ids.pop(-1))
-
 
     def load_from_file(self, file_path, delim='\t'):
         """
-        Loads edges from file. 
+        Loads edges from file.
         Blocks until completion.
         """
-        ray.get([self.subgraphs[i].load_from_file.remote(file_path, delim) for i in range(self.num_subgraphs)])
+        ray.get([sub.load_from_file.remote(file_path, delim) for sub in self.subgraphs])
 
     def calls(self):
-        return sum(
-            ray.get([self.subgraphs[i].num_calls.remote() for i in range(self.num_subgraphs)])
-        )
+        return sum(ray.get([sub.num_calls.remote() for sub in self.subgraphs]))
 
 
 class Subgraph(object):
@@ -124,7 +138,7 @@ class Subgraph(object):
     Stores sub-graph as an adjacency-list.
     Additionally stores some metadata for each vertex.
     """
-    
+
     def __init__(self):
         self.logger = util.get_logger(__name__)
         self.vertices = {}
@@ -136,6 +150,9 @@ class Subgraph(object):
         self.my_idx = idx
         self.subgraphs = subgraphs
         self.num_subgraphs = len(self.subgraphs)
+
+    def register_function(self, func):
+        self.func = func
 
     def num_vertices(self):
         return len(self.vertices)
@@ -165,42 +182,45 @@ class Subgraph(object):
         assert vertex in self.vertices
         return self.vertices[vertex]
 
-    def apply(self, f, vertex, graph_context):
+    def apply(self, vertex, f, graph_context):
         """
-        vertex_state <- f(vertex, vertex_state, graph_context)
+        Applies function on vertex.
         Returns vertex with its neighbors if state is updated,
         or with an empty list if the state does not change.
+        vertex_state <- f(vertex, vertex_state, graph_context)
         """
         assert vertex in self.vertices
         state = self.vertices[vertex]
         new_state = f(vertex, state, graph_context)
-        self.vertices[vertex] = new_state 
+        self.vertices[vertex] = new_state
         neighbours = self.edges[vertex] if state != new_state else []
         self.calls += 1
         return Vertex(vertex, new_state, neighbours)
 
-    def batch_apply(self, f, vertices, graph_context):
-        return [self.apply(f, vertex, copy.copy(graph_context)) for vertex in vertices]
+    def batch_apply(self, vertices, f, graph_context):
+        # TODO assumes entire batch of vertices belong to this subgraph
+        return [self.apply(vertex, f, copy.copy(graph_context)) for vertex in vertices]
 
     def foreach_vertex(self, f, graph_context):
         """
         Applies function to each vertex in the sub-graph.
+        vertex_state <- f(vertex, vertex_state, graph_context)
         """
         for vertex in self.vertices:
             state = self.vertices[vertex]
             self.vertices[vertex] = f(vertex, state, graph_context)
 
-    def recursive_foreach_vertex(self, f, vertex, graph_context):
+    def recursive_foreach_vertex(self, vertex, f, graph_context):
         """
         Applies function to vertex and its neighbours recursively.
         Forwards call to other sub-graphs if necessary.
-        vertex_state <- f(vertex, vertex_state, graph_context)
+        vertex_state, graph_context <- f(vertex, vertex_state, graph_context)
         """
         assert vertex in self.vertices
         self.logger.debug("[%s] recv v%s", self.my_idx, vertex)
 
         state = self.vertices[vertex]
-        new_state = f(vertex, state, graph_context)
+        new_state, graph_context = f(vertex, state, graph_context)
         self.vertices[vertex] = new_state
 
         ids = []
@@ -221,7 +241,7 @@ class Subgraph(object):
         """
         Applies function to batch of vertices and their neighbours recursively.
         Forwards call to other sub-graphs if necessary.
-        vertex_state <- f(vertex, vertex_state, graph_context)
+        vertex_state, graph_context <- f(vertex, vertex_state, graph_context)
         """
         ids = []
         batches = [[] for _ in range(self.num_subgraphs)]
@@ -230,7 +250,7 @@ class Subgraph(object):
             self.calls += 1
 
             state = self.vertices[vertex]
-            new_state = f(vertex, state, ctxt)
+            new_state, ctxt = f(vertex, state, ctxt)
             self.vertices[vertex] = new_state
 
             if state != new_state:
@@ -248,7 +268,7 @@ class Subgraph(object):
 
     def load_from_file(self, file_path, delim='\t'):
         """
-        Loads only the vertices/edges that belong 
+        Loads only the vertices/edges that belong
         to this subgraph from the file.
         """
         lines_read = 0
@@ -267,7 +287,63 @@ class Subgraph(object):
                     self.add_edge(src_vertex, dst_vertex)
                 if dst_subgraph_idx == self.my_idx:
                     self.add_vertex(dst_vertex)
-        self.logger.info("[%s] sub-graph size: |V|=%s,|E|=%s", self.my_idx, self.num_vertices(), self.num_edges())
+        self.logger.info(
+                "[%s] sub-graph size: |V|=%s,|E|=%s",
+                self.my_idx, self.num_vertices(), self.num_edges()
+        )
+
+    # --------------------------
+    # Optimized member functions
+    # --------------------------
+
+    def _apply(self, vertex, graph_context):
+        return self.apply(vertex, self.func, graph_context)
+
+    def _batch_apply(self, vertices, graph_context):
+        return self.batch_apply(vertices, self.func, graph_context)
+
+    def _foreach_vertex(self, graph_context):
+        return self.foreach_vertex(vertices, self.func, graph_context)
+
+    def _recursive_foreach_vertex(self, vertex, graph_context):
+        assert vertex in self.vertices
+        self.logger.debug("[%s] recv v%s", self.my_idx, vertex)
+
+        state = self.vertices[vertex]
+        new_state, graph_context = self.func(vertex, state, graph_context)
+        self.vertices[vertex] = new_state
+
+        ids = []
+        self.calls += 1
+        # Recurse on neighbours
+        if state != new_state:
+            for neighbour in self.edges[vertex]:
+                neighbour_subgraph_idx = neighbour % self.num_subgraphs
+                subgraph = self.subgraphs[neighbour_subgraph_idx]
+                ids.append(subgraph._recursive_foreach_vertex.remote(neighbour, graph_context))
+        return ids
+
+    def _batch_recursive_foreach_vertex(self, arg_batch):
+        ids = []
+        batches = [[] for _ in range(self.num_subgraphs)]
+        for arg in arg_batch:
+            vertex, ctxt = arg.vertex, arg.graph_context
+            self.calls += 1
+
+            state = self.vertices[vertex]
+            new_state, ctxt = self.func(vertex, state, ctxt)
+            self.vertices[vertex] = new_state
+
+            if state != new_state:
+                for neighbour in self.edges[vertex]:
+                    arg = BatchArg(neighbour, ctxt)
+                    batches[neighbour % self.num_subgraphs].append(arg)
+
+        for batch_idx in range(self.num_subgraphs):
+            batch = batches[batch_idx]
+            if len(batch):
+                ids.append(self.subgraphs[batch_idx]._batch_recursive_foreach_vertex.remote(batch))
+        return ids
 
 
 def init_subgraph(node_index):

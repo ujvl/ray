@@ -9,10 +9,11 @@ import numpy as np
 import ray
 
 from graph import Graph, Vertex
+from util import Clock
 import conf
 import util
 
-# Disambiguation: node refers to an instance running Ray, 
+# Disambiguation: node refers to an instance running Ray,
 #                 vertex refers to a Graph vertex
 
 
@@ -23,7 +24,7 @@ def warmup_objectstore():
         ray.put(x)
 
 
-def load_graph(file_path, num_subgraphs, num_nodes, init_state=sys.maxint):
+def load_graph(file_path, num_subgraphs, num_nodes, init_state=float("inf")):
     """
     Loads a graph
     """
@@ -53,16 +54,17 @@ def bfs_level_parallel(graph, src_vertex):
     Breadth-first search over graph.
     Parallelizes computation by level.
     """
+    g.register_function(increment_level)
     # have the src_vertex state updated to 0
-    context = BFSContext(-1)
-    frontier = [Vertex(None, context.level, [src_vertex])]
+    level = -1
+    frontier = [Vertex(None, level, [src_vertex])]
 
     while frontier:
         next_frontier_ids = []
         for v in frontier:
-            ids = [graph.apply(increment_level, w, context) for w in v.neighbours]
+            ids = [graph.apply(w, graph_context=level) for w in v.neighbours]
             next_frontier_ids += ids
-        context.level += 1
+        level += 1
         frontier = ray.get(next_frontier_ids)
 
 
@@ -70,38 +72,38 @@ def bfs_batch_level_parallel(graph, src_vertex):
     """
     Batched BFS over graph.
     """
+    g.register_function(increment_level)
     # have the src_vertex state updated to 0
-    context = BFSContext(-1)
-    frontier = [[Vertex(None, context.level, [src_vertex])]]
-    
+    level = -1
+    frontier = [[Vertex(None, level, [src_vertex])]]
+
     while frontier:
         batches = [[] for _ in range(graph.num_subgraphs)]
         for result_batch in frontier:
             for v in result_batch:
                 for w in v.neighbours:
                     batches[graph.subgraph_of(w)].append(w)
-        next_frontier_ids = [graph.batch_apply(increment_level, b, context) for b in batches if len(b)]
+        next_frontier_ids = [graph.batch_apply(b, graph_context=level) for b in batches if len(b)]
 
-        context.level += 1
+        level += 1
         frontier = ray.get(next_frontier_ids)
 
 
-class BFSContext:
-
-    def __init__(self, level):
-        self.level = level
-
-
-def increment_level(v, state, context):
+def increment_level(v, state, level):
     """
     Increment level if it leads to a new smaller level.
+    new_state, context <- f(vertex, state, context)
     """
-    logger.debug("v%s, state = %s, parent level = %s", v, state, context.level)
-    context.level = min(state, context.level + 1)
-    # if state != context.level:
-        # simulate some computation for vertex update
-        # time.sleep(0.1)
-    return context.level
+    level = min(state, level + 1)
+    logger.debug("v%s, state transition: %s -> %s", v, state, level)
+    return level
+
+
+# TODO clean-up dup funcs with better api
+def rec_increment_level(v, state, level):
+    level = min(state, level + 1)
+    logger.debug("v%s, state transition: %s -> %s", v, state, level)
+    return level, level
 
 
 def print_vertex(v, state, context):
@@ -116,40 +118,43 @@ if __name__ == '__main__':
     node_resources = ["Node{}".format(i) for i in range(args.num_nodes)]
     util.init_ray(args, node_resources)
     logger.info("Warming up...")
-    # ray.get(warmup_objectstore.remote())
+    with Clock() as c:
+        pass
+        # ray.get(warmup_objectstore.remote())
+    logger.info("Time taken: %s ms", c.interval * 1000)
 
     src_vertex = 1
- 
+
     try:
         # Do coordinated BFS
         g = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
         time.sleep(1)
         logger.info("Running BFS...")
-        a = time.time()
-        bfs_batch_level_parallel(g, src_vertex)
-        b = time.time()
-        logger.info("Time taken: %s ms", (b - a) * 1000)
+        with Clock() as c:
+            bfs_batch_level_parallel(g, src_vertex)
+        logger.info("Time taken: %s ms", c.interval * 1000)
         logger.info("Calls: %s", g.calls())
 
         # Do uncoordinated BFS
         time.sleep(1)
         g2 = load_graph(args.graph_fname, args.num_subgraphs, args.num_nodes)
+        g2.register_function(rec_increment_level)
         time.sleep(1)
         logger.info("Running recursive BFS...")
-        a = time.time()
-        g2.batch_recursive_foreach_vertex(increment_level, src_vertex, BFSContext(-1))
-        b = time.time()
-        logger.info("Time taken: %s ms", (b - a) * 1000)
+        with Clock() as c:
+            g2.recursive_foreach_vertex(src_vertex, graph_context=-1, batch=True)
+        logger.info("Time taken: %s ms", c.interval * 1000)
         logger.info("Calls: %s", g2.calls())
 
-        # Verify correctness
-        time.sleep(1)
-        def verify(v, state, context):
-            uncoordinated_state = g2.get_vertex_state(v)
-            assert uncoordinated_state == state
-            logger.debug("%sv: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
-            return state
-        g.foreach_vertex(verify)
+        # Validate against each other
+        if args.validate:
+            time.sleep(1)
+            def validate(v, state, context):
+                uncoordinated_state = g2.get_vertex_state(v)
+                logger.debug("v%s: coord-state = %s, uncoord-state = %s", v, state, uncoordinated_state)
+                assert uncoordinated_state == state
+                return state
+            g.foreach_vertex(verify)
 
     except KeyError:
         logger.info("Dumping state...")

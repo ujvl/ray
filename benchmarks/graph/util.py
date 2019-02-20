@@ -40,6 +40,16 @@ def parse_args():
     parser.add_argument('--num-subgraphs', type=int, required=True)
     parser.add_argument('--out-fname', type=str, default="test")
     parser.add_argument('--redis-address', type=str)
+    parser.add_argument('--validate', type=bool, default=False)
     args = parser.parse_args()
     return args
+
+
+class Clock:
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.interval = time.time() - self.start
 
