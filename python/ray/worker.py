@@ -581,7 +581,7 @@ class Worker(object):
             for arg in args:
                 if isinstance(arg, ObjectID):
                     args_for_local_scheduler.append(arg)
-                elif ray._raylet.check_simple_value(arg):
+                elif ray._raylet.check_simple_value(arg) or isinstance(arg, list):
                     args_for_local_scheduler.append(arg)
                 else:
                     args_for_local_scheduler.append(put(arg))
