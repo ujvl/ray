@@ -11,6 +11,7 @@ import json
 
 import numpy as np
 import ray
+from ray.test.cluster_utils import Cluster
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class RingAllReduceWorker(object):
         self.num_workers = num_workers
         self.workers = {}
         self.reset(buffer_size=buffer_size)
+        self.num_iterations = 0
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -125,7 +127,7 @@ class RingAllReduceWorker(object):
         These object IDs can be retrieved and concatenated to produce the final
         output.
         """
-        debug("EXECUTE: worker", self.worker_index)
+        debug("EXECUTE", self.num_iterations, ": worker", self.worker_index)
         assert not self.execute_received
 
         # Update our state.
@@ -146,7 +148,7 @@ class RingAllReduceWorker(object):
             self.receive(index, aggregate, batch_buffer)
 
     def send(self, index, aggregate):
-        debug("SEND: worker", self.worker_index, "batch", index, aggregate)
+        debug("SEND", self.num_iterations, ": worker", self.worker_index, "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.workers[(self.worker_index + 1) % self.num_workers]
         # Check if the data was received by someone else. Then, we can forward
@@ -160,7 +162,7 @@ class RingAllReduceWorker(object):
         return batch_id
 
     def receive(self, index, aggregate, batch_buffer):
-        debug("RECEIVE: worker", self.worker_index, "batch", index, aggregate)
+        debug("RECEIVE", self.num_iterations, ": worker", self.worker_index, "batch", index, aggregate)
         if not self.execute_received:
             # If we haven't received the allreduce start message yet, buffer
             # the received data. It will be resent once we get the first
@@ -212,7 +214,7 @@ class RingAllReduceWorker(object):
             self_handle.finish.remote(*self.out_oids)
 
     def finish(self, *outputs):
-        debug("FINISH: worker", self.worker_index)
+        debug("FINISH", self.num_iterations, ": worker", self.worker_index)
         # Store the concatenated data in the final output ObjectID, if one was
         # provided.
         if self.final_oid is not None:
@@ -231,9 +233,10 @@ class RingAllReduceWorker(object):
 
         # Reset our state for the next allreduce.
         self.reset()
+        self.num_iterations += 1
 
 
-def allreduce(workers, test_failure, debug):
+def allreduce(workers, test_failure, debug, cluster=None, node_kwargs=None):
     # Get the initial weights on each of the workers so we can check the
     # results.
     weights = []
@@ -245,20 +248,31 @@ def allreduce(workers, test_failure, debug):
     start = time.time()
     done_oids = []
     out_oids = []
+    executed = []
     for i, worker in enumerate(workers):
         done_oid = np.random.bytes(20)
         done_oids.append(done_oid)
         out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
-        worker.execute.remote(weight_ids[i], done_oid, out_oid)
+        executed.append(worker.execute.remote(weight_ids[i], done_oid, out_oid))
 
     # If we are testing locally with failures on, kill a worker halfway
     # through.
     if test_failure:
-        worker = workers[-1]
-        pid = ray.get(worker.get_pid.remote())
-        os.kill(pid, signal.SIGKILL)
+        if cluster is None:
+            worker = workers[-1]
+            pid = ray.get(worker.get_pid.remote())
+            os.kill(pid, signal.SIGKILL)
+        else:
+            print(node_kwargs)
+            node = cluster.list_all_nodes()[-1]
+            print("killing", node)
+            cluster.remove_node(node)
+            cluster.add_node(**node_kwargs)
 
+    # This is necessary to make sure that each actor will receive the task to
+    # start the allreduce.
+    ray.wait(executed, num_returns=len(executed))
     # Wait for the allreduce to complete.
     done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
     # Suppress reconstruction since these object IDs were generated
@@ -281,26 +295,47 @@ def allreduce(workers, test_failure, debug):
             assert np.allclose(expected, output)
 
 
-def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
+def main(redis_address, test_single_node, num_workers, data_size, num_iterations, debug, dump,
          test_failure):
-    internal_config = {
+    internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 10,
-    }
+    })
     plasma_store_memory_gb = 5
-    ray.init(
-        redis_address=redis_address,
-        object_store_memory=plasma_store_memory_gb * 10 ** 9,
-        _internal_config=json.dumps(internal_config))
+    # Start the Ray processes.
+    test_local = redis_address is None
+    cluster = None
+    node_kwargs = None
+    if test_single_node:
+        resources = {
+                "Node{}".format(i): 1 for i in range(num_workers)
+                }
+        ray.init(resources=resources,
+                 object_store_memory=plasma_store_memory_gb * 10 ** 9 * num_workers,
+                 _internal_config=internal_config)
+    else:
+        if test_local:
+            node_kwargs = {
+                    "num_cpus": 1,
+                    "object_store_memory": plasma_store_memory_gb * 10 ** 9,
+                    "_internal_config": internal_config,
+                    }
+            cluster = Cluster(
+                initialize_head=True,
+                head_node_args=node_kwargs)
+            for i in range(num_workers):
+                node_kwargs["resources"] = {"Node{}".format(i): 1}
+                cluster.add_node(**node_kwargs)
+            redis_address = cluster.redis_address
+
+        ray.init(redis_address=redis_address, log_to_driver=False)
 
     # Create workers.
     workers = []
     for worker_index in range(num_workers):
-        if redis_address is None:
-            cls = ray.remote(max_reconstructions=1)(RingAllReduceWorker)
-        else:
-            cls = ray.remote(resources={'Actor' + str(worker_index + 1): 1})(
-                                            RingAllReduceWorker)
+        cls = ray.remote(
+                resources={'Node{}'.format(worker_index): 1},
+                max_reconstructions=100)(RingAllReduceWorker)
         workers.append(cls.remote(worker_index, num_workers, data_size))
 
     # Exchange actor handles.
@@ -309,7 +344,7 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
             workers[i].add_remote_worker.remote(j, workers[j])
 
     # Ensure workers are assigned to unique nodes.
-    if redis_address is not None:
+    if not test_local and not test_single_node:
         node_ips = ray.get(
             [worker.node_address.remote() for worker in workers])
         assert (len(set(node_ips)) == args.num_workers)
@@ -318,11 +353,14 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
         log.info("Starting iteration %d", i)
 
         fail_iteration = (i == num_iterations // 2 and test_failure
-            and redis_address is None)
-        allreduce(workers, fail_iteration, debug)
+            and test_local)
+        allreduce(workers, fail_iteration, debug, cluster=cluster, node_kwargs=node_kwargs)
 
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)
+
+    if test_local and not test_single_node:
+        cluster.shutdown()
 
 
 if __name__ == "__main__":
@@ -337,6 +375,10 @@ if __name__ == "__main__":
         default=3,
         type=int,
         help='The number of workers to use.')
+    parser.add_argument(
+        '--test-single-node',
+        action='store_true',
+        help='Whether to test on a single raylet')
     parser.add_argument(
         '--size',
         default=25000000,
@@ -363,5 +405,6 @@ if __name__ == "__main__":
         help='Whether or not to test worker failure')
     args = parser.parse_args()
 
-    main(args.redis_address, args.num_workers, args.size, args.num_iterations,
+    main(args.redis_address, args.test_single_node,
+         args.num_workers, args.size, args.num_iterations,
          args.check_results, args.dump, args.test_failure)

@@ -32,7 +32,7 @@ class Cluster(object):
                 for shutting down all started processes.
         """
         self.head_node = None
-        self.worker_nodes = set()
+        self.worker_nodes = list()
         self.redis_address = None
         self.connected = False
         self._shutdown_at_exit = shutdown_at_exit
@@ -91,7 +91,7 @@ class Cluster(object):
                 ray_params,
                 head=False,
                 shutdown_at_exit=self._shutdown_at_exit)
-            self.worker_nodes.add(node)
+            self.worker_nodes.append(node)
 
         # Wait for the node to appear in the client table. We do this so that
         # the nodes appears in the client table in the order that the
