@@ -88,10 +88,13 @@ class RingAllReduceWorker(object):
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.workers = {}
-        self.reset(buffer_size, None)
+        self.reset(buffer_size=buffer_size)
 
     def ip(self):
         return ray.services.get_node_ip_address()
+
+    def get_pid(self):
+        return os.getpid()
 
     def add_remote_worker(self, index, worker):
         self.workers[index] = worker
@@ -99,24 +102,42 @@ class RingAllReduceWorker(object):
     def get_weights(self):
         return self.weight_partition.get_weights()
 
-    def reset(self, buffer_size, weights):
-        self.weight_partition = WeightPartition(buffer_size, self.num_workers,
-                                                weights)
+    def reset(self, buffer_size=None, weights=None):
+        if buffer_size is not None:
+            self.weight_partition = WeightPartition(buffer_size, self.num_workers,
+                                                    weights)
         self.done_oid = None
+        self.final_oid = None
         self.out_oids = [None] * self.num_workers
         self.aggregate_received = []
         self.broadcast_received = []
-        self.done = False
 
         self.execute_received = False
         self.receives = []
 
-    def execute(self, done_oid):
+    def execute(self, input_data, done_oid=None, final_oid=None):
+        """
+        If final_oid is set, then the concatenated final output will be written
+        to this object ID before the allreduce is considered to be done.
+
+        If done_oid is set, then the object IDs of the reduced chunks will be
+        written to this object ID once the allreduce is considered to be done.
+        These object IDs can be retrieved and concatenated to produce the final
+        output.
+        """
         debug("EXECUTE: worker", self.worker_index)
         assert not self.execute_received
 
+        # Update our state.
+        with ray.profiling.profile("init_weights"):
+            input_data = np.copy(input_data)
+            input_data.flags.writeable = True
+            self.weight_partition.set_weights(input_data)
         self.execute_received = True
         self.done_oid = done_oid
+        self.final_oid = final_oid
+
+        # Send the first chunk to our receiver.
         self.send(self.worker_index, True)
         # Resend any buffered data that was received before the allreduce
         # started.
@@ -125,7 +146,6 @@ class RingAllReduceWorker(object):
             self.receive(index, aggregate, batch_buffer)
 
     def send(self, index, aggregate):
-        assert not self.done
         debug("SEND: worker", self.worker_index, "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.workers[(self.worker_index + 1) % self.num_workers]
@@ -140,7 +160,6 @@ class RingAllReduceWorker(object):
         return batch_id
 
     def receive(self, index, aggregate, batch_buffer):
-        assert not self.done
         debug("RECEIVE: worker", self.worker_index, "batch", index, aggregate)
         if not self.execute_received:
             # If we haven't received the allreduce start message yet, buffer
@@ -188,20 +207,78 @@ class RingAllReduceWorker(object):
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(
                 self.broadcast_received) + 2 == self.num_workers * 2:
-            self.finish()
+            assert all(out_oid is not None for out_oid in self.out_oids)
+            self_handle = self.workers[self.worker_index]
+            self_handle.finish.remote(*self.out_oids)
 
-    def finish(self):
+    def finish(self, *outputs):
         debug("FINISH: worker", self.worker_index)
-        assert all(out_oid is not None for out_oid in self.out_oids)
+        # Store the concatenated data in the final output ObjectID, if one was
+        # provided.
+        if self.final_oid is not None:
+            with ray.profiling.profile("concatenate_out"):
+                final_oid = ray.ObjectID(self.final_oid)
+                final_output = np.concatenate(outputs)
+                with ray.profiling.profile("store_out"):
+                    ray.worker.global_worker.put_object(final_oid, final_output)
+
         # Store pointers to the shards to notify any callers that we've
         # received.
-        done_oid = ray.ObjectID(self.done_oid)
-        ray.worker.global_worker.put_object(done_oid, self.out_oids)
+        if self.done_oid is not None:
+            with ray.profiling.profile("store_done"):
+                done_oid = ray.ObjectID(self.done_oid)
+                ray.worker.global_worker.put_object(done_oid, self.out_oids)
 
-        self.done = True
+        # Reset our state for the next allreduce.
+        self.reset()
 
-    def get_pid(self):
-        return os.getpid()
+
+def allreduce(workers, test_failure, debug):
+    # Get the initial weights on each of the workers so we can check the
+    # results.
+    weights = []
+    if debug:
+        weight_ids = [worker.get_weights.remote() for worker in workers]
+        weights = ray.get(weight_ids)
+
+    # Start the send on each worker.
+    start = time.time()
+    done_oids = []
+    out_oids = []
+    for i, worker in enumerate(workers):
+        done_oid = np.random.bytes(20)
+        done_oids.append(done_oid)
+        out_oid = np.random.bytes(20)
+        out_oids.append(out_oid)
+        worker.execute.remote(weight_ids[i], done_oid, out_oid)
+
+    # If we are testing locally with failures on, kill a worker halfway
+    # through.
+    if test_failure:
+        worker = workers[-1]
+        pid = ray.get(worker.get_pid.remote())
+        os.kill(pid, signal.SIGKILL)
+
+    # Wait for the allreduce to complete.
+    done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
+    # Suppress reconstruction since these object IDs were generated
+    # out-of-band.
+    all_output_oids = ray.get(done_oids, suppress_reconstruction=True)
+    log.info("Finished in %f", time.time() - start)
+
+    # Check the results on each of the workers.
+    if debug:
+        # Check that all of the workers end up with the same shards.
+        assert all([
+            output_oids == all_output_oids[0]
+            for output_oids in all_output_oids
+        ])
+
+        # Check that the shards contain the correct values.
+        expected = sum(weights)
+        outputs = ray.get([ray.ObjectID(out_oid) for out_oid in out_oids])
+        for output in outputs:
+            assert np.allclose(expected, output)
 
 
 def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
@@ -240,55 +317,9 @@ def main(redis_address, num_workers, data_size, num_iterations, debug, dump,
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
-        # Get the initial weights on each of the workers so we can check the
-        # results.
-        weights = []
-        if debug:
-            weights = ray.get(
-                [worker.get_weights.remote() for worker in workers])
-
-        # Start the send on each worker.
-        start = time.time()
-        done_oids = []
-        for worker in workers:
-            done_oid = np.random.bytes(20)
-            done_oids.append(done_oid)
-            worker.execute.remote(done_oid)
-
-        # If we are testing locally with failures on, kill a worker halfway
-        # through.
-        if (i == num_iterations // 2 and test_failure
-                and redis_address is None):
-            worker = workers[-1]
-            pid = ray.get(worker.get_pid.remote())
-            os.kill(pid, signal.SIGKILL)
-
-        # Wait for the allreduce to complete.
-        done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
-        # Suppress reconstruction since these object IDs were generated
-        # out-of-band.
-        all_output_oids = ray.get(done_oids, suppress_reconstruction=True)
-        log.info("Finished iteration %d in %f", i, time.time() - start)
-
-        # Check the results on each of the workers.
-        if debug:
-            # Check that all of the workers end up with the same shards.
-            assert all([
-                output_oids == all_output_oids[0]
-                for output_oids in all_output_oids
-            ])
-
-            # Check that the shards contain the correct values.
-            expected = sum(weights)
-            outputs = ray.get(all_output_oids[0])
-            chunk_start = 0
-            for output in outputs:
-                expected_chunk = expected[chunk_start:
-                                          chunk_start + len(output)]
-                assert np.allclose(expected_chunk, output)
-                chunk_start += len(output)
-
-        ray.get([worker.reset.remote(data_size, None) for worker in workers])
+        fail_iteration = (i == num_iterations // 2 and test_failure
+            and redis_address is None)
+        allreduce(workers, fail_iteration, debug)
 
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)
