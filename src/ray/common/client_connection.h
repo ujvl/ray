@@ -66,8 +66,7 @@ class ServerConnection : public std::enable_shared_from_this<ServerConnection<T>
   ///
   /// \param buffer The buffer.
   /// \param ec The error code object in which to store error codes.
-  void ReadBuffer(const std::vector<boost::asio::mutable_buffer> &buffer,
-                  boost::system::error_code &ec);
+  Status ReadBuffer(const std::vector<boost::asio::mutable_buffer> &buffer);
 
   /// Shuts down socket for this connection.
   void Close() {

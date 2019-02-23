@@ -74,25 +74,11 @@ Status ServerConnection<T>::WriteBuffer(
 }
 
 template <class T>
-void ServerConnection<T>::ReadBuffer(
-    const std::vector<boost::asio::mutable_buffer> &buffer,
-    boost::system::error_code &ec) {
-  // Loop until all bytes are read while handling interrupts.
-  for (const auto &b : buffer) {
-    uint64_t bytes_remaining = boost::asio::buffer_size(b);
-    uint64_t position = 0;
-    while (bytes_remaining != 0) {
-      size_t bytes_read =
-          socket_.read_some(boost::asio::buffer(b + position, bytes_remaining), ec);
-      position += bytes_read;
-      bytes_remaining -= bytes_read;
-      if (ec.value() == EINTR) {
-        continue;
-      } else if (ec.value() != boost::system::errc::errc_t::success) {
-        return;
-      }
-    }
-  }
+Status ServerConnection<T>::ReadBuffer(
+    const std::vector<boost::asio::mutable_buffer> &buffer) {
+  boost::system::error_code error;
+  boost::asio::read(socket_, buffer, error);
+  return boost_to_ray_status(error);
 }
 
 template <class T>
