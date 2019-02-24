@@ -53,7 +53,6 @@ def bfs_level_parallel(graph, src_vertex):
     Breadth-first search over graph.
     Parallelizes computation by level.
     """
-    g.register_function(increment_level)
     # have the src_vertex state updated to 0
     level = -1
     frontier = [Vertex(None, level, [src_vertex])]
@@ -61,7 +60,7 @@ def bfs_level_parallel(graph, src_vertex):
     while frontier:
         next_frontier_ids = []
         for v in frontier:
-            ids = [graph.apply(w, graph_context=level) for w in v.neighbours]
+            ids = [graph.apply(increment_level, w, graph_context=level) for w in v.neighbours]
             next_frontier_ids += ids
         level += 1
         frontier = ray.get(next_frontier_ids)
@@ -71,7 +70,6 @@ def bfs_batch_level_parallel(graph, src_vertex):
     """
     Batched BFS over graph.
     """
-    g.register_function(increment_level)
     # have the src_vertex state updated to 0
     level = -1
 
@@ -82,21 +80,21 @@ def bfs_batch_level_parallel(graph, src_vertex):
     #         for v in result_batch:
     #             for w in v.neighbours:
     #                 batches[graph.subgraph_of(w)].append(w)
-    #     next_frontier_ids = [graph.batch_apply(b, graph_context=level) for b in batches if len(b)]
+    #     next_frontier_ids = [graph.batch_apply(increment_level, b, graph_context=level) for b in batches if len(b)]
 
     #     level += 1
     #     frontier = ray.get(next_frontier_ids)
 
-    frontier = [src_vertex]
+    frontier = [[src_vertex]]
     while frontier:
         batches = [[] for _ in range(graph.num_subgraphs)]
-        for v in frontier:
-            batches[graph.subgraph_of(v)].append(v)
-        next_frontier_ids = [graph.batch_apply(b, graph_context=level) for b in batches if len(b)]
+        for result in frontier:
+            for v in frontier:
+                batches[graph.subgraph_of(v)].append(v)
+        next_frontier_ids = [graph.batch_apply(increment_level, b, graph_context=level) for b in batches if len(b)]
 
         level += 1
         frontier = ray.get(next_frontier_ids)
-        frontier = util.flatten(frontier)
 
 
 def increment_level(v, state, level):
@@ -107,13 +105,6 @@ def increment_level(v, state, level):
     level = min(state, level + 1)
     logger.debug("v%s: %s -> %s", v, state, level)
     return level
-
-
-# TODO clean-up dup funcs with better api
-def rec_increment_level(v, state, level):
-    level = min(state, level + 1)
-    logger.debug("v%s: %s -> %s", v, state, level)
-    return level, level
 
 
 def print_vertex(v, state, context):
@@ -150,13 +141,12 @@ if __name__ == '__main__':
         time.sleep(1)
         g.clear_stats()
         g.foreach_vertex(lambda v, state, ctxt: float("inf"))
-        g.register_function(rec_increment_level)
 
         # Do uncoordinated BFS
         logger.info("Running recursive BFS...")
         time.sleep(1)
         with Clock() as c:
-            g.recursive_foreach_vertex(src_vertex, graph_context=-1, batch=True)
+            g.recursive_foreach_vertex(increment_level, src_vertex, graph_context=-1, batch=True)
         logger.info("Time taken: %s ms", c.interval * 1000)
         logger.info("Calls: %s", g.calls())
 

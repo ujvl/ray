@@ -68,6 +68,10 @@ except ImportError:
     setproctitle = None
 
 
+class SimpleType(object):
+    pass
+
+
 class RayTaskError(Exception):
     """An object used internally to represent a task that threw an exception.
 
@@ -581,7 +585,7 @@ class Worker(object):
             for arg in args:
                 if isinstance(arg, ObjectID):
                     args_for_local_scheduler.append(arg)
-                elif ray._raylet.check_simple_value(arg) or isinstance(arg, list):
+                elif ray._raylet.check_simple_value(arg) or isinstance(arg, SimpleType):
                     args_for_local_scheduler.append(arg)
                 else:
                     args_for_local_scheduler.append(put(arg))
