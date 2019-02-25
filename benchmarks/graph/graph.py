@@ -99,7 +99,7 @@ class Graph(object):
         """
         assert len(vertices)
         self.register_function(f)
-        sub = self.subgraphs[self.subgraph_of(vertices[0])]
+        sub = self.subgraphs[self.subgraph_of(next(iter(vertices)))]
         return sub.batch_apply.remote(vertices, graph_context)
 
     def foreach_vertex(self, f, graph_context=None):
@@ -137,7 +137,8 @@ class Graph(object):
         ray.get([sub.load_from_file.remote(file_path, delim) for sub in self.subgraphs])
 
     def calls(self):
-        return sum(ray.get([sub.num_calls.remote() for sub in self.subgraphs]))
+        return ray.get([sub.num_calls.remote() for sub in self.subgraphs])
+        # return sum(ray.get([sub.num_calls.remote() for sub in self.subgraphs]))
 
 
 class Subgraph(object):
@@ -207,15 +208,22 @@ class Subgraph(object):
         self.state[vertex] = new_state
         neighbours = self.edges[vertex] if state != new_state else []
         self.calls += 1
-        #return Vertex(vertex, new_state, neighbours)
         return neighbours
 
     def batch_apply(self, vertices, graph_context):
-        # TODO assumes entire batch of vertices belong to this subgraph
-        #return [self.apply(vertex, f, graph_context) for vertex in vertices]
+        """
+        Assumes entire batch belongs to subgraph.
+        """
         result = set()
         for vertex in vertices:
-            result.update(self.apply(vertex, graph_context))
+            # in-line apply() here to save on copy
+            assert vertex in self.state
+            state = self.state[vertex]
+            new_state = self.func(vertex, state, graph_context)
+            self.state[vertex] = new_state
+            neighbours = self.edges[vertex] if state != new_state else []
+            result.update(neighbours)
+            self.calls += 1
         return result
 
     def foreach_vertex(self, graph_context):
@@ -277,7 +285,7 @@ class Subgraph(object):
             batch_args = []
             for batch in batches:
                 batch_args.append(Batch(batch, batch_state))
-
+            # Recurse
             for sub_idx in range(self.num_subgraphs):
                 if len(batches[sub_idx]):
                     ids.append(self.subgraphs[sub_idx].batch_recursive_foreach_vertex.remote(
@@ -295,7 +303,7 @@ class Subgraph(object):
             for line in infile:
                 li = line.strip()
                 if lines_read % 1000000 == 0:
-                    self.logger.debug("Subgraph{} read {} lines.".format(self.my_idx, lines_read))
+                    self.logger.debug("[%s] read {} lines.".format(self.my_idx, lines_read))
                 lines_read += 1
 
                 src_vertex, dst_vertex = (int(s) for s in li.split(delim))
@@ -307,7 +315,7 @@ class Subgraph(object):
                 if dst_subgraph_idx == self.my_idx:
                     self.add_vertex(dst_vertex)
         self.logger.info(
-                "[%s] sub-graph size: |V|=%s,|E|=%s",
+                "[%s] subgraph size: |V|=%s,|E|=%s",
                 self.my_idx, self.num_vertices(), self.num_edges()
         )
 

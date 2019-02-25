@@ -19,8 +19,8 @@ import util
 
 @ray.remote
 def warmup_objectstore():
-    x = np.ones(10 ** 8)
-    for _ in range(100):
+    x = np.ones(10 ** 4)
+    for _ in range(10):
         ray.put(x)
 
 
@@ -66,31 +66,27 @@ def bfs_level_parallel(graph, src_vertex):
         frontier = ray.get(next_frontier_ids)
 
 
+@ray.remote
+def flatten_sets(*sets):
+    flattened = set()
+    for s in sets:
+        flattened.update(s)
+    return flattened
+
+
 def bfs_batch_level_parallel(graph, src_vertex):
     """
     Batched BFS over graph.
     """
     # have the src_vertex state updated to 0
     level = -1
-
-    #frontier = [[Vertex(None, level, [src_vertex])]]
-    # while frontier:
-    #     batches = [[] for _ in range(graph.num_subgraphs)]
-    #     for result_batch in frontier:
-    #         for v in result_batch:
-    #             for w in v.neighbours:
-    #                 batches[graph.subgraph_of(w)].append(w)
-    #     next_frontier_ids = [graph.batch_apply(increment_level, b, graph_context=level) for b in batches if len(b)]
-
-    #     level += 1
-    #     frontier = ray.get(next_frontier_ids)
-
     frontier = [[src_vertex]]
     while frontier:
-        batches = [[] for _ in range(graph.num_subgraphs)]
+        batches = [set() for _ in range(graph.num_subgraphs)]
+        # TODO experiment with parallelizing re-batching (have batch_apply return batches)
         for result in frontier:
             for v in frontier:
-                batches[graph.subgraph_of(v)].append(v)
+                batches[graph.subgraph_of(v)].add(v)
         next_frontier_ids = [graph.batch_apply(increment_level, b, graph_context=level) for b in batches if len(b)]
 
         level += 1
@@ -119,49 +115,40 @@ if __name__ == '__main__':
     node_names = util.init_ray(args)
     logger.info("Warming up...")
     with Clock() as c:
-        pass
-        # ray.get(warmup_objectstore.remote())
-    logger.info("Time taken: %s ms", c.interval * 1000)
+        ray.get(warmup_objectstore.remote())
+    logger.info("Time taken: %s ms", c.interval_ms)
 
     src_vertex = 1
+    g = load_graph(args.graph_fname, args.num_subgraphs, node_names)
 
-    try:
-        g = load_graph(args.graph_fname, args.num_subgraphs, node_names)
+    # Do coordinated BFS
+    logger.info("Running coordinated BFS...")
+    time.sleep(1)
+    with Clock() as c:
+        bfs_batch_level_parallel(g, src_vertex)
+    logger.info("Time taken: %s ms. # of calls: %s", c.interval_ms, g.calls())
+    coord_state = g.state() if args.validate else None
 
-        # Do coordinated BFS
-        logger.info("Running coordinated BFS...")
+    logger.info("Clearing...")
+    g.clear_stats()
+    g.foreach_vertex(lambda v, state, ctxt: float("inf"))
+
+    # Do uncoordinated BFS
+    logger.info("Running recursive BFS...")
+    time.sleep(1)
+    with Clock() as c:
+        g.recursive_foreach_vertex(increment_level, src_vertex, graph_context=-1, batch=True)
+    logger.info("Time taken: %s ms. # of calls: %s", c.interval_ms, g.calls())
+
+    # Validate against each other
+    if args.validate:
         time.sleep(1)
-        with Clock() as c:
-            bfs_batch_level_parallel(g, src_vertex)
-        coord_state = g.state()
-        logger.info("Time taken: %s ms", c.interval * 1000)
-        logger.info("Calls: %s", g.calls())
-
-        logger.info("Clearing...")
-        time.sleep(1)
-        g.clear_stats()
-        g.foreach_vertex(lambda v, state, ctxt: float("inf"))
-
-        # Do uncoordinated BFS
-        logger.info("Running recursive BFS...")
-        time.sleep(1)
-        with Clock() as c:
-            g.recursive_foreach_vertex(increment_level, src_vertex, graph_context=-1, batch=True)
-        logger.info("Time taken: %s ms", c.interval * 1000)
-        logger.info("Calls: %s", g.calls())
-
-        # Validate against each other
-        if args.validate:
-            time.sleep(1)
-            def validate(v, state, context):
-                coordinated_state = coord_state[v]
-                logger.debug("v%s: coord-state = %s, uncoord-state = %s", v, coordinated_state, state)
-                assert state == coordinated_state
-                return state
-            g.foreach_vertex(validate)
-
-    except KeyboardInterrupt:
-        pass
+        def validate(v, state, context):
+            coordinated_state = coord_state[v]
+            logger.debug("v%s: coord-state = %s, uncoord-state = %s", v, coordinated_state, state)
+            assert state == coordinated_state
+            return state
+        g.foreach_vertex(validate)
 
     logger.info("Dumping state...")
     ray.global_state.chrome_tracing_dump(filename=args.dump)
