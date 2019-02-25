@@ -87,4 +87,5 @@ class Clock:
 
     def __exit__(self, *args):
         self.interval = time.time() - self.start
+        self.interval_ms = self.interval * 1000
 
