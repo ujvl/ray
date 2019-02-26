@@ -1689,6 +1689,7 @@ bool NodeManager::AssignTask(const Task &task) {
             RAY_CHECK(spec.NewActorHandles().empty());
           }
 
+          assigned_task.IncrementNumReconstructions();
           // We started running the task, so the task is ready to write to GCS.
           if (!lineage_cache_.AddReadyTask(assigned_task)) {
             RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."

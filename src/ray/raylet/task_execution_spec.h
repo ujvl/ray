@@ -69,6 +69,14 @@ class TaskExecutionSpecification {
   /// Increment the number of times this task has been forwarded.
   void IncrementNumForwards();
 
+  /// Get the number of times this task has been reconstructed.
+  ///
+  /// \return The number of times this task has been reconstructed.
+  int NumReconstructions() const;
+
+  /// Increment the number of times this task has been reconstructed.
+  void IncrementNumReconstructions();
+
   /// Get the task's last timestamp.
   ///
   /// \return The timestamp when this task was last received for scheduling.

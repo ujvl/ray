@@ -24,6 +24,10 @@ void Task::SetExecutionDependencies(const std::vector<ObjectID> &dependencies) {
 
 void Task::IncrementNumForwards() { task_execution_spec_.IncrementNumForwards(); }
 
+void Task::IncrementNumReconstructions() {
+  task_execution_spec_.IncrementNumReconstructions();
+}
+
 const std::vector<ObjectID> &Task::GetImmutableDependencies() const {
   return immutable_dependencies_;
 }

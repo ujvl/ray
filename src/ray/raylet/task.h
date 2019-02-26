@@ -75,6 +75,9 @@ class Task {
   /// Increment the number of times this task has been forwarded.
   void IncrementNumForwards();
 
+  /// Increment the number of times this task has been reconstructed.
+  void IncrementNumReconstructions();
+
   const std::vector<ObjectID> &GetImmutableDependencies() const;
 
   /// Get the task's object dependencies. This comprises the immutable task
