@@ -198,6 +198,7 @@ class Worker(object):
             # This is used to forward arguments that get passed into a nested
             # task. NOTE: This can only be used for immutable arguments.
             self._task_context.arguments = []
+            self._task_context.returns = []
         return self._task_context
 
     @property
@@ -213,6 +214,9 @@ class Worker(object):
             return forwarded[0]
         else:
             return None
+
+    def get_return_ids(self):
+        return self.task_context.returns
 
     def mark_actor_init_failed(self, error):
         """Called to mark this actor as failed during initialization."""
@@ -816,6 +820,7 @@ class Worker(object):
         assert self.task_context.task_index == 0
         assert self.task_context.put_index == 1
         assert self.task_context.arguments == []
+        assert self.task_context.returns == []
         if task.actor_id().is_nil():
             # If this worker is not an actor, check that `task_driver_id`
             # was reset when the worker finished the previous task.
@@ -835,6 +840,7 @@ class Worker(object):
             task.function_descriptor_list())
         args = task.arguments()
         return_object_ids = task.returns()
+        self.task_context.returns = return_object_ids
         if (not task.actor_id().is_nil()
                 or not task.actor_creation_id().is_nil()):
             dummy_return_id = return_object_ids.pop()
@@ -975,6 +981,7 @@ class Worker(object):
                 self.task_context.task_index = 0
                 self.task_context.put_index = 1
                 self.task_context.arguments.clear()
+                self.task_context.returns.clear()
                 if self.actor_id.is_nil():
                     # Don't need to reset task_driver_id if the worker is an
                     # actor. Because the following tasks should all have the

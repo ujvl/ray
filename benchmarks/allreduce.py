@@ -21,7 +21,11 @@ DEBUG = False
 
 def debug(*args):
     if DEBUG:
-        print(*args, flush=True)
+        print(
+            "task ID:",
+            ray.worker.global_worker.current_task_id,
+            *args,
+            flush=True)
 
 
 def compute_batch_indices(total_size, num_batches):
@@ -106,8 +110,8 @@ class RingAllReduceWorker(object):
 
     def reset(self, buffer_size=None, weights=None):
         if buffer_size is not None:
-            self.weight_partition = WeightPartition(buffer_size, self.num_workers,
-                                                    weights)
+            self.weight_partition = WeightPartition(buffer_size,
+                                                    self.num_workers, weights)
         self.done_oid = None
         self.final_oid = None
         self.out_oids = [None] * self.num_workers
@@ -117,7 +121,7 @@ class RingAllReduceWorker(object):
         self.execute_received = False
         self.receives = []
 
-    def execute(self, input_data, done_oid=None, final_oid=None):
+    def execute(self, input_data, done_oid, final_oid, execution_dependency):
         """
         If final_oid is set, then the concatenated final output will be written
         to this object ID before the allreduce is considered to be done.
@@ -148,7 +152,8 @@ class RingAllReduceWorker(object):
             self.receive(index, aggregate, batch_buffer)
 
     def send(self, index, aggregate):
-        debug("SEND", self.num_iterations, ": worker", self.worker_index, "batch", index, aggregate)
+        debug("SEND", self.num_iterations, ": worker", self.worker_index,
+              "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.workers[(self.worker_index + 1) % self.num_workers]
         # Check if the data was received by someone else. Then, we can forward
@@ -162,7 +167,8 @@ class RingAllReduceWorker(object):
         return batch_id
 
     def receive(self, index, aggregate, batch_buffer):
-        debug("RECEIVE", self.num_iterations, ": worker", self.worker_index, "batch", index, aggregate)
+        debug("RECEIVE", self.num_iterations, ": worker", self.worker_index,
+              "batch", index, aggregate)
         if not self.execute_received:
             # If we haven't received the allreduce start message yet, buffer
             # the received data. It will be resent once we get the first
@@ -210,8 +216,12 @@ class RingAllReduceWorker(object):
         if len(self.aggregate_received) + len(
                 self.broadcast_received) + 2 == self.num_workers * 2:
             assert all(out_oid is not None for out_oid in self.out_oids)
-            self_handle = self.workers[self.worker_index]
-            self_handle.finish.remote(*self.out_oids)
+
+            #  Necessary for tensorflow?
+            # self_handle = self.workers[self.worker_index]
+            # self_handle.finish.remote(*self.out_oids)
+
+            self.finish(*ray.get(self.out_oids))
 
     def finish(self, *outputs):
         debug("FINISH", self.num_iterations, ": worker", self.worker_index)
@@ -222,26 +232,33 @@ class RingAllReduceWorker(object):
                 final_oid = ray.ObjectID(self.final_oid)
                 final_output = np.concatenate(outputs)
                 with ray.profiling.profile("store_out"):
-                    ray.worker.global_worker.put_object(final_oid, final_output)
+                    ray.worker.global_worker.put_object(
+                        final_oid, final_output)
 
         # Store pointers to the shards to notify any callers that we've
         # received.
         if self.done_oid is not None:
             with ray.profiling.profile("store_done"):
                 done_oid = ray.ObjectID(self.done_oid)
-                ray.worker.global_worker.put_object(done_oid, self.out_oids)
+                # Add this task's output so that callers can schedule tasks
+                # after this task.
+                dependencies = self.out_oids + [
+                    ray.worker.global_worker.get_return_ids()[-1]
+                ]
+                ray.worker.global_worker.put_object(done_oid, dependencies)
 
         # Reset our state for the next allreduce.
         self.reset()
         self.num_iterations += 1
 
 
-def allreduce(workers, test_failure, debug, cluster=None, node_kwargs=None):
+def allreduce(workers, test_failure, check_results, kill_node_fn,
+              execution_dependencies):
     # Get the initial weights on each of the workers so we can check the
     # results.
-    weights = []
-    if debug:
-        weight_ids = [worker.get_weights.remote() for worker in workers]
+    weight_ids = [worker.get_weights.remote() for worker in workers]
+    if check_results:
+        weights = []
         weights = ray.get(weight_ids)
 
     # Start the send on each worker.
@@ -254,21 +271,19 @@ def allreduce(workers, test_failure, debug, cluster=None, node_kwargs=None):
         done_oids.append(done_oid)
         out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
-        executed.append(worker.execute.remote(weight_ids[i], done_oid, out_oid))
+        executed.append(
+            worker.execute.remote(
+                weight_ids[i],
+                done_oid,
+                out_oid,
+                # Required to make sure that `execute` executes after the
+                # previous allreduce finishes.
+                execution_dependencies[i]))
 
     # If we are testing locally with failures on, kill a worker halfway
     # through.
     if test_failure:
-        if cluster is None:
-            worker = workers[-1]
-            pid = ray.get(worker.get_pid.remote())
-            os.kill(pid, signal.SIGKILL)
-        else:
-            print(node_kwargs)
-            node = cluster.list_all_nodes()[-1]
-            print("killing", node)
-            cluster.remove_node(node)
-            cluster.add_node(**node_kwargs)
+        kill_node_fn()
 
     # This is necessary to make sure that each actor will receive the task to
     # start the allreduce.
@@ -279,9 +294,8 @@ def allreduce(workers, test_failure, debug, cluster=None, node_kwargs=None):
     # out-of-band.
     all_output_oids = ray.get(done_oids, suppress_reconstruction=True)
     log.info("Finished in %f", time.time() - start)
-
     # Check the results on each of the workers.
-    if debug:
+    if check_results:
         # Check that all of the workers end up with the same shards.
         assert all([
             output_oids == all_output_oids[0]
@@ -294,12 +308,16 @@ def allreduce(workers, test_failure, debug, cluster=None, node_kwargs=None):
         for output in outputs:
             assert np.allclose(expected, output)
 
+    return [output_oids[-1] for output_oids in all_output_oids]
 
-def main(redis_address, test_single_node, num_workers, data_size, num_iterations, debug, dump,
-         test_failure):
+
+def main(redis_address, test_single_node, num_workers, data_size,
+         num_iterations, check_results, dump, test_failure):
     internal_config = json.dumps({
+        "inline_object_max_size_bytes": 0,
         "initial_reconstruction_timeout_milliseconds": 200,
-        "num_heartbeats_timeout": 10,
+        "num_heartbeats_timeout": 20,
+        "object_manager_repeated_push_delay_ms": 1000,
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.
@@ -307,22 +325,19 @@ def main(redis_address, test_single_node, num_workers, data_size, num_iterations
     cluster = None
     node_kwargs = None
     if test_single_node:
-        resources = {
-                "Node{}".format(i): 1 for i in range(num_workers)
-                }
-        ray.init(resources=resources,
-                 object_store_memory=plasma_store_memory_gb * 10 ** 9 * num_workers,
-                 _internal_config=internal_config)
+        resources = {"Node{}".format(i): 1 for i in range(num_workers)}
+        ray.init(
+            resources=resources,
+            object_store_memory=plasma_store_memory_gb * 10**9 * num_workers,
+            _internal_config=internal_config)
     else:
         if test_local:
             node_kwargs = {
-                    "num_cpus": 1,
-                    "object_store_memory": plasma_store_memory_gb * 10 ** 9,
-                    "_internal_config": internal_config,
-                    }
-            cluster = Cluster(
-                initialize_head=True,
-                head_node_args=node_kwargs)
+                "num_cpus": 1,
+                "object_store_memory": 10**9,
+                "_internal_config": internal_config,
+            }
+            cluster = Cluster(initialize_head=True, head_node_args=node_kwargs)
             for i in range(num_workers):
                 node_kwargs["resources"] = {"Node{}".format(i): 1}
                 cluster.add_node(**node_kwargs)
@@ -334,8 +349,8 @@ def main(redis_address, test_single_node, num_workers, data_size, num_iterations
     workers = []
     for worker_index in range(num_workers):
         cls = ray.remote(
-                resources={'Node{}'.format(worker_index): 1},
-                max_reconstructions=100)(RingAllReduceWorker)
+            resources={'Node{}'.format(worker_index): 1},
+            max_reconstructions=100)(RingAllReduceWorker)
         workers.append(cls.remote(worker_index, num_workers, data_size))
 
     # Exchange actor handles.
@@ -349,12 +364,26 @@ def main(redis_address, test_single_node, num_workers, data_size, num_iterations
             [worker.node_address.remote() for worker in workers])
         assert (len(set(node_ips)) == args.num_workers)
 
+    def kill_node():
+        if cluster is None:
+            worker = workers[-1]
+            pid = ray.get(worker.get_pid.remote())
+            os.kill(pid, signal.SIGKILL)
+        else:
+            print(node_kwargs)
+            node = cluster.list_all_nodes()[-1]
+            print("killing", node)
+            cluster.remove_node(node)
+            cluster.add_node(**node_kwargs)
+
+    out_oids = [None] * len(workers)
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
         fail_iteration = (i == num_iterations // 2 and test_failure
-            and test_local)
-        allreduce(workers, fail_iteration, debug, cluster=cluster, node_kwargs=node_kwargs)
+                          and test_local)
+        out_oids = allreduce(workers, fail_iteration, check_results, kill_node,
+                             out_oids)
 
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)
@@ -405,6 +434,6 @@ if __name__ == "__main__":
         help='Whether or not to test worker failure')
     args = parser.parse_args()
 
-    main(args.redis_address, args.test_single_node,
-         args.num_workers, args.size, args.num_iterations,
-         args.check_results, args.dump, args.test_failure)
+    main(args.redis_address, args.test_single_node, args.num_workers,
+         args.size, args.num_iterations, args.check_results, args.dump,
+         args.test_failure)
