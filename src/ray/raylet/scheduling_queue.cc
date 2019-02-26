@@ -85,7 +85,7 @@ const std::list<Task> &TaskQueue::GetTasks() const { return task_list_; }
 
 const Task &TaskQueue::GetTask(const TaskID &task_id) const {
   auto it = task_map_.find(task_id);
-  RAY_CHECK(it != task_map_.end());
+  RAY_CHECK(it != task_map_.end()) << "Failed to find task " << task_id;
   return *it->second;
 }
 
@@ -333,6 +333,17 @@ bool SchedulingQueue::HasTask(const TaskID &task_id) const {
     }
   }
   return false;
+}
+
+TaskState SchedulingQueue::GetTaskState(const TaskID &task_id) const {
+  size_t i = 0;
+  for (const auto &task_queue : task_queues_) {
+    if (task_queue->HasTask(task_id)) {
+      break;
+    }
+    i++;
+  }
+  return TaskState(i);
 }
 
 std::unordered_set<TaskID> SchedulingQueue::GetTaskIdsForDriver(

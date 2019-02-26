@@ -163,6 +163,8 @@ class SchedulingQueue {
   /// \return Whether the task_id exists in the queue.
   bool HasTask(const TaskID &task_id) const;
 
+  TaskState GetTaskState(const TaskID &task_id) const;
+
   /// \brief Get all tasks in the given state.
   ///
   /// \param task_state The requested task state. This must correspond to one
