@@ -1317,6 +1317,7 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
                  << ", actor_creation_id=" << spec.ActorCreationId()
                  << ", actor_handle_id=" << spec.ActorHandleId()
                  << ", actor_counter=" << spec.ActorCounter()
+                 << ", parent_task_id=" << spec.ParentTaskId()
                  << ", task_descriptor=" << spec.FunctionDescriptorString() << " on node "
                  << gcs_client_->client_table().GetLocalClientId();
 
@@ -2067,6 +2068,29 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
   const auto &spec = task.GetTaskSpecification();
   auto task_id = spec.TaskId();
 
+  // Only push the task's argument if the task that submitted it is
+  // running for the first time. If the parent task is being
+  // replayed, then the destination node has probably already
+  // received the data before.
+  const auto parent_task_id = spec.ParentTaskId();
+  bool push = false;
+  if (spec.IsActorTask()) {
+    if (local_queues_.HasTask(parent_task_id)) {
+      const auto state = local_queues_.GetTaskState(parent_task_id);
+      const auto &parent_task = local_queues_.GetTaskOfState(parent_task_id, state);
+      if (parent_task.GetTaskExecutionSpec().NumReconstructions() == 0) {
+        RAY_LOG(DEBUG) << "PUSH " << task_id << " submitted by " << parent_task_id;
+        push = true;
+      } else {
+        RAY_LOG(DEBUG) << "SKIPPING PUSH " << task_id << " submitted by "
+                       << parent_task_id;
+      }
+    } else {
+      RAY_LOG(DEBUG) << "PUSH XXX " << task_id << " submitted by " << parent_task_id;
+      push = true;
+    }
+  }
+
   // Get and serialize the task's unforwarded, uncommitted lineage.
   Lineage uncommitted_lineage;
   if (lineage_cache_.ContainsTask(task_id)) {
@@ -2105,7 +2129,7 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
   server_conn->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ForwardTaskRequest), fbb.GetSize(),
       fbb.GetBufferPointer(),
-      [this, on_error, task_id, node_id, spec](ray::Status status) {
+      [this, on_error, task_id, node_id, spec, push](ray::Status status) {
         if (status.ok()) {
           // If we were able to forward the task, remove the forwarded task from the
           // lineage cache since the receiving node is now responsible for writing
@@ -2126,16 +2150,18 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
           // only do this with actor tasks, since actor tasks must be executed by a
           // specific process and therefore have affinity to the receiving node.
           if (spec.IsActorTask()) {
-            // Iterate through the object's arguments. NOTE(swang): We do not include
-            // the execution dependencies here since those cannot be transferred
-            // between nodes.
-            for (int i = 0; i < spec.NumArgs(); ++i) {
-              int count = spec.ArgIdCount(i);
-              for (int j = 0; j < count; j++) {
-                ObjectID argument_id = spec.ArgId(i, j);
-                // If the argument is local, then push it to the receiving node.
-                if (task_dependency_manager_.CheckObjectLocal(argument_id)) {
-                  object_manager_.Push(argument_id, node_id);
+            if (push) {
+              // Iterate through the object's arguments. NOTE(swang): We do not include
+              // the execution dependencies here since those cannot be transferred
+              // between nodes.
+              for (int i = 0; i < spec.NumArgs(); ++i) {
+                int count = spec.ArgIdCount(i);
+                for (int j = 0; j < count; j++) {
+                  ObjectID argument_id = spec.ArgId(i, j);
+                  // If the argument is local, then push it to the receiving node.
+                  if (task_dependency_manager_.CheckObjectLocal(argument_id)) {
+                    object_manager_.Push(argument_id, node_id);
+                  }
                 }
               }
             }
