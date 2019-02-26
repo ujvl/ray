@@ -1878,6 +1878,21 @@ void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
       // will depend on this execution dependency, so it safe to release.
       HandleObjectMissing(object_to_release);
     }
+
+    // If this task was previously executed, or if this is the first time that
+    // the actor is executing, then release this task's execution dependency.
+    if (task.GetTaskExecutionSpec().NumReconstructions() > 0 ||
+        actor_entry->second.GetActorVersion() == 0) {
+      const auto &execution_dependencies =
+          task.GetTaskExecutionSpec().ExecutionDependencies();
+      if (execution_dependencies.size() == 1) {
+        auto &execution_dependency = execution_dependencies.front();
+        bool release = actor_entry->second.Release(execution_dependency);
+        if (release) {
+          HandleObjectMissing(execution_dependency);
+        }
+      }
+    }
     // Mark the dummy object as locally available to indicate that the actor's
     // state has changed and the next method can run. This is not added to the
     // object table, so the update will be invisible to both the local object

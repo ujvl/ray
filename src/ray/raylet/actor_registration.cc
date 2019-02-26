@@ -54,9 +54,27 @@ const int64_t ActorRegistration::GetRemainingReconstructions() const {
   return actor_table_data_.remaining_reconstructions;
 }
 
+const int64_t ActorRegistration::GetActorVersion() const {
+  return actor_table_data_.max_reconstructions -
+         actor_table_data_.remaining_reconstructions;
+}
+
 const std::unordered_map<ActorHandleID, ActorRegistration::FrontierLeaf>
     &ActorRegistration::GetFrontier() const {
   return frontier_;
+}
+
+bool ActorRegistration::Release(const ObjectID &object_id) {
+  bool release = false;
+  auto it = dummy_objects_.find(object_id);
+  RAY_CHECK(it != dummy_objects_.end());
+  it->second--;
+  RAY_CHECK(it->second >= 0);
+  if (it->second == 0) {
+    dummy_objects_.erase(it);
+    release = true;
+  }
+  return release;
 }
 
 ObjectID ActorRegistration::ExtendFrontier(const ActorHandleID &handle_id,
@@ -66,13 +84,9 @@ ObjectID ActorRegistration::ExtendFrontier(const ActorHandleID &handle_id,
   // actor handle, if there was one.
   ObjectID object_to_release;
   if (!frontier_entry.execution_dependency.is_nil()) {
-    auto it = dummy_objects_.find(frontier_entry.execution_dependency);
-    RAY_CHECK(it != dummy_objects_.end());
-    it->second--;
-    RAY_CHECK(it->second >= 0);
-    if (it->second == 0) {
+    auto release = Release(frontier_entry.execution_dependency);
+    if (release) {
       object_to_release = frontier_entry.execution_dependency;
-      dummy_objects_.erase(it);
     }
   }
 
@@ -80,6 +94,9 @@ ObjectID ActorRegistration::ExtendFrontier(const ActorHandleID &handle_id,
   frontier_entry.execution_dependency = execution_dependency;
   execution_dependency_ = execution_dependency;
   // Add the reference to the new cursor for this actor handle.
+  dummy_objects_[execution_dependency]++;
+  // Add a reference to the new cursor for the task that will follow this
+  // task during execution.
   dummy_objects_[execution_dependency]++;
   return object_to_release;
 }

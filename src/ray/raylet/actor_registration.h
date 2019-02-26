@@ -78,6 +78,8 @@ class ActorRegistration {
   /// Get the remaining number of times this actor should be reconstructed.
   const int64_t GetRemainingReconstructions() const;
 
+  const int64_t GetActorVersion() const;
+
   /// Get the object that represents the actor's current state. This is the
   /// execution dependency returned by the task most recently executed on the
   /// actor. The next task to execute on the actor should be marked as
@@ -110,6 +112,8 @@ class ActorRegistration {
   /// task. If no dummy object can be released, then this is nil.
   ObjectID ExtendFrontier(const ActorHandleID &handle_id,
                           const ObjectID &execution_dependency);
+
+  bool Release(const ObjectID &object_id);
 
   /// Add a new handle to the actor frontier. This does nothing if the actor
   /// handle already exists.
