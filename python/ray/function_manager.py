@@ -788,7 +788,7 @@ class FunctionActorManager(object):
             if len(checkpoints) > 0:
                 # If we found previously saved checkpoints for this actor,
                 # call the `load_checkpoint` callback.
-                checkpoint_id = actor.load_checkpoint(actor_id, checkpoints)
+                checkpoint_id = actor.load_checkpoint(actor_id, checkpoints[:])
                 if checkpoint_id is not None:
                     # Check that the returned checkpoint id is in the
                     # `available_checkpoints` list.

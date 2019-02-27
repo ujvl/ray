@@ -12,11 +12,13 @@ import json
 import numpy as np
 import ray
 from ray.test.cluster_utils import Cluster
+import ray.cloudpickle as pickle
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 DEBUG = False
+CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 
 def debug(*args):
@@ -106,6 +108,8 @@ class RingAllReduceWorker(object):
         self.workers[index] = worker
 
     def get_weights(self):
+        debug("GET_WEIGHTS", self.num_iterations, ": worker",
+              self.worker_index)
         return self.weight_partition.get_weights()
 
     def reset(self, buffer_size=None, weights=None):
@@ -121,7 +125,7 @@ class RingAllReduceWorker(object):
         self.execute_received = False
         self.receives = []
 
-    def execute(self, input_data, done_oid, final_oid, execution_dependency):
+    def execute(self, input_data, done_oid, final_oid):
         """
         If final_oid is set, then the concatenated final output will be written
         to this object ID before the allreduce is considered to be done.
@@ -242,21 +246,103 @@ class RingAllReduceWorker(object):
                 done_oid = ray.ObjectID(self.done_oid)
                 # Add this task's output so that callers can schedule tasks
                 # after this task.
-                dependencies = self.out_oids + [
-                    ray.worker.global_worker.get_return_ids()[-1]
-                ]
-                ray.worker.global_worker.put_object(done_oid, dependencies)
+                ray.worker.global_worker.put_object(done_oid, self.out_oids)
 
-        # Reset our state for the next allreduce.
+
+class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
+                                        ray.actor.Checkpointable):
+    def __init__(self, worker_index, num_workers, buffer_size, checkpoint_dir):
+        super(CheckpointableRingAllReduceWorker, self).__init__(
+            worker_index, num_workers, buffer_size)
+
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_attrs = [
+            "checkpoint_dir",
+            "worker_index",
+            "num_workers",
+            "workers",
+            "final_oid",
+            "out_oids",
+            "done_oid",
+            "num_iterations",
+        ]
+        self._should_checkpoint = False
+
+    def finish(self, *outputs):
+        super(CheckpointableRingAllReduceWorker, self).finish(*outputs)
+        self._should_checkpoint = True
+
+    def should_checkpoint(self, checkpoint_context):
+        should_checkpoint = self._should_checkpoint
+        self._should_checkpoint = False
+        return should_checkpoint
+
+    def save_checkpoint(self, actor_id, checkpoint_id):
+        debug("Saving checkpoint", self.num_iterations, checkpoint_id)
+
+        checkpoint = {}
+        for attr in self.checkpoint_attrs:
+            checkpoint[attr] = getattr(self, attr)
+        checkpoint["checkpoint_id"] = checkpoint_id
+        debug(checkpoint)
+
+        checkpoint_dir = os.path.join(self.checkpoint_dir, checkpoint_id.hex())
+        os.mkdir(checkpoint_dir)
+        checkpoint_path = os.path.join(checkpoint_dir, "checkpoint")
+        with open(checkpoint_path, 'wb+') as f:
+            f.write(pickle.dumps(checkpoint))
+
+        # Reset our state once the checkpoint completes.
         self.reset()
         self.num_iterations += 1
 
+    def restore(self, checkpoint_id):
+        debug("Trying to restore", checkpoint_id)
+        checkpoint_path = os.path.join(self.checkpoint_dir,
+                                       checkpoint_id.hex(), "checkpoint")
+        with open(checkpoint_path, 'rb') as f:
+            checkpoint = pickle.loads(f.read())
 
-def allreduce(workers, test_failure, check_results, kill_node_fn,
-              execution_dependencies):
+        # Check whether all of the output ObjectIDs are available. If not, then
+        # we cannot restore from this checkpoint.
+        out_oids = checkpoint["out_oids"]
+        _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0)
+        if lost:
+            return False
+
+        for attr in self.checkpoint_attrs:
+            setattr(self, attr, checkpoint[attr])
+        outputs = ray.get(out_oids)
+        # Restore the all-reduced data.
+        for i, output in enumerate(outputs):
+            self.weight_partition.set_partition(i, output)
+        # Restore the final object IDs indicating that this all-reduce has
+        # finished.
+        self.finish(*outputs)
+        self.num_iterations += 1
+        self._should_checkpoint = False
+
+        debug("Restored", checkpoint_id)
+        return True
+
+    def load_checkpoint(self, actor_id, available_checkpoints):
+        while available_checkpoints:
+            checkpoint_id = available_checkpoints.pop(0).checkpoint_id
+            if self.restore(checkpoint_id):
+                return checkpoint_id
+        # We were not able to restore from any of the available checkpoints.
+        return None
+
+    def checkpoint_expired(self, actor_id, checkpoint_id):
+        pass
+
+
+def allreduce(workers, test_failure, check_results, kill_node_fn):
     # Get the initial weights on each of the workers so we can check the
     # results.
-    weight_ids = [worker.get_weights.remote() for worker in workers]
+    weight_ids = [
+        worker.get_weights.remote() for i, worker in enumerate(workers)
+    ]
     if check_results:
         weights = []
         weights = ray.get(weight_ids)
@@ -272,13 +358,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn,
         out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
         executed.append(
-            worker.execute.remote(
-                weight_ids[i],
-                done_oid,
-                out_oid,
-                # Required to make sure that `execute` executes after the
-                # previous allreduce finishes.
-                execution_dependencies[i]))
+            worker.execute.remote(weight_ids[i], done_oid, out_oid))
 
     # If we are testing locally with failures on, kill a worker halfway
     # through.
@@ -307,8 +387,6 @@ def allreduce(workers, test_failure, check_results, kill_node_fn,
         outputs = ray.get([ray.ObjectID(out_oid) for out_oid in out_oids])
         for output in outputs:
             assert np.allclose(expected, output)
-
-    return [output_oids[-1] for output_oids in all_output_oids]
 
 
 def main(redis_address, test_single_node, num_workers, data_size,
@@ -345,13 +423,23 @@ def main(redis_address, test_single_node, num_workers, data_size,
 
         ray.init(redis_address=redis_address, log_to_driver=False)
 
+    # Create the checkpoint directory.
+    checkpoint_dir = os.path.join(
+        CHECKPOINT_DIR, ray.worker.global_worker.task_driver_id.hex())
+    try:
+        os.mkdir(CHECKPOINT_DIR)
+    except FileExistsError:
+        pass
+    os.mkdir(checkpoint_dir)
+
     # Create workers.
     workers = []
     for worker_index in range(num_workers):
         cls = ray.remote(
             resources={'Node{}'.format(worker_index): 1},
-            max_reconstructions=100)(RingAllReduceWorker)
-        workers.append(cls.remote(worker_index, num_workers, data_size))
+            max_reconstructions=100)(CheckpointableRingAllReduceWorker)
+        workers.append(
+            cls.remote(worker_index, num_workers, data_size, checkpoint_dir))
 
     # Exchange actor handles.
     for i in range(num_workers):
@@ -376,14 +464,12 @@ def main(redis_address, test_single_node, num_workers, data_size,
             cluster.remove_node(node)
             cluster.add_node(**node_kwargs)
 
-    out_oids = [None] * len(workers)
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
         fail_iteration = (i == num_iterations // 2 and test_failure
                           and test_local)
-        out_oids = allreduce(workers, fail_iteration, check_results, kill_node,
-                             out_oids)
+        allreduce(workers, fail_iteration, check_results, kill_node)
 
     if dump is not None:
         ray.global_state.chrome_tracing_dump(filename=dump)

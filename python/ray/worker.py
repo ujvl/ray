@@ -840,7 +840,7 @@ class Worker(object):
             task.function_descriptor_list())
         args = task.arguments()
         return_object_ids = task.returns()
-        self.task_context.returns = return_object_ids
+        self.task_context.returns = return_object_ids[:]
         if (not task.actor_id().is_nil()
                 or not task.actor_creation_id().is_nil()):
             dummy_return_id = return_object_ids.pop()
