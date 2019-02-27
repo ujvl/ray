@@ -255,7 +255,7 @@ ray::Status ObjectDirectory::LookupLocations(const ObjectID &object_id,
                                              const OnLocationsFound &callback) {
   ray::Status status;
   auto it = listeners_.find(object_id);
-  if (it == listeners_.end()) {
+  if (it == listeners_.end() || !it->second.has_been_created) {
     status = gcs_client_->object_table().Lookup(
         JobID::nil(), object_id,
         [this, callback](gcs::AsyncGcsClient *client, const ObjectID &object_id,
