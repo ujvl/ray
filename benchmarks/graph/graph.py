@@ -102,6 +102,12 @@ class Graph(object):
         sub = self.subgraphs[self.subgraph_of(next(iter(vertices)))]
         return sub.batch_apply.remote(vertices, graph_context)
 
+    def batch_apply_shuffle(self, f, vertex_batches, graph_context):
+        assert len(vertex_batches)
+        self.register_function(f)
+        sub = self.subgraphs[self.subgraph_of(next(iter(vertex_batches[0])))]
+        return sub.batch_apply_shuffle.remote(vertex_batches, graph_context)
+
     def foreach_vertex(self, f, graph_context=None):
         """
         Applies function to each vertex.
@@ -217,14 +223,35 @@ class Subgraph(object):
         result = set()
         for vertex in vertices:
             # in-line apply() here to save on copy
-            assert vertex in self.state
             state = self.state[vertex]
             new_state = self.func(vertex, state, graph_context)
             self.state[vertex] = new_state
-            neighbours = self.edges[vertex] if state != new_state else []
-            result.update(neighbours)
+            if state != new_state:
+                result.update(self.edges[vertex])
             self.calls += 1
         return result
+
+    def batch_apply_shuffle(self, vertex_batches, graph_context):
+        """
+        Assumes vertices of every batch belongs to subgraph.
+        """
+        result_batches = [set() for _ in range(self.num_subgraphs)]
+        seen = set()
+
+        for batch in vertex_batches:
+            for vertex in batch:
+                if vertex in seen:
+                    continue
+                seen.add(vertex)
+                state = self.state[vertex]
+                new_state = self.func(vertex, state, graph_context)
+                self.state[vertex] = new_state
+                if state != new_state:
+                    neighbours = self.edges[vertex]
+                    for neighbour in neighbours:
+                        result_batches[neighbour % self.num_subgraphs].add(neighbour)
+                self.calls += 1
+        return result_batches
 
     def foreach_vertex(self, graph_context):
         """

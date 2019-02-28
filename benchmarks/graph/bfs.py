@@ -83,7 +83,6 @@ def bfs_batch_level_parallel(graph, src_vertex):
     frontier = [[src_vertex]]
     while frontier:
         batches = [set() for _ in range(graph.num_subgraphs)]
-        # TODO experiment with parallelizing re-batching (have batch_apply return batches)
         for result in frontier:
             for v in frontier:
                 batches[graph.subgraph_of(v)].add(v)
@@ -91,6 +90,39 @@ def bfs_batch_level_parallel(graph, src_vertex):
 
         level += 1
         frontier = ray.get(next_frontier_ids)
+
+
+def bfs_shuffled_batch_level_parallel(graph, src_vertex):
+    """
+    Batched BFS over graph.
+    """
+    # have the src_vertex state updated to 0
+    level = -1
+    first_result_batch = [[src_vertex]]
+    frontier = [first_result_batch]
+
+    done = False
+    # Stop when frontier is empty
+    while True:
+
+        done = True
+        batches = [[] for _ in range(graph.num_subgraphs)]
+        for result_batches in frontier:
+            for result_idx in range(len(result_batches)):
+                if len(result_batches[result_idx])!= 0:
+                    done = False
+                    batches[result_idx].append(result_batches[result_idx])
+
+        if done:
+            break
+
+        next_frontier_ids = [
+            graph.batch_apply_shuffle(increment_level, sub_batches, graph_context=level)
+            for sub_batches in batches if len(sub_batches)
+        ]
+
+        level += 1
+        frontier = ray.get(next_frontier_ids)  # type: List[List[Set]]
 
 
 def increment_level(v, state, level):
@@ -125,7 +157,7 @@ if __name__ == '__main__':
     logger.info("Running coordinated BFS...")
     time.sleep(1)
     with Clock() as c:
-        bfs_batch_level_parallel(g, src_vertex)
+        bfs_shuffled_batch_level_parallel(g, src_vertex)
     logger.info("Time taken: %s ms. # of calls: %s", c.interval_ms, g.calls())
     coord_state = g.state() if args.validate else None
 
