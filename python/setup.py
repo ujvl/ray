@@ -24,7 +24,9 @@ ray_files = [
     "ray/core/src/ray/gcs/redis_module/libray_redis_module.so",
     "ray/core/src/plasma/plasma_store_server", "ray/_raylet.so",
     "ray/core/src/ray/raylet/raylet_monitor", "ray/core/src/ray/raylet/raylet",
-    "ray/WebUI.ipynb"
+    "ray/WebUI.ipynb", "ray/dashboard/dashboard.py",
+    "ray/dashboard/index.html", "ray/dashboard/res/main.css",
+    "ray/dashboard/res/main.js"
 ]
 
 # These are the directories where automatically generated Python flatbuffer
@@ -64,8 +66,11 @@ else:
 optional_ray_files += ray_autoscaler_files
 
 extras = {
-    "rllib": ["pyyaml", "gym[atari]", "opencv-python", "lz4", "scipy"],
+    "rllib": [
+        "pyyaml", "gym[atari]", "opencv-python-headless", "lz4", "scipy"
+    ],
     "debug": ["psutil", "setproctitle", "py-spy"],
+    "dashboard": ["psutil", "aiohttp"],
 }
 
 
@@ -119,8 +124,9 @@ class build_ext(_build_ext.build_ext):
         parent_directory = os.path.dirname(destination)
         if not os.path.exists(parent_directory):
             os.makedirs(parent_directory)
-        print("Copying {} to {}.".format(source, destination))
-        shutil.copy(source, destination)
+        if not os.path.exists(destination):
+            print("Copying {} to {}.".format(source, destination))
+            shutil.copy(source, destination)
 
 
 class BinaryDistribution(Distribution):
@@ -148,7 +154,8 @@ requires = [
     "pytest",
     "pyyaml",
     "redis",
-    # The six module is required by pyarrow.
+    # NOTE: Don't upgrade the version of six! Doing so causes installation
+    # problems. See https://github.com/ray-project/ray/issues/4169.
     "six >= 1.0.0",
     # The typing module is required by modin.
     "typing",
