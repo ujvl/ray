@@ -80,7 +80,12 @@ TaskSpecification::TaskSpecification(
     : spec_() {
   flatbuffers::FlatBufferBuilder fbb;
 
-  TaskID task_id = GenerateTaskId(driver_id, parent_task_id, parent_counter);
+  TaskID task_id;
+  if (actor_id.is_nil()) {
+    task_id = GenerateTaskId(driver_id, parent_task_id, parent_counter);
+  } else {
+    task_id = GenerateActorTaskId(driver_id, actor_id, actor_handle_id, actor_counter);
+  }
 
   // Add argument object IDs.
   std::vector<flatbuffers::Offset<Arg>> arguments;

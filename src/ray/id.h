@@ -90,6 +90,10 @@ const TaskID ComputeTaskId(const ObjectID &object_id);
 const TaskID GenerateTaskId(const DriverID &driver_id, const TaskID &parent_task_id,
                             int parent_task_counter);
 
+const TaskID GenerateActorTaskId(const DriverID &driver_id, const ActorID &actor_id,
+                                 const ActorHandleID &actor_handle_id,
+                                 int actor_task_counter);
+
 /// Compute the index of this object in the task that created it.
 ///
 /// \param object_id The object ID.

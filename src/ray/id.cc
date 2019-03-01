@@ -219,6 +219,28 @@ const TaskID GenerateTaskId(const DriverID &driver_id, const TaskID &parent_task
   return task_id;
 }
 
+const TaskID GenerateActorTaskId(const DriverID &driver_id, const ActorID &actor_id,
+                                 const ActorHandleID &actor_handle_id,
+                                 int actor_task_counter) {
+  // Compute hashes.
+  SHA256_CTX ctx;
+  sha256_init(&ctx);
+  sha256_update(&ctx, (BYTE *)&driver_id, sizeof(driver_id));
+  sha256_update(&ctx, (BYTE *)&actor_id, sizeof(actor_id));
+  sha256_update(&ctx, (BYTE *)&actor_handle_id, sizeof(actor_handle_id));
+  sha256_update(&ctx, (BYTE *)&actor_task_counter, sizeof(actor_task_counter));
+
+  // Compute the final task ID from the hash.
+  BYTE buff[DIGEST_SIZE];
+  sha256_final(&ctx, buff);
+  TaskID task_id;
+  RAY_DCHECK(sizeof(task_id) <= DIGEST_SIZE);
+  memcpy(&task_id, buff, sizeof(task_id));
+  task_id = FinishTaskId(task_id);
+
+  return task_id;
+}
+
 int64_t ComputeObjectIndex(const ObjectID &object_id) {
   const int64_t *first_bytes = reinterpret_cast<const int64_t *>(&object_id);
   uint64_t bitmask = static_cast<uint64_t>(-1) << kObjectIdIndexSize;
