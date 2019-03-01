@@ -11,7 +11,7 @@ import json
 
 import numpy as np
 import ray
-from ray.test.cluster_utils import Cluster
+from ray.tests.cluster_utils import Cluster
 import ray.cloudpickle as pickle
 
 logging.basicConfig(level=logging.INFO)
@@ -392,7 +392,6 @@ def allreduce(workers, test_failure, check_results, kill_node_fn):
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure):
     internal_config = json.dumps({
-        "inline_object_max_size_bytes": 0,
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
         "object_manager_repeated_push_delay_ms": 1000,
