@@ -125,6 +125,9 @@ class RingAllReduceWorker(object):
         self.execute_received = False
         self.receives = []
 
+    def get_receiver(self):
+        return self.workers[(self.worker_index + 1) % self.num_workers]
+
     def execute(self, input_data, done_oid, final_oid):
         """
         If final_oid is set, then the concatenated final output will be written
@@ -159,7 +162,7 @@ class RingAllReduceWorker(object):
         debug("SEND", self.num_iterations, ": worker", self.worker_index,
               "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
-        receiver = self.workers[(self.worker_index + 1) % self.num_workers]
+        receiver = self.get_receiver()
         # Check if the data was received by someone else. Then, we can forward
         # it.
         batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
@@ -338,6 +341,16 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
     def checkpoint_expired(self, actor_id, checkpoint_id):
         pass
 
+    def heartbeat(self):
+        receiver = self.get_receiver()
+        # The timeout here could be 0, but the ray.wait bug needs to be fixed
+        # first.
+        ray.wait([receiver._ray_actor_cursor], num_returns=1, timeout=0.4)
+        # NOTE: We cannot submit any tasks here, because they can potentially
+        # end up with the same task ID as an actual task from the previous run
+        # (e.g., a receive task). Instead, we just call `ray.wait` on the last
+        # task that we submitted.
+
 
 def allreduce(workers, test_failure, check_results, kill_node_fn):
     # Get the initial weights on each of the workers so we can check the
@@ -365,16 +378,24 @@ def allreduce(workers, test_failure, check_results, kill_node_fn):
     # If we are testing locally with failures on, kill a worker halfway
     # through.
     if test_failure:
+        time_to_sleep = np.random.rand() * 0.3
+        time.sleep(time_to_sleep)
         kill_node_fn()
 
-    # This is necessary to make sure that each actor will receive the task to
-    # start the allreduce.
-    ray.wait(executed, num_returns=len(executed))
-    # Wait for the allreduce to complete.
+    timeout_s = 0.5
     done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
+
     # Suppress reconstruction since these object IDs were generated
     # out-of-band.
-    all_output_oids = ray.get(done_oids, suppress_reconstruction=True)
+    while True:
+        try:
+            all_output_oids = ray.get(
+                done_oids, suppress_reconstruction=True, timeout=timeout_s)
+            break
+        except ray.exceptions.RayGetTimeoutError:
+            heartbeats = [worker.heartbeat.remote() for worker in workers]
+            ray.get(heartbeats)
+
     log.info("Finished in %f", time.time() - start)
     # Check the results on each of the workers.
     if check_results:
