@@ -49,6 +49,7 @@ from ray import profiling
 
 from ray.core.generated.ErrorType import ErrorType
 from ray.exceptions import (
+    RayGetTimeoutError,
     RayActorError,
     RayError,
     RayTaskError,
@@ -471,7 +472,10 @@ class Worker(object):
             # Object isn't available in plasma.
             return plasma.ObjectNotAvailable
 
-    def get_object(self, object_ids, suppress_reconstruction=False):
+    def get_object(self,
+                   object_ids,
+                   suppress_reconstruction=False,
+                   timeout=None):
         """Get the value or values in the object store associated with the IDs.
 
         Return the values from the local object store for object_ids. This will
@@ -482,6 +486,7 @@ class Worker(object):
             object_ids (List[object_id.ObjectID]): A list of the object IDs
                 whose values should be retrieved.
         """
+        start_time = time.time()
         # Make sure that the values are object IDs.
         for object_id in object_ids:
             if not isinstance(object_id, ObjectID):
@@ -545,6 +550,12 @@ class Worker(object):
                         index = unready_ids[object_id]
                         final_results[index] = val
                         unready_ids.pop(object_id)
+
+                if timeout is not None and time.time() - start_time > timeout:
+                    if not suppress_reconstruction:
+                        self.raylet_client.notify_unblocked(
+                            self.current_task_id)
+                    raise RayGetTimeoutError()
 
             # If there were objects that we weren't able to get locally,
             # let the local scheduler know that we're now unblocked.
@@ -2254,7 +2265,7 @@ def register_custom_serializer(cls,
         register_class_for_serialization({"worker": worker})
 
 
-def get(object_ids, suppress_reconstruction=False):
+def get(object_ids, suppress_reconstruction=False, timeout=None):
     """Get a remote object or a list of remote objects from the object store.
 
     This method blocks until the object corresponding to the object ID is
@@ -2284,14 +2295,19 @@ def get(object_ids, suppress_reconstruction=False):
         global last_task_error_raise_time
         if isinstance(object_ids, list):
             values = worker.get_object(
-                object_ids, suppress_reconstruction=suppress_reconstruction)
+                object_ids,
+                suppress_reconstruction=suppress_reconstruction,
+                timeout=timeout)
             for i, value in enumerate(values):
                 if isinstance(value, RayError):
                     last_task_error_raise_time = time.time()
                     raise value
             return values
         else:
-            value = worker.get_object([object_ids])[0]
+            value = worker.get_object(
+                [object_ids],
+                suppress_reconstruction=suppress_reconstruction,
+                timeout=timeout)[0]
             if isinstance(value, RayError):
                 # If the result is a RayError, then the task that created
                 # this object failed, and we should propagate the error message

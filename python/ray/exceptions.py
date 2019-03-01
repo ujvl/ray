@@ -13,6 +13,10 @@ class RayError(Exception):
     pass
 
 
+class RayGetTimeoutError(RayError):
+    pass
+
+
 class RayTaskError(RayError):
     """Indicates that a task threw an exception during execution.
 
