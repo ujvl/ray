@@ -312,6 +312,8 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
 
         for attr in self.checkpoint_attrs:
             setattr(self, attr, checkpoint[attr])
+        for handle in self.workers.values():
+            handle.reset_handle_id()
         outputs = ray.get(out_oids)
         # Restore the all-reduced data.
         for i, output in enumerate(outputs):

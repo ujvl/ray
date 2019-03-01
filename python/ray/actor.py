@@ -391,7 +391,9 @@ class ActorHandle(object):
                  actor_creation_dummy_object_id,
                  actor_method_cpus,
                  actor_driver_id,
-                 actor_handle_id=None):
+                 actor_handle_id=None,
+                 original_actor_handle_id=None,
+                 original_actor_counter=None):
         assert isinstance(actor_id, ActorID)
         assert isinstance(actor_driver_id, DriverID)
         self._ray_actor_id = actor_id
@@ -417,6 +419,14 @@ class ActorHandle(object):
         self._ray_actor_driver_id = actor_driver_id
         self._ray_new_actor_handles = []
         self._ray_actor_lock = threading.Lock()
+        if original_actor_handle_id is None:
+            self._ray_original_actor_handle_id = self._ray_actor_handle_id
+        else:
+            self._ray_original_actor_handle_id = original_actor_handle_id
+        if original_actor_counter is None:
+            self._ray_original_actor_counter = self._ray_actor_counter
+        else:
+            self._ray_original_actor_counter = original_actor_counter
 
     def _actor_method_call(self,
                            method_name,
@@ -554,6 +564,10 @@ class ActorHandle(object):
     def _actor_handle_id(self):
         return self._ray_actor_handle_id
 
+    def reset_handle_id(self):
+        self._ray_actor_handle_id = self._ray_original_actor_handle_id
+        self._ray_actor_counter = self._ray_original_actor_counter
+
     def _serialization_helper(self, ray_forking):
         """This is defined in order to make pickling work.
 
@@ -568,13 +582,14 @@ class ActorHandle(object):
             actor_handle_id = compute_actor_handle_id(
                 self._ray_actor_handle_id, self._ray_actor_forks)
         else:
-            actor_handle_id = self._ray_actor_handle_id
+            actor_handle_id = self._ray_original_actor_handle_id
 
         # Note: _ray_actor_cursor and _ray_actor_creation_dummy_object_id
         # could be None.
         state = {
             "actor_id": self._ray_actor_id,
             "actor_handle_id": actor_handle_id,
+            "actor_counter": self._ray_actor_counter,
             "module_name": self._ray_module_name,
             "class_name": self._ray_class_name,
             "actor_cursor": self._ray_actor_cursor,
@@ -648,7 +663,9 @@ class ActorHandle(object):
             # This is the driver ID of the driver that owns the actor, not
             # necessarily the driver that owns this actor handle.
             state["actor_driver_id"],
-            actor_handle_id=actor_handle_id)
+            actor_handle_id=actor_handle_id,
+            original_actor_handle_id=state["actor_handle_id"],
+            original_actor_counter=state["actor_counter"])
 
     def __getstate__(self):
         """This code path is used by pickling but not by Ray forking."""
