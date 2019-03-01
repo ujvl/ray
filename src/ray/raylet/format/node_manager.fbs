@@ -186,6 +186,7 @@ table WaitRequest {
   // The current task ID. If there are less than num_ready_objects local, then
   // this task is blocked.
   task_id: string;
+  suppress_reconstruction: bool;
 }
 
 table WaitReply {

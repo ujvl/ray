@@ -121,7 +121,8 @@ class RayletClient {
   /// \return ray::Status.
   ray::Status Wait(const std::vector<ObjectID> &object_ids, int num_returns,
                    int64_t timeout_milliseconds, bool wait_local,
-                   const TaskID &current_task_id, WaitResultPair *result);
+                   const TaskID &current_task_id, bool suppress_reconstruction,
+                   WaitResultPair *result);
 
   /// Push an error to the relevant driver.
   ///

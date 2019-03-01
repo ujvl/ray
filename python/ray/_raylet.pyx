@@ -258,7 +258,8 @@ cdef class RayletClient:
         check_status(self.client.get().NotifyUnblocked(current_task_id.data))
 
     def wait(self, object_ids, int num_returns, int64_t timeout_milliseconds,
-             c_bool wait_local, TaskID current_task_id):
+             c_bool wait_local, TaskID current_task_id,
+             c_bool suppress_reconstruction):
         cdef:
             WaitResultPair result
             c_vector[CObjectID] wait_ids
@@ -267,7 +268,9 @@ cdef class RayletClient:
             check_status(self.client.get().Wait(wait_ids, num_returns,
                                                 timeout_milliseconds,
                                                 wait_local,
-                                                current_task_id.data, &result))
+                                                current_task_id.data,
+                                                suppress_reconstruction,
+                                                &result))
         return (VectorToObjectIDs(result.first),
                 VectorToObjectIDs(result.second))
 

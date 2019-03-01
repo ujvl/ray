@@ -974,14 +974,15 @@ void NodeManager::ProcessWaitRequestMessage(
 
   const TaskID &current_task_id = from_flatbuf(*message->task_id());
   bool client_blocked = !required_object_ids.empty();
-  if (client_blocked) {
+  bool suppress_reconstruction = message->suppress_reconstruction();
+  if (client_blocked && !suppress_reconstruction) {
     HandleTaskBlocked(client, required_object_ids, current_task_id);
   }
 
   ray::Status status = object_manager_.Wait(
       object_ids, wait_ms, num_required_objects, wait_local,
-      [this, client_blocked, client, current_task_id](std::vector<ObjectID> found,
-                                                      std::vector<ObjectID> remaining) {
+      [this, client_blocked, client, current_task_id, suppress_reconstruction](
+          std::vector<ObjectID> found, std::vector<ObjectID> remaining) {
         // Write the data.
         flatbuffers::FlatBufferBuilder fbb;
         flatbuffers::Offset<protocol::WaitReply> wait_reply = protocol::CreateWaitReply(
@@ -993,7 +994,7 @@ void NodeManager::ProcessWaitRequestMessage(
                                  fbb.GetSize(), fbb.GetBufferPointer());
         if (status.ok()) {
           // The client is unblocked now because the wait call has returned.
-          if (client_blocked) {
+          if (client_blocked && !suppress_reconstruction) {
             HandleTaskUnblocked(client, current_task_id);
           }
         } else {
