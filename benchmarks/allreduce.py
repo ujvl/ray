@@ -271,6 +271,16 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         ]
         self._should_checkpoint = False
 
+        # Create the checkpoint directory.
+        checkpoint_dir = os.path.join(
+            CHECKPOINT_DIR, ray.worker.global_worker.task_driver_id.hex())
+        try:
+            os.mkdir(CHECKPOINT_DIR)
+        except FileExistsError:
+            pass
+        os.mkdir(checkpoint_dir)
+
+
     def finish(self, *outputs):
         super(CheckpointableRingAllReduceWorker, self).finish(*outputs)
         self._should_checkpoint = True
@@ -439,11 +449,24 @@ def main(redis_address, test_single_node, num_workers, data_size,
             }
             cluster = Cluster(initialize_head=True, head_node_args=node_kwargs)
             for i in range(num_workers):
-                node_kwargs["resources"] = {"Node{}".format(i): 1}
+                node_kwargs["resources"] = {"Node{}".format(i): 100}
                 cluster.add_node(**node_kwargs)
             redis_address = cluster.redis_address
 
-        ray.init(redis_address=redis_address, log_to_driver=False)
+        ray.init(redis_address=redis_address, log_to_driver=True)
+
+    node_resources = []
+    if test_local:
+        for worker_index in range(num_workers):
+            node_resources.append('Node{}'.format(worker_index))
+    else:
+        nodes = ray.global_state.client_table()
+        for node in nodes:
+            for resource in node['Resources']:
+                if 'Node' in resource:
+                    node_resources.append(resource)
+        node_resources = node_resources[:num_workers]
+    assert len(node_resources) == num_workers
 
     # Create the checkpoint directory.
     checkpoint_dir = os.path.join(
@@ -457,8 +480,9 @@ def main(redis_address, test_single_node, num_workers, data_size,
     # Create workers.
     workers = []
     for worker_index in range(num_workers):
+        actor_resources = {node_resources[worker_index]: 1}
         cls = ray.remote(
-            resources={'Node{}'.format(worker_index): 1},
+            resources=actor_resources,
             max_reconstructions=100)(CheckpointableRingAllReduceWorker)
         workers.append(
             cls.remote(worker_index, num_workers, data_size, checkpoint_dir))
@@ -469,10 +493,10 @@ def main(redis_address, test_single_node, num_workers, data_size,
             workers[i].add_remote_worker.remote(j, workers[j])
 
     # Ensure workers are assigned to unique nodes.
-    if not test_local and not test_single_node:
+    if not test_local:
         node_ips = ray.get(
-            [worker.node_address.remote() for worker in workers])
-        assert (len(set(node_ips)) == args.num_workers)
+            [worker.ip.remote() for worker in workers])
+        assert (len(set(node_ips)) == num_workers)
 
     def kill_node():
         if cluster is None:
