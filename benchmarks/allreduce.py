@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import signal
+import subprocess
 import json
 
 import numpy as np
@@ -278,7 +279,10 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             os.mkdir(CHECKPOINT_DIR)
         except FileExistsError:
             pass
-        os.mkdir(checkpoint_dir)
+        try:
+            os.mkdir(checkpoint_dir)
+        except FileExistsError:
+            pass
 
 
     def finish(self, *outputs):
@@ -499,22 +503,41 @@ def main(redis_address, test_single_node, num_workers, data_size,
         assert (len(set(node_ips)) == num_workers)
 
     def kill_node():
-        if cluster is None:
-            worker = workers[-1]
-            pid = ray.get(worker.get_pid.remote())
-            os.kill(pid, signal.SIGKILL)
+        if test_local:
+            if test_single_node:
+                worker = workers[-1]
+                pid = ray.get(worker.get_pid.remote())
+                os.kill(pid, signal.SIGKILL)
+            else:
+                print(node_kwargs)
+                node = cluster.list_all_nodes()[-1]
+                print("killing", node)
+                cluster.remove_node(node)
+                cluster.add_node(**node_kwargs)
         else:
-            print(node_kwargs)
-            node = cluster.list_all_nodes()[-1]
-            print("killing", node)
-            cluster.remove_node(node)
-            cluster.add_node(**node_kwargs)
+            nodes = ray.global_state.client_table()
+            node_resource = node_resources[-1]
+            nodes = [node for node in nodes if node_resource in node['Resources']]
+            assert len(nodes) == 1
+            node = nodes[0]
+            worker_ip = node['NodeManagerAddress']
+            head_ip, _ = redis_address.split(':')
+            command = [
+                    "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
+                    head_ip,
+                    worker_ip,
+                    node_resource,
+                    ]
+            subprocess.Popen(command)
 
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
-        fail_iteration = (i == num_iterations // 2 and test_failure
-                          and test_local)
+        fail_iteration = False
+        if (test_local and i == num_iterations // 2 and test_failure):
+            fail_iteration = True
+        elif (not test_local and i == num_iterations // 4 and test_failure):
+            fail_iteration = True
         allreduce(workers, fail_iteration, check_results, kill_node)
 
     if dump is not None:
