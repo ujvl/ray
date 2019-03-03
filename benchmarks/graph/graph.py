@@ -103,6 +103,11 @@ class Graph(object):
         return sub.batch_apply.remote(vertices, graph_context)
 
     def batch_apply_shuffle(self, f, vertex_batches, graph_context):
+        """
+        Applies function to batch of vertices and 
+        returns shuffled batches for next iteration.
+        (assuming they all belong to the same subgraph)
+        """
         assert len(vertex_batches)
         self.register_function(f)
         sub = self.subgraphs[self.subgraph_of(next(iter(vertex_batches[0])))]
@@ -145,6 +150,9 @@ class Graph(object):
     def calls(self):
         return ray.get([sub.num_calls.remote() for sub in self.subgraphs])
         # return sum(ray.get([sub.num_calls.remote() for sub in self.subgraphs]))
+
+    def storage_size(self):
+        return ray.get([sub.storage_size.remote() for sub in self.subgraphs])
 
 
 class Subgraph(object):
@@ -341,10 +349,14 @@ class Subgraph(object):
                     self.add_edge(src_vertex, dst_vertex)
                 if dst_subgraph_idx == self.my_idx:
                     self.add_vertex(dst_vertex)
+
         self.logger.info(
-                "[%s] subgraph size: |V|=%s,|E|=%s",
-                self.my_idx, self.num_vertices(), self.num_edges()
+            "[%s] subgraph size: |V|=%s,|E|=%s",
+            self.my_idx, self.num_vertices(), self.num_edges()
         )
+
+    def storage_size(self):
+        return sys.getsizeof(self.edges) + sys.getsizeof(self.state)
 
 
 def init_subgraph(node_name):

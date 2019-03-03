@@ -16,5 +16,5 @@ c=0.1
 $GRAPHBENCH/PaRMAT/Release/PaRMAT -nEdges $NUM_E -nVertices $NUM_V \
                                   -a $a -b $b -c $c \
                                   -noDuplicateEdges \
-                                  -noEdgeToSelf
+                                  -noEdgeToSelf \
                                   -output "$NUM_E"e_graph.txt
