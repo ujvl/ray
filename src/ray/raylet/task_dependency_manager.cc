@@ -331,6 +331,7 @@ void TaskDependencyManager::RemoveTasksAndRelatedObjects(
     task_dependencies_.erase(*it);
     // The task is no longer pending execution.
     pending_tasks_.erase(*it);
+    RAY_LOG(DEBUG) << "Driver exited, task no longer required" << *it;
   }
 
   // Cancel all of the objects that were required by the removed tasks.
@@ -338,6 +339,7 @@ void TaskDependencyManager::RemoveTasksAndRelatedObjects(
     TaskID creating_task_id = ComputeTaskId(object_id);
     required_tasks_.erase(creating_task_id);
     HandleRemoteDependencyCanceled(object_id);
+    RAY_LOG(DEBUG) << "Driver exited, object no longer required" << object_id;
   }
 
   // Make sure that the tasks in task_ids no longer have tasks dependent on
