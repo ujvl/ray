@@ -621,9 +621,8 @@ class GlobalState(object):
         """
         client_id_to_address = {}
         for client_info in ray.global_state.client_table():
-            client_id_to_address[client_info["ClientID"]] = "{}:{}".format(
-                client_info["NodeManagerAddress"],
-                client_info["ObjectManagerPort"])
+            client_id_to_address[client_info["ClientID"]] = "{}".format(
+                client_info["NodeManagerAddress"])
 
         all_events = []
 

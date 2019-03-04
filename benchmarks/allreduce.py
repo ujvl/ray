@@ -551,7 +551,10 @@ def main(redis_address, test_single_node, num_workers, data_size,
         allreduce(workers, fail_iteration, check_results, kill_node)
 
     if dump is not None:
-        ray.global_state.chrome_tracing_dump(filename=dump)
+        events = ray.global_state.chrome_tracing_dump()
+        events += ray.global_state.chrome_tracing_object_transfer_dump()
+        with open(dump, "w") as outfile:
+            json.dump(events, outfile)
 
     if test_local and not test_single_node:
         cluster.shutdown()
