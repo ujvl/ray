@@ -1,5 +1,7 @@
 #!/bin/bash
 
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
 NUM_RAYLETS=$1
 NUM_REDIS_SHARDS=${2:-1}
 #LINEAGE_POLICY=$2
@@ -17,14 +19,14 @@ else
     exit
 fi
 
-./stop_cluster.sh
+bash $DIR/stop_cluster.sh
 
 echo "Starting head with $NUM_REDIS_SHARDS Redis shards..."
-./start_head.sh $NUM_REDIS_SHARDS
+bash $DIR/start_head.sh $NUM_REDIS_SHARDS
 echo "Done starting head"
 
 echo "Starting workers $WORKER_IPS with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
-parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -O "StrictHostKeyChecking=no" -I 'bash -s - '$HEAD_IP < start_worker.sh
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -O "StrictHostKeyChecking=no" -I 'bash -s - '$HEAD_IP < $DIR/start_worker.sh
 echo "Done starting workers"
 
 #sleep 10
