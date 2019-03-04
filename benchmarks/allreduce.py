@@ -67,25 +67,33 @@ class WeightPartition(object):
             buffer_data = np.ones(self.buffer_size).astype(np.float32)
         # Cache the batches.
         self.batches = [None] * self.num_batches
+        # If self.committed[i] is True, then the contents of self.batches match
+        # those of self.buffer_data for batch i.
+        self.committed = [True] * self.num_batches
         self.set_weights(buffer_data)
 
     def set_weights(self, buffer_data):
+        self.buffer_data = buffer_data
         for i in range(len(self.batch_intervals)):
             s, e = self.batch_intervals[i]
             self.batches[i] = buffer_data[s:e]
 
     def get_weights(self):
-        buffer_data = np.zeros(self.buffer_size).astype(np.float32)
-        for i in range(len(self.batch_intervals)):
-            s, e = self.batch_intervals[i]
-            buffer_data[s:e] = self.batches[i]
-        return buffer_data
+        assert all(self.committed)
+        return self.buffer_data
 
     def get_partition(self, i):
         return self.batches[i]
 
     def set_partition(self, i, batch):
         self.batches[i] = batch
+        self.committed[i] = False
+
+    def commit_partition(self, i):
+        partition = self.get_partition(i)
+        s, e = self.batch_intervals[i]
+        self.buffer_data[s:e] = partition
+        self.committed[i] = True
 
     def add_partition(self, i, batch):
         self.batches[i] += batch
@@ -219,6 +227,7 @@ class RingAllReduceWorker(object):
         if not aggregate:
             # The sent or received chunk was fully reduced, so remember it.
             self.out_oids[index] = batch_id
+            self.weight_partition.commit_partition(index)
 
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(
@@ -229,16 +238,16 @@ class RingAllReduceWorker(object):
             # self_handle = self.workers[self.worker_index]
             # self_handle.finish.remote(*self.out_oids)
 
-            self.finish(*ray.get(self.out_oids))
+            self.finish()
 
-    def finish(self, *outputs):
+    def finish(self):
         debug("FINISH", self.num_iterations, ": worker", self.worker_index)
         # Store the concatenated data in the final output ObjectID, if one was
         # provided.
         if self.final_oid is not None:
             with ray.profiling.profile("concatenate_out"):
                 final_oid = ray.ObjectID(self.final_oid)
-                final_output = np.concatenate(outputs)
+                final_output = self.weight_partition.get_weights()
                 with ray.profiling.profile("store_out"):
                     ray.worker.global_worker.put_object(
                         final_oid, final_output)
@@ -335,9 +344,10 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # Restore the all-reduced data.
         for i, output in enumerate(outputs):
             self.weight_partition.set_partition(i, output)
+            self.weight_partition.commit_partition(i)
         # Restore the final object IDs indicating that this all-reduce has
         # finished.
-        self.finish(*outputs)
+        self.finish()
         self.num_iterations += 1
         self._should_checkpoint = False
 
