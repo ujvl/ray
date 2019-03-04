@@ -134,6 +134,9 @@ RAY_CONFIG(int, object_manager_repeated_push_delay_ms, 60000);
 /// chunks exceeds the number of available sending threads.
 RAY_CONFIG(uint64_t, object_manager_default_chunk_size, 1000000);
 
+RAY_CONFIG(int, object_manager_send_threads, 1);
+RAY_CONFIG(int, object_manager_receive_threads, 1);
+
 /// Number of workers per process
 RAY_CONFIG(int, num_workers_per_process, 1);
 

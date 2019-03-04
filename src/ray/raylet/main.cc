@@ -107,9 +107,8 @@ int main(int argc, char *argv[]) {
   object_manager_config.push_timeout_ms =
       RayConfig::instance().object_manager_push_timeout_ms();
 
-  int num_cpus = static_cast<int>(static_resource_conf["CPU"]);
-  object_manager_config.max_sends = std::max(1, num_cpus / 4);
-  object_manager_config.max_receives = std::max(1, num_cpus / 4);
+  object_manager_config.max_sends = RayConfig::instance().object_manager_send_threads();
+  object_manager_config.max_receives = RayConfig::instance().object_manager_receive_threads();
   object_manager_config.object_chunk_size =
       RayConfig::instance().object_manager_default_chunk_size();
 
