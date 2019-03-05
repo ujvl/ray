@@ -109,7 +109,7 @@ ray::Status ObjectManager::SubscribeObjDeleted(
   return ray::Status::OK();
 }
 
-ray::Status ObjectManager::Pull(const ObjectID &object_id) {
+ray::Status ObjectManager::Pull(const ObjectID &object_id, bool delay_pull) {
   RAY_LOG(DEBUG) << "Pull on " << client_id_ << " of object " << object_id;
   // Check if object is already local.
   if (local_objects_.count(object_id) != 0) {
@@ -127,7 +127,8 @@ ray::Status ObjectManager::Pull(const ObjectID &object_id) {
   // no ordering guarantee between notifications.
   return object_directory_->SubscribeObjectLocations(
       object_directory_pull_callback_id_, object_id,
-      [this](const ObjectID &object_id, const std::unordered_set<ClientID> &client_ids,
+      [this, delay_pull](const ObjectID &object_id, const
+             std::unordered_set<ClientID> &client_ids,
              bool created) {
         // Exit if the Pull request has already been fulfilled or canceled.
         auto it = pull_requests_.find(object_id);
@@ -151,17 +152,21 @@ ray::Status ObjectManager::Pull(const ObjectID &object_id) {
         } else {
           // New object locations were found.
           if (!it->second.timer_set) {
-            // The timer was not set, which means that we weren't trying any
-            // clients. We now have some clients to try, so begin trying to
-            // Pull from one.  If we fail to receive an object within the pull
-            // timeout, then this will try the rest of the clients in the list
-            // in succession.
-            if ((current_sys_time_ms() - it->second.start_time_ms) >= config_.pull_timeout_ms) {
-              TryPull(object_id);
+            if (delay_pull) {
+              // The timer was not set, which means that we weren't trying any
+              // clients. We now have some clients to try, so begin trying to
+              // Pull from one.  If we fail to receive an object within the pull
+              // timeout, then this will try the rest of the clients in the list
+              // in succession.
+              if ((current_sys_time_ms() - it->second.start_time_ms) >= config_.pull_timeout_ms) {
+                TryPull(object_id);
+              } else {
+                it->second.SetTimer(*main_service_, config_.pull_timeout_ms, [this, object_id]() {
+                    TryPull(object_id);
+                  });
+              }
             } else {
-              it->second.SetTimer(*main_service_, config_.pull_timeout_ms, [this, object_id]() {
-                  TryPull(object_id);
-                });
+              TryPull(object_id);
             }
           }
         }

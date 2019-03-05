@@ -1547,13 +1547,14 @@ void NodeManager::EnqueuePlaceableTask(const Task &task) {
   // a vector of TaskIDs. Trigger MoveTask internally.
   // Subscribe to the task's dependencies.
   static_cast<void>(task_dependency_manager_.SubscribeDependencies(
-      task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies()));
+      task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies(), /*delay_pull=*/true));
   // Assuming execution dependencies are only set for actor tasks, it is safe
   // to request fast reconstruction. This is because actor tasks are only
   // allowed to execute on the node where the actor lives.
   bool args_ready = task_dependency_manager_.SubscribeDependencies(
       task.GetTaskSpecification().TaskId(),
       task.GetTaskExecutionSpec().ExecutionDependencies(),
+      /*delay_pull=*/true,
       /*fast_reconstruction=*/true);
   // Enqueue the task. If all dependencies are available, then the task is queued
   // in the READY state, else the WAITING state.

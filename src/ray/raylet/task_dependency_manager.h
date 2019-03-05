@@ -55,6 +55,7 @@ class TaskDependencyManager {
   /// local.
   bool SubscribeDependencies(const TaskID &task_id,
                              const std::vector<ObjectID> &required_objects,
+                             bool delay_pull = false,
                              bool fast_reconstruction = false);
 
   /// Unsubscribe from the object dependencies required by this task. If the
@@ -124,6 +125,7 @@ class TaskDependencyManager {
   struct RequiredTask {
     std::unordered_map<ray::ObjectID, std::vector<ray::TaskID>> required_objects;
     bool fast_reconstruction;
+    bool delay_pull;
   };
 
   /// A struct to represent the object dependencies of a task.
@@ -155,7 +157,7 @@ class TaskDependencyManager {
   /// transfer or reconstruction. These are objects for which: (1) there is a
   /// subscribed task dependent on it, (2) the object is not local, and (3) the
   /// task that creates the object is not pending execution locally.
-  bool CheckObjectRequired(const ObjectID &object_id, bool *fast_reconstruction) const;
+  bool CheckObjectRequired(const ObjectID &object_id, bool *fast_reconstruction, bool *delay_pull) const;
   /// If the given object is required, then request that the object be made
   /// available through object transfer or reconstruction.
   void HandleRemoteDependencyRequired(const ObjectID &object_id);

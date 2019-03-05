@@ -22,7 +22,8 @@ bool TaskDependencyManager::CheckObjectLocal(const ObjectID &object_id) const {
 }
 
 bool TaskDependencyManager::CheckObjectRequired(const ObjectID &object_id,
-                                                bool *fast_reconstruction) const {
+                                                bool *fast_reconstruction,
+                                                bool *delay_pull) const {
   const TaskID task_id = ComputeTaskId(object_id);
   auto task_entry = required_tasks_.find(task_id);
   // If there are no subscribed tasks that are dependent on the object, then do
@@ -46,26 +47,30 @@ bool TaskDependencyManager::CheckObjectRequired(const ObjectID &object_id,
   if (fast_reconstruction) {
     *fast_reconstruction = task_entry->second.fast_reconstruction;
   }
+  if (delay_pull) {
+    *delay_pull = task_entry->second.delay_pull;
+  }
   return true;
 }
 
 void TaskDependencyManager::HandleRemoteDependencyRequired(const ObjectID &object_id) {
   bool fast_reconstruction = false;
-  bool required = CheckObjectRequired(object_id, &fast_reconstruction);
+  bool delay_pull = false;
+  bool required = CheckObjectRequired(object_id, &fast_reconstruction, &delay_pull);
   // If the object is required, then try to make the object available locally.
   if (required) {
     auto inserted = required_objects_.insert(object_id);
     if (inserted.second) {
       // If we haven't already, request the object manager to pull it from a
       // remote node.
-      RAY_CHECK_OK(object_manager_.Pull(object_id));
+      RAY_CHECK_OK(object_manager_.Pull(object_id, delay_pull));
       reconstruction_policy_.ListenAndMaybeReconstruct(object_id, fast_reconstruction);
     }
   }
 }
 
 void TaskDependencyManager::HandleRemoteDependencyCanceled(const ObjectID &object_id) {
-  bool required = CheckObjectRequired(object_id, nullptr);
+  bool required = CheckObjectRequired(object_id, nullptr, nullptr);
   // If the object is no longer required, then cancel the object.
   if (!required) {
     auto it = required_objects_.find(object_id);
@@ -147,6 +152,7 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectMissing(
 
 bool TaskDependencyManager::SubscribeDependencies(
     const TaskID &task_id, const std::vector<ObjectID> &required_objects,
+    bool delay_pull,
     bool fast_reconstruction) {
   auto &task_entry = task_dependencies_[task_id];
 
@@ -167,6 +173,9 @@ bool TaskDependencyManager::SubscribeDependencies(
       required_task.required_objects[object_id].push_back(task_id);
       if (fast_reconstruction) {
         required_task.fast_reconstruction = true;
+      }
+      if (delay_pull) {
+        required_task.delay_pull = true;
       }
     }
   }

@@ -62,7 +62,7 @@ struct LocalObjectInfo {
 
 class ObjectManagerInterface {
  public:
-  virtual ray::Status Pull(const ObjectID &object_id) = 0;
+  virtual ray::Status Pull(const ObjectID &object_id, bool delay_pull) = 0;
   virtual void CancelPull(const ObjectID &object_id) = 0;
   virtual ~ObjectManagerInterface(){};
 };
@@ -115,7 +115,7 @@ class ObjectManager : public ObjectManagerInterface {
   ///
   /// \param object_id The object's object id.
   /// \return Status of whether the pull request successfully initiated.
-  ray::Status Pull(const ObjectID &object_id);
+  ray::Status Pull(const ObjectID &object_id, bool delay_pull = false);
 
   /// Try to Pull an object from one of its expected client locations. If there
   /// are more client locations to try after this attempt, then this method
