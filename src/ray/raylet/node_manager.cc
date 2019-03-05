@@ -630,7 +630,9 @@ void NodeManager::DispatchTasks(
       }
     }
   }
-  local_queues_.RemoveTasks(removed_task_ids);
+  // Move the assigned tasks to the SWAP queue so that we remember that we
+  // have them queued locally.
+  local_queues_.MoveTasks(removed_task_ids, TaskState::READY, TaskState::SWAP);
 }
 
 void NodeManager::ProcessClientMessage(
@@ -1690,6 +1692,8 @@ bool NodeManager::AssignTask(const Task &task) {
             RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
                              << " This is most likely due to reconstruction.";
           }
+          // Remove the task from the SWAP queue.
+          local_queues_.RemoveTask(spec.TaskId());
           // Mark the task as running.
           // (See design_docs/task_states.rst for the state transition diagram.)
           local_queues_.QueueTasks({assigned_task}, TaskState::RUNNING);
