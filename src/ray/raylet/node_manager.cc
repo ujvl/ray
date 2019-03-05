@@ -2173,8 +2173,10 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
                 for (int j = 0; j < count; j++) {
                   ObjectID argument_id = spec.ArgId(i, j);
                   bool is_put = ComputeObjectIndex(argument_id) < 0;
-                  // If the argument is local, then push it to the receiving node.
-                  if (task_dependency_manager_.CheckObjectLocal(argument_id) && is_put) {
+                  // If the argument was a put, we assume it was done by the
+                  // parent task. Push it to the receiving node. It may not be
+                  // local yet.
+                  if (is_put) {
                     object_manager_.Push(argument_id, node_id);
                   }
                 }
