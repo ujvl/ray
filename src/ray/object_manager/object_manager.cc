@@ -700,6 +700,8 @@ void ObjectManager::WaitComplete(const UniqueID &wait_id) {
 
 std::shared_ptr<SenderConnection> ObjectManager::CreateSenderConnection(
     ConnectionPool::ConnectionType type, RemoteConnectionInfo info) {
+  RAY_LOG(DEBUG) << "Creating sender connection to " << info.client_id << " at " << info.ip << ":" << info.port;
+  auto start_ms = current_sys_time_ms();
   std::shared_ptr<SenderConnection> conn =
       SenderConnection::Create(*main_service_, info.client_id, info.ip, info.port);
   if (conn == nullptr) {
@@ -719,6 +721,7 @@ std::shared_ptr<SenderConnection> ObjectManager::CreateSenderConnection(
         static_cast<int64_t>(object_manager_protocol::MessageType::ConnectClient),
         fbb.GetSize(), fbb.GetBufferPointer()));
   }
+  RAY_LOG(DEBUG) << "Created sender connection to " << info.client_id << " in " << current_sys_time_ms() - start_ms;
   return conn;
 }
 

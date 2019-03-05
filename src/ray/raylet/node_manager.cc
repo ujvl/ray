@@ -2093,14 +2093,9 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
       const auto state = local_queues_.GetTaskState(parent_task_id);
       const auto &parent_task = local_queues_.GetTaskOfState(parent_task_id, state);
       if (parent_task.GetTaskExecutionSpec().NumReconstructions() == 0) {
-        RAY_LOG(DEBUG) << "PUSH " << task_id << " submitted by " << parent_task_id;
         push = true;
-      } else {
-        RAY_LOG(DEBUG) << "SKIPPING PUSH " << task_id << " submitted by "
-                       << parent_task_id;
       }
     } else {
-      RAY_LOG(DEBUG) << "PUSH XXX " << task_id << " submitted by " << parent_task_id;
       push = true;
     }
   }
