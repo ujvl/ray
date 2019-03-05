@@ -149,10 +149,21 @@ ray::Status ObjectManager::Pull(const ObjectID &object_id) {
             it->second.timer_set = false;
           }
         } else {
-          // New object locations were found, so begin trying to pull from a
-          // client. This will be called every time a new client location
-          // appears.
-          TryPull(object_id);
+          // New object locations were found.
+          if (!it->second.timer_set) {
+            // The timer was not set, which means that we weren't trying any
+            // clients. We now have some clients to try, so begin trying to
+            // Pull from one.  If we fail to receive an object within the pull
+            // timeout, then this will try the rest of the clients in the list
+            // in succession.
+            if ((current_sys_time_ms() - it->second.start_time_ms) >= config_.pull_timeout_ms) {
+              TryPull(object_id);
+            } else {
+              it->second.SetTimer(*main_service_, config_.pull_timeout_ms, [this, object_id]() {
+                  TryPull(object_id);
+                });
+            }
+          }
         }
       });
 }
@@ -205,29 +216,9 @@ void ObjectManager::TryPull(const ObjectID &object_id) {
   // If there are more clients to try, try them in succession, with a timeout
   // in between each try.
   if (!it->second.client_locations.empty()) {
-    if (it->second.retry_timer == nullptr) {
-      // Set the timer if we haven't already.
-      it->second.retry_timer = std::unique_ptr<boost::asio::deadline_timer>(
-          new boost::asio::deadline_timer(*main_service_));
-    }
-
-    // Wait for a timeout. If we receive the object or a caller Cancels the
-    // Pull within the timeout, then nothing will happen. Otherwise, the timer
-    // will fire and the next client in the list will be tried.
-    boost::posix_time::milliseconds retry_timeout(config_.pull_timeout_ms);
-    it->second.retry_timer->expires_from_now(retry_timeout);
-    it->second.retry_timer->async_wait(
-        [this, object_id](const boost::system::error_code &error) {
-          if (!error) {
-            // Try the Pull from the next client.
-            TryPull(object_id);
-          } else {
-            // Check that the error was due to the timer being canceled.
-            RAY_CHECK(error == boost::asio::error::operation_aborted);
-          }
+    it->second.SetTimer(*main_service_, config_.pull_timeout_ms, [this, object_id]() {
+          TryPull(object_id);
         });
-    // Record that we set the timer until the next attempt.
-    it->second.timer_set = true;
   } else {
     // The timer is not reset since there are no more clients to try. Go back
     // to waiting for more notifications. Once we receive a new object location
