@@ -1768,6 +1768,8 @@ void NodeManager::FinishAssignedTask(Worker &worker) {
 }
 
 ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &task) {
+  // TODO: Check the actor table based on the number of times this task has been
+  // executed.
   RAY_CHECK(task.GetTaskSpecification().IsActorCreationTask());
   auto actor_id = task.GetTaskSpecification().ActorCreationId();
   auto actor_entry = actor_registry_.find(actor_id);
@@ -1785,10 +1787,24 @@ ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &ta
     new_actor_data.driver_id = task.GetTaskSpecification().DriverId().binary();
     new_actor_data.max_reconstructions =
         task.GetTaskSpecification().MaxActorReconstructions();
-    // This is the first time that the actor has been created, so the number
-    // of remaining reconstructions is the max.
-    new_actor_data.remaining_reconstructions =
-        task.GetTaskSpecification().MaxActorReconstructions();
+    int num_executions = task.GetTaskExecutionSpec().NumExecutions();
+    if (num_executions > 1) {
+      // This actor has been created before. Use the number of times that it's
+      // been executed to determine what reconstruction attempt this is.
+      // NOTE(swang): There is a race condition here. If the original creator
+      // of the actor fails to flush the task spec to the GCS in time, then we
+      // will not have the correct number of reconstructions. One way to
+      // correct this by always reading the number of log entries in the actor
+      // table.
+      new_actor_data.remaining_reconstructions =
+          (task.GetTaskSpecification().MaxActorReconstructions() -
+           (num_executions - 1));
+    } else {
+      // This is the first time that the actor has been created, so the number
+      // of remaining reconstructions is the max.
+      new_actor_data.remaining_reconstructions =
+          task.GetTaskSpecification().MaxActorReconstructions();
+    }
   } else {
     // If we've already seen this actor, it means that this actor was reconstructed.
     // Thus, its previous state must be RECONSTRUCTING.
