@@ -5,7 +5,6 @@ from __future__ import print_function
 import argparse
 import logging
 import random
-import statistics
 import string
 import sys
 import time

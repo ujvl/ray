@@ -136,6 +136,11 @@ def benchmark_queue(rounds, latency_file,
         out_queue = None
         if i < num_queues-1:
             out_queue = BatchedQueue(
+                "ID",           # Dummy channel id
+                "SRC_OP_ID",    # Dummy source operator id
+                0,              # Dummy source instance id
+                "DST_OP_ID",    # Dummy destination operator id
+                0,              # Dummy destination instance id
                 max_size=max_queue_size,
                 max_batch_size=max_batch_size,
                 max_batch_time=batch_timeout,
