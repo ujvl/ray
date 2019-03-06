@@ -27,13 +27,20 @@ class Wikipedia(object):
         # Titles in this file will be as queries
         self.title_file = title_file
         # TODO (john): Handle possible exception here
-        self.title_reader = iter(list(open(self.title_file, "r").readlines()))
+        self.lines = list(open(self.title_file, "r").readlines())
+        self.title_reader = None
         self.done = False
         self.article_done = True
-        self.sentences = iter([])
+        self.sentences = None
+        self.first = True
 
     # Returns next sentence from a wikipedia article
     def get_next(self):
+        if self.first: # Could have done this during initilization
+        # but list iterators cannot be pickled in python 2.7
+            self.title_reader = iter(self.lines)
+            self.sentences = iter([])
+            self.first = False
         if self.done:
             return None     # Source exhausted
         while True:
@@ -50,7 +57,8 @@ class Wikipedia(object):
                 self.sentences = iter(article.split("."))
                 self.article_done = False
             try: # Try next sentence
-                sentence = next(self.sentences)
+                sentence = next(self.sentences).encode("ascii",
+                                                       errors="ignore")
                 logger.debug("Next sentence: {}".format(sentence))
                 return sentence
             except StopIteration:

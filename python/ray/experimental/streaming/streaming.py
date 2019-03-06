@@ -339,8 +339,8 @@ class Environment(object):
                                               dst_operator, i, j)
                         entry.append(channel)
             elif p_scheme.strategy == PStrategy.Rescale:
-                channels_per_instance = math.ceil(
-                                num_dest_instances / operator.num_instances)
+                channels_per_instance = math.trunc(math.ceil(
+                                num_dest_instances / operator.num_instances))
                 index = 0
                 for i in range(operator.num_instances):
                     for _ in range(channels_per_instance):
