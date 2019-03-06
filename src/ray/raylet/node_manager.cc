@@ -181,8 +181,8 @@ ray::Status NodeManager::RegisterGcs() {
                                                           driver_table_handler, nullptr));
 
   // Start sending heartbeats to the GCS.
-  last_heartbeat_at_ms_ = current_time_ms();
-  last_debug_dump_at_ms_ = current_time_ms();
+  last_heartbeat_at_ms_ = current_sys_time_ms();
+  last_debug_dump_at_ms_ = current_sys_time_ms();
   Heartbeat();
   // Start the timer that gets object manager profiling information and sends it
   // to the GCS.
@@ -238,7 +238,7 @@ void NodeManager::HandleDriverTableUpdate(
 }
 
 void NodeManager::Heartbeat() {
-  uint64_t now_ms = current_time_ms();
+  uint64_t now_ms = current_sys_time_ms();
   uint64_t interval = now_ms - last_heartbeat_at_ms_;
   if (interval > RayConfig::instance().num_heartbeats_warning() *
                      RayConfig::instance().heartbeat_timeout_milliseconds()) {
@@ -289,7 +289,7 @@ void NodeManager::Heartbeat() {
 }
 
 void NodeManager::GetObjectManagerProfileInfo() {
-  int64_t start_time_ms = current_time_ms();
+  int64_t start_time_ms = current_sys_time_ms();
 
   auto profile_info = object_manager_.GetAndResetProfilingInfo();
 
@@ -310,7 +310,7 @@ void NodeManager::GetObjectManagerProfileInfo() {
         GetObjectManagerProfileInfo();
       });
 
-  int64_t interval = current_time_ms() - start_time_ms;
+  int64_t interval = current_sys_time_ms() - start_time_ms;
   if (interval > RayConfig::instance().handler_warning_timeout_ms()) {
     RAY_LOG(WARNING) << "GetObjectManagerProfileInfo handler took " << interval << " ms.";
   }
@@ -2193,7 +2193,7 @@ void NodeManager::DumpDebugState() {
 
 std::string NodeManager::DebugString() const {
   std::stringstream result;
-  uint64_t now_ms = current_time_ms();
+  uint64_t now_ms = current_sys_time_ms();
   result << "NodeManager:";
   result << "\nInitialConfigResources: " << initial_config_.resource_config.ToString();
   result << "\nClusterResources:";
@@ -2232,7 +2232,7 @@ std::string NodeManager::DebugString() const {
   for (auto &pair : remote_server_connections_) {
     result << "\n" << pair.first.hex() << ": " << pair.second->DebugString();
   }
-  result << "\nDebugString() time ms: " << (current_time_ms() - now_ms);
+  result << "\nDebugString() time ms: " << (current_sys_time_ms() - now_ms);
   return result.str();
 }
 

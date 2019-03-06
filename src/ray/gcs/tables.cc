@@ -5,6 +5,19 @@
 #include "ray/ray_config.h"
 #include "ray/util/util.h"
 
+#define START_HANDLER() int64_t start_ms = current_sys_time_ms();
+#define END_HANDLER(OP, ID) \
+  { \
+    int64_t interval = current_sys_time_ms() - start_ms; \
+    if (interval > RayConfig::instance().handler_warning_timeout_ms()) { \
+      RAY_LOG(WARNING) << "[GCS] " OP " to" \
+      << " table " << EnumNameTablePrefix(prefix_) \
+      << " key " << ID \
+      << " took " << interval << " ms."; \
+    } \
+  } \
+
+
 namespace {
 
 static const std::string kTableAppendCommand = "RAY.TABLE_APPEND";
@@ -42,12 +55,17 @@ Status Log<ID, Data>::Append(const JobID &job_id, const ID &id,
                              std::shared_ptr<DataT> &dataT, const WriteCallback &done) {
   num_appends_++;
   auto callback = [this, id, dataT, done](const std::string &data) {
+    START_HANDLER();
+
     // If data is not empty, then Redis failed to append the entry.
     RAY_CHECK(data.empty()) << "TABLE_APPEND command failed: " << data;
 
     if (done != nullptr) {
       (done)(client_, id, *dataT);
     }
+
+    END_HANDLER("Append", id);
+
     return true;
   };
   flatbuffers::FlatBufferBuilder fbb;
@@ -64,6 +82,8 @@ Status Log<ID, Data>::AppendAt(const JobID &job_id, const ID &id,
                                const WriteCallback &failure, int log_length) {
   num_appends_++;
   auto callback = [this, id, dataT, done, failure](const std::string &data) {
+    START_HANDLER();
+
     if (data.empty()) {
       if (done != nullptr) {
         (done)(client_, id, *dataT);
@@ -73,6 +93,9 @@ Status Log<ID, Data>::AppendAt(const JobID &job_id, const ID &id,
         (failure)(client_, id, *dataT);
       }
     }
+
+    END_HANDLER("AppendAt", id);
+
     return true;
   };
   flatbuffers::FlatBufferBuilder fbb;
@@ -87,6 +110,7 @@ template <typename ID, typename Data>
 Status Log<ID, Data>::Lookup(const JobID &job_id, const ID &id, const Callback &lookup) {
   num_lookups_++;
   auto callback = [this, id, lookup](const std::string &data) {
+    START_HANDLER();
     if (lookup != nullptr) {
       std::vector<DataT> results;
       if (!data.empty()) {
@@ -101,6 +125,9 @@ Status Log<ID, Data>::Lookup(const JobID &job_id, const ID &id, const Callback &
       }
       lookup(client_, id, results);
     }
+
+    END_HANDLER("Lookup", id);
+
     return true;
   };
   std::vector<uint8_t> nil;
@@ -124,6 +151,8 @@ Status Log<ID, Data>::Subscribe(const JobID &job_id, const ClientID &client_id,
     } else {
       // Data is provided. This is the callback for a message.
       if (subscribe != nullptr) {
+        START_HANDLER();
+
         // Parse the notification.
         auto root = flatbuffers::GetRoot<GcsTableEntry>(data.data());
         ID id;
@@ -138,6 +167,8 @@ Status Log<ID, Data>::Subscribe(const JobID &job_id, const ClientID &client_id,
           results.emplace_back(std::move(result));
         }
         subscribe(client_, id, results);
+
+        END_HANDLER("Subscribe", id);
       }
     }
     // We do not delete the callback after calling it since there may be
@@ -213,9 +244,12 @@ Status Table<ID, Data>::Add(const JobID &job_id, const ID &id,
                             std::shared_ptr<DataT> &dataT, const WriteCallback &done) {
   num_adds_++;
   auto callback = [this, id, dataT, done](const std::string &data) {
+    START_HANDLER();
     if (done != nullptr) {
       (done)(client_, id, *dataT);
     }
+    END_HANDLER("Add", id);
+
     return true;
   };
   flatbuffers::FlatBufferBuilder fbb;
