@@ -2,28 +2,41 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import pickle
 import hashlib
 import logging
 import sys
+import uuid
 
 from ray.experimental.streaming.operator import PStrategy
 from ray.experimental.streaming.batched_queue import BatchedQueue
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger.setLevel("INFO")
+
+# Generates UUIDs
+def _generate_uuid():
+    return uuid.uuid4()
 
 # Forward and broadcast stream partitioning strategies
 forward_broadcast_strategies = [PStrategy.Forward, PStrategy.Broadcast]
 
+# Round robin and rescale partitioning strategies (default)
+round_robin_strategies = [PStrategy.RoundRobin, PStrategy.Rescale]
 
 # Used to choose output channel in case of hash-based shuffling
+# TODO (john): Replace pickle
 def _hash(value):
     if isinstance(value, int):
         return value
-    try:
+    elif isinstance(value,str):
         return int(hashlib.sha1(value.encode("utf-8")).hexdigest(), 16)
-    except AttributeError:
-        return int(hashlib.sha1(value).hexdigest(), 16)
+    else: # All other data types
+        try:  # Try hashing the value
+            return int(hashlib.sha1(value).hexdigest(), 16)
+        except TypeError:  # Serialize object and hash
+            pickled = pickle.dumps(value)
+            return int(hashlib.sha1(pickled).hexdigest(), 16)
 
 
 # A data channel is a batched queue between two
@@ -41,19 +54,39 @@ class DataChannel(object):
          queue (BatchedQueue): The batched queue used for data movement.
     """
 
-    def __init__(self, env, src_operator_id, dst_operator_id, src_instance_id,
-                 dst_instance_id):
-        self.env = env
+    def __init__(self, env_config, src_operator_id, dst_operator_id,
+                 src_instance_id, dst_instance_id):
+        self.queue_config = env_config.queue_config
         self.src_operator_id = src_operator_id
         self.dst_operator_id = dst_operator_id
         self.src_instance_id = src_instance_id
         self.dst_instance_id = dst_instance_id
+        self.src_actor_id = (self.src_operator_id, self.src_instance_id)
+        self.dst_actor_id = (self.dst_operator_id, self.dst_instance_id)
+        self.id = _generate_uuid()
+        self.source_actor = None
+        self.destination_actor = None
+        # Construct queue
         self.queue = BatchedQueue(
-            max_size=self.env.config.queue_config.max_size,
-            max_batch_size=self.env.config.queue_config.max_batch_size,
-            max_batch_time=self.env.config.queue_config.max_batch_time,
-            prefetch_depth=self.env.config.queue_config.prefetch_depth,
-            background_flush=self.env.config.queue_config.background_flush)
+            self.id,
+            self.src_operator_id, self.src_instance_id,
+            self.dst_operator_id, self.dst_instance_id,
+            max_size=self.queue_config.max_size,
+            max_batch_size=self.queue_config.max_batch_size,
+            max_batch_time=self.queue_config.max_batch_time,
+            prefetch_depth=self.queue_config.prefetch_depth,
+            background_flush=self.queue_config.background_flush,
+            task_based=env_config.task_based)
+
+    # Registers source actor handle
+    def register_source_actor(self, actor_handle):
+        self.source_actor = actor_handle
+        self.queue.register_source_actor(actor_handle)
+
+    # Registers destination actor handle
+    def register_destination_actor(self, actor_handle):
+        self.destination_actor = actor_handle
+        self.queue.register_destination_actor(actor_handle)
 
     def __repr__(self):
         return "({},{},{},{})".format(
@@ -85,6 +118,7 @@ class DataInput(object):
         self.closed = [False] * len(
             self.input_channels)  # Tracks the channels that have been closed
         self.all_closed = False
+        self.closed_channels = []  # Used for task-based execution
 
     # Fetches records from input channels in a round-robin fashion
     # TODO (john): Make sure the instance is not blocked on any of its input
@@ -119,6 +153,12 @@ class DataInput(object):
             # Returns 'None' iff all input channels are 'closed'
             return record
 
+    # Registers an input channel as 'closed'
+    # Returns True if all channels are closed, False otherwise
+    def _close_channel(self, channel_id):
+        assert channel_id not in self.closed_channels
+        self.closed_channels.append(channel_id)
+        return len(self.closed_channels) == self.max_index
 
 # Selects output channel(s) and pushes data
 class DataOutput(object):
@@ -143,13 +183,12 @@ class DataOutput(object):
 
     def __init__(self, channels, partitioning_schemes):
         self.key_selector = None
-        self.round_robin_indexes = [0]
         self.partitioning_schemes = partitioning_schemes
         # Prepare output -- collect channels by type
         self.forward_channels = []  # Forward and broadcast channels
         slots = sum(1 for scheme in self.partitioning_schemes.values()
-                    if scheme.strategy == PStrategy.RoundRobin)
-        self.round_robin_channels = [[]] * slots  # RoundRobin channels
+                    if scheme.strategy in round_robin_strategies)
+        self.round_robin_channels = [[]] * slots    # RoundRobin channels
         self.round_robin_indexes = [-1] * slots
         slots = sum(1 for scheme in self.partitioning_schemes.values()
                     if scheme.strategy == PStrategy.Shuffle)
@@ -187,14 +226,25 @@ class DataOutput(object):
                 self.shuffle_key_channels[pos].append(channel)
                 if pos == index_2:
                     index_2 += 1
-            elif strategy == PStrategy.RoundRobin:
+            elif strategy in round_robin_strategies :
                 pos = round_robin_destinations.setdefault(
                     channel.dst_operator_id, index_3)
                 self.round_robin_channels[pos].append(channel)
                 if pos == index_3:
                     index_3 += 1
-            else:  # TODO (john): Add support for other strategies
+            else:  # TODO (john): Add support for custom partitioning
                 sys.exit("Unrecognized or unsupported partitioning strategy.")
+        # Change round robin to simple forward if there is only one channel
+        slots_to_remove = []
+        slot = 0
+        for channels in self.round_robin_channels:
+            if len(channels) == 1:
+                self.forward_channels.extend(channels)
+                slots_to_remove.append(slot)
+            slot += 1
+        for slot in slots_to_remove:
+            self.round_robin_channels.pop(slot)
+            self.round_robin_indexes.pop(slot)
         # A KeyedDataStream can only be shuffled by key
         assert not (self.shuffle_exists and self.shuffle_key_exists)
 
@@ -268,10 +318,10 @@ class DataOutput(object):
         for channels in self.round_robin_channels:
             self.round_robin_indexes[index] += 1
             if self.round_robin_indexes[index] == len(channels):
-                self.round_robin_indexes[index] = 0  # Reset index
+                self.round_robin_indexes[index] = 0     # Reset index
             channel = channels[self.round_robin_indexes[index]]
             logger.debug("[writer] Push record '{}' to channel {}".format(
-                record, channel))
+                                                            record, channel))
             channel.queue.put_next(record)
             index += 1
         # Hash-based shuffling by key
@@ -293,13 +343,14 @@ class DataOutput(object):
                 logger.debug("[shuffle] Push record '{}' to channel {}".format(
                     record, channel))
                 channel.queue.put_next(record)
-        else:  # TODO (john): Handle rescaling
+        else:  # TODO (john): Add support for custom partitioning
             pass
 
     # Pushes a list of records to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
     def _push_all(self, records):
+        assert isinstance(records,list)
         # Forward records
         for record in records:
             for channel in self.forward_channels:
@@ -328,7 +379,7 @@ class DataOutput(object):
                         "[shuffle] Push record '{}' to channel {}".format(
                             record, channel))
                     channel.queue.put_next(record)
-        else:  # TODO (john): Handle rescaling
+        else:  # TODO (john): Add support for custom partitioning
             pass
 
 

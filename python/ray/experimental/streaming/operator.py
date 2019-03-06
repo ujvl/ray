@@ -6,8 +6,7 @@ import enum
 import logging
 
 logger = logging.getLogger(__name__)
-logger.setLevel("DEBUG")
-
+logging.basicConfig(level=logging.INFO)
 
 # Stream partitioning schemes
 class PScheme(object):
@@ -45,6 +44,8 @@ class OpType(enum.Enum):
     ReadTextFile = 9
     Reduce = 10
     Sum = 11
+    Union = 12
+    WriteTextFile = 13
     # ...
 
 
@@ -56,8 +57,8 @@ class Operator(object):
                  name="",
                  logic=None,
                  num_instances=1,
-                 other=None,
-                 state_actor=None):
+                 logging=False,
+                 other=None):
         self.id = id
         self.type = type
         self.name = name
@@ -65,8 +66,8 @@ class Operator(object):
         self.num_instances = num_instances
         # One partitioning strategy per downstream operator (default: forward)
         self.partitioning_strategies = {}
+        self.logging = logging
         self.other_args = other  # Depends on the type of the operator
-        self.state_actor = state_actor  # Actor to query state
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -99,7 +100,126 @@ class Operator(object):
         log = "Operator<\nID = {}\nName = {}\nType = {}\n"
         log += "Logic = {}\nNumber_of_Instances = {}\n"
         log += "Partitioning_Scheme = {}\nOther_Args = {}>\n"
-        logger.debug(
+        logger.info(
             log.format(self.id, self.name, self.type, self.logic,
                        self.num_instances, self.partitioning_strategies,
                        self.other_args))
+
+
+class KeyByOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 key_selector,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.key_selector = key_selector
+
+
+class SumOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 attribute_selector,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.attribute_selector = attribute_selector
+
+
+class UnionOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 other_inputs,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.other_inputs = other_inputs
+
+
+class TimeWindowOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 length,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.length = length  # ms
+
+
+class CustomSourceOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 source_object,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.source = source_object
+
+
+class ReadTextFileOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 filepath,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.filepath = filepath
+
+
+class WriteTextFileOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 filename_prefix,
+                 name="",
+                 logic=None,
+                 num_instances=1):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances)
+        self.filename_prefix = filename_prefix
