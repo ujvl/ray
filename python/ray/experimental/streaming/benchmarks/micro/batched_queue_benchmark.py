@@ -276,7 +276,7 @@ if __name__ == "__main__":
             break
         count += 1
     logger.info("Ideal throughput: {}".format(count / (time.time()-start)))
-
+    
     logger.info("== Testing Batched Queue Chaining ==")
     start = time.time()
     benchmark_queue(rounds, latency_filename,
@@ -286,4 +286,5 @@ if __name__ == "__main__":
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
                         num_queues, max_reads_per_second)
+    ray.global_state.chrome_tracing_dump("dumb.json")
     logger.info("Elapsed time: {}".format(time.time()-start))
