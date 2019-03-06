@@ -69,14 +69,16 @@ class WeightPartition(object):
         self.batches = [None] * self.num_batches
         # If self.committed[i] is True, then the contents of self.batches match
         # those of self.buffer_data for batch i.
-        self.committed = [True] * self.num_batches
+        self.committed = [False] * self.num_batches
         self.set_weights(buffer_data)
+        self.buffer_data = buffer_data
+        self.committed = [True] * self.num_batches
 
     def set_weights(self, buffer_data):
-        self.buffer_data = buffer_data
         for i in range(len(self.batch_intervals)):
             s, e = self.batch_intervals[i]
             self.batches[i] = buffer_data[s:e]
+            self.committed[i] = False
 
     def get_weights(self):
         assert all(self.committed)
@@ -151,16 +153,19 @@ class RingAllReduceWorker(object):
         assert not self.execute_received
 
         # Update our state.
-        with ray.profiling.profile("init_weights"):
-            input_data = np.copy(input_data)
-            input_data.flags.writeable = True
-            self.weight_partition.set_weights(input_data)
         self.execute_received = True
         self.done_oid = done_oid
         self.final_oid = final_oid
 
+        self.weight_partition.set_weights(input_data)
         # Send the first chunk to our receiver.
         self.send(self.worker_index, True)
+
+        with ray.profiling.profile("init_weights"):
+            input_data = np.copy(input_data)
+            input_data.flags.writeable = True
+            self.weight_partition.set_weights(input_data)
+
         # Resend any buffered data that was received before the allreduce
         # started.
         while self.receives:
