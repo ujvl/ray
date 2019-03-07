@@ -191,9 +191,9 @@ def benchmark_queue(rounds, latency_file,
     result.append((-1,[],source_throughputs))  # Use -1 as the source id
 
     # Write log files
-    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
         rounds, sample_period,
-        record_type, record_size, record_type,
+        record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
         background_flush, max_reads_per_second, num_queues
     )

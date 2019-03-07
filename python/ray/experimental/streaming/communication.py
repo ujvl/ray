@@ -364,7 +364,7 @@ class DataOutput(object):
             pass
 
         if self.logging:  # Log throughput
-            self.__log(1)
+            self.__log(batch_size=1)
 
     # Pushes a list of records to the output
     # Each individual output queue flushes batches to plasma periodically
@@ -403,7 +403,7 @@ class DataOutput(object):
             pass
 
         if self.logging:  # Log throughput
-            self.__log(len(records))
+            self.__log(batch_size=len(records))
 
     # Logs throughput
     def __log(self, batch_size=0, force=False):

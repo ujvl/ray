@@ -18,7 +18,7 @@ from ray.experimental.streaming.operator import PScheme, PStrategy
 import ray.experimental.streaming.operator_instance as operator_instance
 
 logger = logging.getLogger(__name__)
-logger.setLevel("DEBUG")
+logger.setLevel("INFO")
 
 
 # Generates UUIDs
