@@ -8,7 +8,6 @@ import time
 import wikipedia
 
 import ray
-import ray.experimental.signal as signal
 from ray.experimental.streaming.streaming import Environment
 from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.operator import OpType, PStrategy
@@ -43,6 +42,7 @@ if __name__ == "__main__":
     input_file = str(args.input_file)
 
     ray.init()
+
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
     ray.register_custom_serializer(OpType, use_pickle=True)
     ray.register_custom_serializer(PStrategy, use_pickle=True)
@@ -60,7 +60,6 @@ if __name__ == "__main__":
     start = time.time()
     # dataflow is a handle to the running dataflow
     dataflow = env.execute()
-
     # Get a snapshot of rolling sum's state
     sum_state = ray.get(dataflow.state_of("123"))
     print("Sum's state: {}".format(sum_state))

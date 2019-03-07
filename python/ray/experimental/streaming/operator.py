@@ -218,6 +218,25 @@ class ReadTextFileOperator(Operator):
         self.filepath = filepath
 
 
+class CustomSinkOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 sink_object,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.sink = sink_object
+
+
 class WriteTextFileOperator(Operator):
     def __init__(self,
                  id,

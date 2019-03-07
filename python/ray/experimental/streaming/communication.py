@@ -6,6 +6,7 @@ import pickle
 import hashlib
 import logging
 import sys
+import time
 import uuid
 
 from ray.experimental.streaming.operator import PStrategy
@@ -92,7 +93,6 @@ class DataChannel(object):
         return "({},{},{},{})".format(
             self.src_operator_id, self.dst_operator_id, self.src_instance_id,
             self.dst_instance_id)
-
 
 # Pulls and merges data from multiple input channels
 class DataInput(object):
@@ -184,6 +184,7 @@ class DataOutput(object):
     def __init__(self, channels, partitioning_schemes):
         self.key_selector = None
         self.partitioning_schemes = partitioning_schemes
+
         # Prepare output -- collect channels by type
         self.forward_channels = []  # Forward and broadcast channels
         slots = sum(1 for scheme in self.partitioning_schemes.values()
@@ -234,6 +235,7 @@ class DataOutput(object):
                     index_3 += 1
             else:  # TODO (john): Add support for custom partitioning
                 sys.exit("Unrecognized or unsupported partitioning strategy.")
+
         # Change round robin to simple forward if there is only one channel
         slots_to_remove = []
         slot = 0
@@ -247,6 +249,18 @@ class DataOutput(object):
             self.round_robin_indexes.pop(slot)
         # A KeyedDataStream can only be shuffled by key
         assert not (self.shuffle_exists and self.shuffle_key_exists)
+
+        # Logging-related attributes
+        self.logging = False    # Default
+        self.records = 0        # Counter
+        self.throughputs = []   # Throughput values
+        self.start = None       # Start timestamp
+        self.period = 100000    # Measure throughput every 100K records
+
+    # Enables throughput logging on output channels
+    def enable_logging(self):
+        self.logging = True
+        self.start = time.time()
 
     # Flushes any remaining records in the output channels
     # 'close' indicates whether we should also 'close' the channel (True)
@@ -282,6 +296,9 @@ class DataOutput(object):
                     channel.queue.put_next(None)
                 channel.queue._flush_writes()
         # TODO (john): Add more channel types
+
+        if self.logging:  # Log throughput
+            self.__log(force=True)
 
     # Returns all destination actor ids
     def _destination_actor_ids(self):
@@ -346,6 +363,9 @@ class DataOutput(object):
         else:  # TODO (john): Add support for custom partitioning
             pass
 
+        if self.logging:  # Log throughput
+            self.__log(1)
+
     # Pushes a list of records to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
@@ -381,6 +401,19 @@ class DataOutput(object):
                     channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
+
+        if self.logging:  # Log throughput
+            self.__log(len(records))
+
+    # Logs throughput
+    def __log(self, batch_size=0, force=False):
+        # Log throughput every N records
+        self.records += batch_size
+        if self.records >= self.period or (
+           force is True and self.records > 0):
+            self.throughputs.append(self.records / (time.time() - self.start))
+            self.records = 0
+            self.start = time.time()
 
 
 # Batched queue configuration

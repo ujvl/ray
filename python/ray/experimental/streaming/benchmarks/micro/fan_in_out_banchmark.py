@@ -124,13 +124,22 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
         source_streams.append(stream)
     stream = source_streams.pop()
     stream = stream.union(source_streams)
+    # TODO (john): Having one flatmap here might be a bottleneck
     stream = stream.flat_map(compute_elapsed_time)
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.write_text_file(latency_filename)
+    _ = stream.sink(Sink(), id="my_sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
-    write_throughput_file(throughput_filename, dataflow)
+
+    latency_filename, throughput_filename = create_filenames(
+                        latency_filename, throughput_filename,
+                        rounds, sample_period,
+                        record_type, record_size, record_type,
+                        queue_config, max_reads_per_second, num_stages,
+                        partitioning, task_based, fan_in)
+    write_log_files(latency_filename,
+                    throughput_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
 def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
@@ -151,28 +160,77 @@ def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
         stream = stream.broadcast()
     stream = stream.flat_map(compute_elapsed_time).set_parallelism(fan_out)
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.write_text_file(latency_filename).set_parallelism(fan_out)
+    _ = stream.sink(Sink(), id="my_sink").set_parallelism(fan_out)
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
-    write_throughput_file(throughput_filename, dataflow)
+
+    # Write log files
+    latency_filename, throughput_filename = create_filenames(
+                        latency_filename, throughput_filename,
+                        rounds, sample_period,
+                        record_type, record_size, record_type,
+                        queue_config, max_reads_per_second, num_stages,
+                        partitioning, task_based, fan_out)
+    write_log_files(latency_filename,
+                    throughput_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
-# Collects throughputs for all actors in the dataflow (except the sink)
-# Writes logs in the form 'operator_id instance_id throughput'
-def write_throughput_file(throughput_filename, dataflow):
-    # Collect throughputs for all actors (except the sink)
+# Creates the log file names
+def create_filenames(latency_filename, throughput_filename,
+                    rounds, sample_period,
+                    record_type, record_size, record_type,
+                    queue_config, max_reads_per_second, num_stages,
+                    partitioning, task_based, fan_in_out):
+    # Create log filenames
+    max_queue_size = queue_config.max_size
+    max_batch_size = queue_config.max_batch_size
+    batch_timeout = queue_config.max_batch_time
+    prefetch_depth = queue_config.prefetch_depth
+    background_flush = queue_config.background_flush
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        rounds, sample_period,
+        record_type, record_size, record_type,
+        max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
+        background_flush, max_reads_per_second, num_stages,
+        partitioning, task_based, fan_in_out
+    )
+    latency_filename = latency_filename + all_parameters
+    throughput_filename = throughput_filename + all_parameters
+    return latency_filename, throughput_filename
+
+# Collects sampled latencies and throughputs for all actors in the dataflow
+def write_log_files(all_parameters, latency_filename,
+                    throughput_filename, dataflow):
+
+    # Dump timeline
+    dump_file = "dump" + all_parameters
+    ray.global_state.chrome_tracing_dump(dump_file)
+
+    # Collect sampled per-record latencies
+    local_states = ray.get(dataflow.state_of("my_sink"))
+    latencies = [state for state in local_states if state is not None]
+    latency_file = latency_file + all_parameters
+    with open(latency_file, "w") as tf:
+        for _, latency_values in latencies:
+            if latency_values is not None:
+                for value in latency_values:
+                    tf.write(str(value) + "\n")
+
+    # Collect throughputs from all actors (except the sink)
     ids = dataflow.operator_ids()
     throughputs = []
     for id in ids:
         logs = ray.get(dataflow.logs_of(id))
         throughputs.extend(logs)
+    throughput_file = throughput_file + all_parameters
     with open(throughput_file, "w") as tf:
         for actor_id, throughput_values in throughputs:
             operator_id, instance_id = actor_id
             for value in throughput_values:
                 tf.write(str(operator_id) + " " + str(
                     instance_id) + " " + str(value) + "\n")
+
 
 if __name__ == "__main__":
     ray.init()

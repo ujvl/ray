@@ -189,11 +189,28 @@ def benchmark_queue(rounds, latency_file,
     first_queue._flush_writes()
     result = ray.get(logs)
     result.append((-1,[],source_throughputs))  # Use -1 as the source id
+
     # Write log files
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        rounds, sample_period,
+        record_type, record_size, record_type,
+        max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
+        background_flush, max_reads_per_second, num_queues
+    )
+
+    # Dump timeline
+    dump_file = "dump" + all_parameters
+    ray.global_state.chrome_tracing_dump(dump_file)
+
+    # Write sampled per-record latencies
+    latency_file = latency_file + all_parameters
     with open(latency_file, "w") as lf:
         for node_id, latencies, _ in result:
             for latency in latencies:
-                lf.write(str(node_id) + " " + str(latency) + "\n")
+                lf.write(str(latency) + "\n")
+
+    # Collect throughputs from all actors
+    throughput_file = throughput_file + all_parameters
     with open(throughput_file, "w") as tf:
         for node_id, _, throughputs in result:
             for throughput in throughputs:
@@ -296,5 +313,4 @@ if __name__ == "__main__":
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
                         num_queues, max_reads_per_second)
-    ray.global_state.chrome_tracing_dump("dumb.json")
     logger.info("Elapsed time: {}".format(time.time()-start))

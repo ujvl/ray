@@ -237,7 +237,9 @@ class Environment(object):
                                                            input, output,
                                                            self.config)
         elif operator.type == OpType.Sink:
-            sys.exit("Custom sink operator not supported yet.")
+            actor_handle = operator_instance.Sink.remote(actor_id,
+                                                            operator,
+                                                            input, output)
         elif operator.type == OpType.Inspect:
             actor_handle = operator_instance.Inspect.remote(actor_id,
                                                             operator,
@@ -825,7 +827,9 @@ class DataStream(object):
     # Users can optionally specify a logic to be applied to each record
     # before flushing to disk
     def write_text_file(self, filename_prefix, logic=None):
-        """Closes the stream with a sink operator."""
+        """Closes the stream with a sink operator
+        that writes to a text file.
+        """
         op = operator.WriteTextFileOperator(
             _generate_uuid(),
             OpType.WriteTextFile,
@@ -836,14 +840,13 @@ class DataStream(object):
             logging=self.env.config.logging)
         return self.__register(op)
 
-    # Registers sink operator to the environment
-    # TODO (john): A sink now just drops records but it should be able to
-    # export data to other systems
-    def sink(self):
-        """Closes the stream with a sink operator."""
-        op = operator.Operator(
-            _generate_uuid(),
+    # Registers a custom sink operator to the environment
+    def sink(self, sink_object, id=_generate_uuid()):
+        """Closes the stream with a custom sink operator."""
+        op = operator.CustomSinkOperator(
+            id,
             OpType.Sink,
+            sink_object,
             "Sink",
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging)

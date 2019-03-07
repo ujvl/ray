@@ -125,7 +125,7 @@ class BatchedQueue(object):
         self.write_buffer = []
         self.last_flush_time = 0.0
         self.cached_remote_offset = 0
-        self.queue = []
+        self.task_queue = []
 
         self.flush_lock = threading.RLock()
         self.flush_thread = FlushThread(self.max_batch_time,
@@ -156,10 +156,10 @@ class BatchedQueue(object):
         with self.flush_lock:
             if not self.write_buffer:
                 return
-            if self.task_based is True:  # Submit a new task
-                obj_id = self.destination_actor.apply.remote([self.write_buffer],
-                                                    self.channel_id)
-                self.queue.append(obj_id)
+            if self.task_based:  # Submit a new downstream task
+                obj_id = self.destination_actor.apply.remote(
+                                    [self.write_buffer], self.channel_id)
+                self.task_queue.append(obj_id)
             else:  # Flush batch to plasma
                 with ray.profiling.profile("flush_batch"):
                     batch_id = self._batch_id(self.write_batch_offset)
@@ -170,7 +170,7 @@ class BatchedQueue(object):
                 len(self.write_buffer)))
             self.write_buffer = []
             self.write_batch_offset += 1
-            # TODO (john): Simulate backpressure in task-based execution
+            # Check for backpressure
             with ray.profiling.profile("wait_for_reader"):
                 if self.task_based:
                     self._wait_for_task_reader()
@@ -179,17 +179,19 @@ class BatchedQueue(object):
             self.last_flush_time = time.time()
 
     def _wait_for_task_reader(self):
-        if len(self.queue) <= self.max_size:
+        """Checks for backpressure by the downstream task-based reader."""
+        if len(self.task_queue) <= self.max_size:
             return
-
-        _, self.queue = ray.wait(
-                self.queue,
-                num_returns=len(self.queue),
+        # Check pending downstream tasks
+        _, self.task_queue = ray.wait(
+                self.task_queue,
+                num_returns=len(self.task_queue),
                 timeout=0)
-        while len(self.queue) > self.max_size:
-            _, self.queue = ray.wait(
-                    self.queue,
-                    num_returns=len(self.queue),
+        while len(self.task_queue) > self.max_size:
+            logger.debug("[writer] Waiting for downstream tasks to finish")
+            _, self.task_queue = ray.wait(
+                    self.task_queue,
+                    num_returns=len(self.task_queue),
                     timeout=0.01)
 
     def _wait_for_reader(self):

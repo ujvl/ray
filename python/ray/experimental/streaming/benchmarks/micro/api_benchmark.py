@@ -97,6 +97,23 @@ class Source(object):
         else:
             return (-1,record)
 
+# A custom sink used to collect per-record latencies
+class Sink(object):
+    def __init__(self):
+        self.state = []
+
+    # Evicts next record
+    def evict(self, record):
+        self.state.append(record)
+
+    # Closes the sink
+    def close(self):
+        pass
+
+    # Returns sink's state
+    def get_state(self):
+        return self.state
+
 def compute_elapsed_time(record):
     generation_time, _ = record
     if generation_time != -1:
@@ -124,31 +141,66 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
             stream = stream.shuffle()
         elif partitioning == "broadcast":
             stream = stream.broadcast()
-        elif partitioning != "round_robin":
-            sys.exit("Unrecognized patitioning strategy.")
         if stage < num_stages - 1:
             stream = stream.map(lambda record: record)
         else: # Last stage actors should compute the per-record latencies
             stream = stream.flat_map(compute_elapsed_time)
-    _ = stream.write_text_file(latency_file)
+    _ = stream.sink(Sink(), id="my_sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
-    ray.global_state.chrome_tracing_dump("dumb.json")
-    # Collect logged throughputs for all actors (except the sink)
+
+    # Write log files
+    max_queue_size = queue_config.max_size
+    max_batch_size = queue_config.max_batch_size
+    batch_timeout = queue_config.max_batch_time
+    prefetch_depth = queue_config.prefetch_depth
+    background_flush = queue_config.background_flush
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        rounds, sample_period,
+        record_type, record_size, record_type,
+        max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
+        background_flush, max_reads_per_second, num_stages,
+        partitioning, task_based, dataflow_parallelism
+    )
+    write_log_files(all_parameters, latency_filename,
+                    throughput_filename, dataflow)
+
+    logger.info("Elapsed time: {}".format(time.time()-start))
+
+# Collects sampled latencies and throughputs from
+# actors in the dataflow and writes the log files
+def write_log_files(all_parameters, latency_file,
+                    throughput_file, dataflow):
+
+    # Dump timeline
+    dump_file = "dump" + all_parameters
+    ray.global_state.chrome_tracing_dump(dump_file)
+
+    # Collect sampled per-record latencies
+    local_states = ray.get(dataflow.state_of("my_sink"))
+    latencies = [state for state in local_states if state is not None]
+    latency_file = latency_file + all_parameters
+    with open(latency_file, "w") as tf:
+        for _, latency_values in latencies:
+            if latency_values is not None:
+                for value in latency_values:
+                    tf.write(str(value) + "\n")
+
+    # Collect throughputs from all actors (except the sink)
     ids = dataflow.operator_ids()
     throughputs = []
     for id in ids:
         logs = ray.get(dataflow.logs_of(id))
         throughputs.extend(logs)
-    # Write log file
+    throughput_file = throughput_file + all_parameters
     with open(throughput_file, "w") as tf:
         for actor_id, throughput_values in throughputs:
             operator_id, instance_id = actor_id
             for value in throughput_values:
                 tf.write(str(operator_id) + " " + str(
                     instance_id) + " " + str(value) + "\n")
-    logger.info("Elapsed time: {}".format(time.time()-start))
+
 
 if __name__ == "__main__":
     ray.init()
