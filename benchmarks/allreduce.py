@@ -554,6 +554,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
         elif (not test_local and i == num_iterations // 4 and test_failure):
             fail_iteration = True
         allreduce(workers, fail_iteration, check_results, kill_node)
+        time.sleep(1)
 
     if dump is not None:
         events = ray.global_state.chrome_tracing_dump()
