@@ -57,17 +57,16 @@ class Operator(object):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False,
-                 other=None):
+                 logging=False):
         self.id = id
         self.type = type
         self.name = name
         self.logic = logic  # The operator's logic
         self.num_instances = num_instances
-        # One partitioning strategy per downstream operator (default: forward)
+        # One partitioning strategy per downstream operator (default: rescale)
         self.partitioning_strategies = {}
+        # Actor logging
         self.logging = logging
-        self.other_args = other  # Depends on the type of the operator
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -77,15 +76,14 @@ class Operator(object):
         self.partitioning_strategies[stream_id] = (partitioning_scheme,
                                                    dest_operator)
 
-    # Retrieves the partitioning scheme for the given
-    # output stream of the operator
+    # Retrieves the partitioning scheme for the given output stream
     # Returns None is no strategy has been defined for the particular stream
     def _get_partition_strategy(self, stream_id):
         return self.partitioning_strategies.get(stream_id)
 
-    # Cleans metatada from all partitioning strategies that lack a
-    # destination operator
-    # Valid entries are re-organized as
+    # Cleans metatada from all partitioning strategies
+    # that lack a destination operator
+    # Valid entries are re-organized as:
     # 'destination operator id -> partitioning scheme'
     # Should be called only after the logical dataflow has been constructed
     def _clean(self):
@@ -113,13 +111,15 @@ class KeyByOperator(Operator):
                  key_selector,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.key_selector = key_selector
 
 
@@ -130,13 +130,15 @@ class SumOperator(Operator):
                  attribute_selector,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.attribute_selector = attribute_selector
 
 
@@ -147,13 +149,15 @@ class UnionOperator(Operator):
                  other_inputs,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.other_inputs = other_inputs
 
 
@@ -164,13 +168,15 @@ class TimeWindowOperator(Operator):
                  length,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.length = length  # ms
 
 
@@ -181,13 +187,15 @@ class CustomSourceOperator(Operator):
                  source_object,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.source = source_object
 
 
@@ -198,13 +206,15 @@ class ReadTextFileOperator(Operator):
                  filepath,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.filepath = filepath
 
 
@@ -215,11 +225,13 @@ class WriteTextFileOperator(Operator):
                  filename_prefix,
                  name="",
                  logic=None,
-                 num_instances=1):
+                 num_instances=1,
+                 logging=False):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
-                          num_instances)
+                          num_instances,
+                          logging)
         self.filename_prefix = filename_prefix

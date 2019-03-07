@@ -159,9 +159,10 @@ class BatchedQueue(object):
                 self.destination_actor.apply.remote([self.write_buffer],
                                                     self.channel_id)
             else:  # Flush batch to plasma
-                batch_id = self._batch_id(self.write_batch_offset)
-                ray.worker.global_worker.put_object(
-                    ray.ObjectID(batch_id), self.write_buffer)
+                with ray.profiling.profile("flush_batch"):
+                    batch_id = self._batch_id(self.write_batch_offset)
+                    ray.worker.global_worker.put_object(
+                        ray.ObjectID(batch_id), self.write_buffer)
             logger.debug("[writer] Flush batch {} offset {} size {}".format(
                 self.write_batch_offset, self.write_item_offset,
                 len(self.write_buffer)))
@@ -251,7 +252,7 @@ class BatchedQueue(object):
                 self._flush_writes()
 
     def read_next(self):
-        # Actors never pull in task-based execution 
+        # Actors never pull in task-based execution
         assert self.task_based is False
         if not self.read_buffer:
             self._read_next_batch()

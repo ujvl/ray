@@ -29,6 +29,7 @@ class ActorExit(signal.Signal):
     def __init__(self, value=None):
         self.value = value
 
+
 class OperatorInstance(object):
     """A streaming operator instance.
 
@@ -55,7 +56,8 @@ class OperatorInstance(object):
         self.input = input_gate
         self.output = output_gate
         self.this_actor = None  # A handle to self
-        # Parameters for periodic rescheduling
+
+        # Parameters for periodic rescheduling in queue-based execution
         if not config:  # Actor will spin continuously until termination
             self.records_limit = float("inf")   # Unlimited
             self.scheduling_timeout = None      # No timeout
@@ -64,6 +66,13 @@ class OperatorInstance(object):
             self.scheduling_timeout = config.scheduling_timeout
         self.records_processed = 0
         self.previous_scheduling_time = time.time()
+
+        # Logging-related attributes
+        self.logging = self.metadata.logging
+        self.records = 0
+        self.N = 100000
+        self.start = time.time()
+
         # Enable writes to all output channels
         for channel in self.output.forward_channels:
             channel.queue.enable_writes()
@@ -90,8 +99,7 @@ class OperatorInstance(object):
     def _register_handle(self, actor_handle):
         self.this_actor = actor_handle
 
-    # Used to register the handle of a destination
-    # actor to the given output channel
+    # Used to register the handle of a destination actor to a channel
     def _register_destination_handle(self, actor_handle, channel_id):
         for channel in self.output.forward_channels:
             if channel.id == channel_id:
@@ -133,9 +141,23 @@ class OperatorInstance(object):
             self.records_processed = 0
         return reschedule
 
-    # Starts the actor
-    def start(self):
+    # Logs actor throughput
+    def _log(self, batch_size=1, force=False):
+        # Log throughput every N records
+        self.records += batch_size
+        if self.records >= self.N or force is True:
+            self.throughputs.append(records / (time.time() - self.start))
+            self.records = 0
+            self.start = time.time()
+
+    # Starts the spinning actor (implemented by the subclasses)
+    def start(self):  # Used in queue-based execution
         pass
+
+    # Applies the actor's logic once (implemented by the subclasses)
+    def apply(self):  # Used in task-based execution
+        pass
+
 
 # A monitoring actor used to keep track of the execution's progress
 @ray.remote
@@ -164,6 +186,7 @@ class ProgressMonitor(object):
             if len(self.exit_signals) == len(self.running_actors):
                 return
 
+
 # A source actor that reads a text file line by line
 @ray.remote
 class ReadTextFile(OperatorInstance):
@@ -188,15 +211,20 @@ class ReadTextFile(OperatorInstance):
     def start(self):
         while True:
             record = self.reader.readline()
-            # Reader returns empty string ('') on EOF
+            # Reader returns empty string ('') on EOF,
+            # so a 'record is None' condition doesn't work here
             if not record:
                 # Flush any remaining records to plasma and close the file
                 self.output._flush(close=True)
                 self.reader.close()
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
-            self.output._push(
-                record[:-1])  # Push after removing newline characters
+            # Push after removing newline characters
+            self.output._push(record[:-1])
+            if self.logging:
+                self._log()
 
 # Map actor
 @ray.remote
@@ -221,37 +249,38 @@ class Map(OperatorInstance):
     # Applies the map to each record of the input stream(s)
     # and pushes resulting records to the output stream(s)
     def start(self):
-        records = 0
-        N = 100000
-        start = time.time()
         while True:
-            # TODO (john): Make this optional with a logging flag
-            if records == N:  # Log throughput every N records
-                self.throughputs.append(records / (time.time()-start))
-                records = 0
-                start = time.time()
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(self.map_fn(record))
-            records += 1
+            if self.logging:
+                self._log()
 
     # Returns the logged throughput values
     def logs(self):
         return (self.instance_id, self.throughputs)
 
-    # Task-based map execution
+    # Task-based map execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        if self.logging:
+                            self._log(batch_size=len(batch),
+                                      force=True)
+                        signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push(self.map_fn(record))
+            if self.logging:
+                self._log(batch_size=len(batch))
+
 
 # Flatmap actor
 @ray.remote
@@ -276,37 +305,37 @@ class FlatMap(OperatorInstance):
     # Applies the splitter to the records of the input stream(s)
     # and pushes resulting records to the output stream(s)
     def start(self):
-        records = 0
-        N = 100000
-        start = time.time()
         while True:
-            # TODO (john): Make this optional with a logging flag
-            if records == N:  # Log throughput every N records
-                self.throughputs.append(records / (time.time()-start))
-                records = 0
-                start = time.time()
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
             self.output._push_all(self.flatmap_fn(record))
-            records += 1
+            if self.logging:
+                self._log()
 
     # Returns the logged throughput values
     def logs(self):
         return (self.instance_id, self.throughputs)
 
-    # Task-based flatmap execution
+    # Task-based flatmap execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        if self.logging:
+                            self._log(batch_size=len(batch),
+                                      force=True)
+                        signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push_all(self.flatmap_fn(record))
+            if self.logging:
+                self._log(batch_size=len(batch))
 
 # Filter actor
 @ray.remote
@@ -334,22 +363,24 @@ class Filter(OperatorInstance):
             record = self.input._pull()
             if record is None:  # Close channel and return
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                signal.send(ActorExit(self.instance_id))
                 return
             if self.filter_fn(record):
                 self.output._push(record)
 
-    # Task-based filter execution
+    # Task-based filter execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        signal.send(ActorExit(self.instance_id))
                     return
                 if self.filter_fn(record):
                     self.output._push(record)
+
+
 # Union actor
 @ray.remote
 class Union(OperatorInstance):
@@ -360,26 +391,35 @@ class Union(OperatorInstance):
         OperatorInstance.__init__(self, instance_id,
                                   operator_metadata, input_gate, output_gate)
 
-    # Simply moves records from input to output repeatedly
+    # Repeatedly moves records from input to output
     def start(self):
         while True:
             record = self.input._pull()
             if record is None:  # Close channel and return
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(record)
+            if self.logging:
+                self._log()
 
-    # Task-based union execution
+    # Task-based union execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        if self.logging:
+                            self._log(batch_size=len(batch),
+                                      force=True)
+                        signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push(record)
+            if self.logging:
+                self._log(batch_size=len(batch))
 
 # Inspect actor
 @ray.remote
@@ -399,30 +439,30 @@ class Inspect(OperatorInstance):
         self.inspect_fn = operator_metadata.logic
 
     # Applies the inspect logic (e.g. print) to the records of
-    # the input stream(s)
-    # and leaves stream unaffected by simply pushing the records to
-    # the output stream(s)
+    # the input stream(s) and leaves stream unaffected by simply
+    # pushing the records to the output stream(s)
     def start(self):
         while True:
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                signal.send(ActorExit(self.instance_id))
                 return
             self.inspect_fn(record)
             self.output._push(record)
 
-    # Task-based inspect execution
+    # Task-based inspect execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        signal.send(ActorExit(self.instance_id))
                     return
                 self.inspect_fn(record)
                 self.output._push(record)
+
 
 # Reduce actor
 @ray.remote
@@ -469,7 +509,7 @@ class Reduce(OperatorInstance):
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                signal.send(ActorExit(self.instance_id))
                 return
             key, rest = record
             new_value = self.attribute_selector(rest)
@@ -488,14 +528,14 @@ class Reduce(OperatorInstance):
     def state(self):
         return self.state
 
-    # Task-based reduce execution
+    # Task-based reduce execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        signal.send(ActorExit(self.instance_id))
                     return
                 key, rest = record
                 new_value = self.attribute_selector(rest)
@@ -508,6 +548,7 @@ class Reduce(OperatorInstance):
                 except KeyError:  # Key does not exist in state
                     self.state.setdefault(key, new_value)
                 self.output._push((key, new_value))
+
 
 @ray.remote
 class KeyBy(OperatorInstance):
@@ -534,28 +575,29 @@ class KeyBy(OperatorInstance):
         elif not isinstance(self.key_selector, types.FunctionType):
             sys.exit("Unrecognized or unsupported key selector.")
 
-    # The actual partitioning is done by the output gate
+    # The actual stream partitioning is done by the output gate
     def start(self):
         while True:
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                signal.send(ActorExit(self.instance_id))
                 return
             key = self.key_selector(record)
             self.output._push((key,record))
 
-    # Task-based keyby execution
+    # Task-based keyby execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        signal.send(ActorExit(self.instance_id))
                     return
                 key = self.key_selector(record)
                 self.output._push((key,record))
+
 
 # A custom source actor
 @ray.remote
@@ -570,26 +612,22 @@ class Source(OperatorInstance):
 
     # Starts the source by calling get_next() repeatedly
     def start(self):
-        records = 0
-        N = 100000
-        start = time.time()
         while True:
-            # TODO (john): Make this optional with a logging flag
-            if records == N:  # Log throughput every N records
-                self.throughputs.append(records / (time.time()-start))
-                records = 0
-                start = time.time()
             record = self.source.get_next()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(record)
-            records += 1
+            if self.logging:
+                self._log()
 
     # Returns the logged throughput values
     def logs(self):
         return (self.instance_id, self.throughputs)
+
 
 # A sink actor that writes records to a distributed text file
 @ray.remote
@@ -622,24 +660,34 @@ class WriteTextFile(OperatorInstance):
             record = self.input._pull()
             if record is None:
                 self.writer.close()
-                signal.send(ActorExit())
+                if self.logging:
+                    self._log(force=True)
+                signal.send(ActorExit(self.instance_id))
                 return
             self._put_next(record)
+            if self.logging:
+                self._log()
 
     # Returns the logged throughput values
     def logs(self):
         return (self.instance_id, [])
 
-    # Task-based sink execution
+    # Task-based sink execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        signal.send(ActorExit())
+                        if self.logging:
+                            self._log(batch_size=len(batch),
+                                      force=True)
+                        signal.send(ActorExit(self.instance_id))
                     return
                 self._put_next(record)
+            if self.logging:
+                self._log(batch_size=len(batch))
+
 
 # TODO (john): Time window actor (uses system time)
 @ray.remote
@@ -662,7 +710,7 @@ class TimeWindow(OperatorInstance):
             record = self.source.get_next()
             if record is None:
                 self.output._flush(close=True)
-                signal.send(ActorExit())
+                signal.send(ActorExit(self.instance_id))
                 return
             self.window_state.append(record)
             elapsed_time = time.time() - self.start

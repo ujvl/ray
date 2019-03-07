@@ -18,7 +18,7 @@ from ray.experimental.streaming.operator import PScheme, PStrategy
 import ray.experimental.streaming.operator_instance as operator_instance
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
+logger.setLevel("DEBUG")
 
 
 # Generates UUIDs
@@ -63,7 +63,8 @@ class Config(object):
     """
 
     def __init__(self, parallelism=1, scheduling_period_in_records=float(
-                "inf"), scheduling_timeout=1, task_based=False):
+                 "inf"), scheduling_timeout=1, task_based=False,
+                 logging=False):
         # Batched queue configuration
         self.queue_config = QueueConfig()
         # Dataflow parallelism
@@ -73,6 +74,8 @@ class Config(object):
         self.scheduling_timeout = scheduling_timeout    # Default: 1s
         # Task-based evaluation instead of queue-based
         self.task_based = task_based
+        # Logging
+        self.logging = logging
         # ...
 
 # A handle to the physical dataflow that is being executed
@@ -382,6 +385,10 @@ class Environment(object):
     def enable_tasks(self):
         self.config.task_based = True
 
+    # Enables actor logging
+    def enable_logging(self):
+        self.config.logging = True
+
     # Sets batched queue configuration for the environment
     def set_queue_config(self, queue_config):
         self.config.queue_config = queue_config
@@ -401,8 +408,6 @@ class Environment(object):
 
     # Creates and registers a new data source that reads a
     # text file line by line
-    # TODO (john): There should be different types of sources,
-    # e.g. sources reading from Kafka, text files, etc.
     # TODO (john): Handle case where environment parallelism is set
     def read_text_file(self, filepath):
         source_id = _generate_uuid()
@@ -442,6 +447,7 @@ class Environment(object):
         monitoring_actor = operator_instance.ProgressMonitor.remote(all_handles)
         self.physical_dataflow.monitoring_actor = monitoring_actor
         # Start spinning actors
+
         for entry in self.physical_dataflow.actor_handles.items():
             operator_id, actor_handles = entry
             operator = self.physical_dataflow.operator_metadata[operator_id]

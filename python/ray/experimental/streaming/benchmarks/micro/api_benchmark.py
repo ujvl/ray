@@ -15,7 +15,7 @@ from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger.setLevel("DEBUG")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
@@ -86,6 +86,7 @@ class Source(object):
         if self.total_count == self.total_elements:
             return None
         record = self.__get_next_record()
+        logger.debug(record)
         self.total_count += 1
         self.count += 1
         # print(self.total_count)
