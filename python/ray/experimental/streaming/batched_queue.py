@@ -257,18 +257,14 @@ class BatchedQueue(object):
         self.destination_actor = actor_handle
 
     def put_next(self, item):
-        with self.flush_lock:
-            if self.background_flush and not self.flush_thread.is_alive():
-                logger.debug("[writer] Starting batch flush thread")
-                self.flush_thread.start()
-            self.write_buffer.append(item)
-            self.write_item_offset += 1
-            if not self.last_flush_time:
-                self.last_flush_time = time.time()
-            delay = time.time() - self.last_flush_time
-            if (len(self.write_buffer) > self.max_batch_size
-                    or delay > self.max_batch_time):
-                self._flush_writes()
+        self.write_buffer.append(item)
+        self.write_item_offset += 1
+        if not self.last_flush_time:
+            self.last_flush_time = time.time()
+        delay = time.time() - self.last_flush_time
+        if (len(self.write_buffer) > self.max_batch_size
+                or delay > self.max_batch_time):
+            self._flush_writes()
 
     def read_next(self):
         # Actors never pull in task-based execution 
