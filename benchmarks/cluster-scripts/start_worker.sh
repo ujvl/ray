@@ -34,7 +34,7 @@ ray start --redis-address=$HEAD_IP:6379 \
 sleep 5
 taskset -pc 0 `pgrep raylet`
 taskset -pc 0 `pgrep plasma_store`
-renice -n 19 -p `pgrep raylet`
+sudo renice -n -19 -p `pgrep raylet`
 
 for pid in `pgrep -w python`; do
     taskset -pc 1-3 $pid
