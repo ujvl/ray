@@ -125,6 +125,7 @@ class BatchedQueue(object):
         self.write_buffer = []
         self.last_flush_time = 0.0
         self.cached_remote_offset = 0
+        self.queue = []
 
         self.flush_lock = threading.RLock()
         self.flush_thread = FlushThread(self.max_batch_time,
@@ -156,8 +157,9 @@ class BatchedQueue(object):
             if not self.write_buffer:
                 return
             if self.task_based is True:  # Submit a new task
-                self.destination_actor.apply.remote([self.write_buffer],
+                obj_id = self.destination_actor.apply.remote([self.write_buffer],
                                                     self.channel_id)
+                self.queue.append(obj_id)
             else:  # Flush batch to plasma
                 with ray.profiling.profile("flush_batch"):
                     batch_id = self._batch_id(self.write_batch_offset)
@@ -169,9 +171,26 @@ class BatchedQueue(object):
             self.write_buffer = []
             self.write_batch_offset += 1
             # TODO (john): Simulate backpressure in task-based execution
-            if self.task_based is False:
-                self._wait_for_reader()
+            with ray.profiling.profile("wait_for_reader"):
+                if self.task_based:
+                    self._wait_for_task_reader()
+                else:
+                    self._wait_for_reader()
             self.last_flush_time = time.time()
+
+    def _wait_for_task_reader(self):
+        if len(self.queue) <= self.max_size:
+            return
+
+        _, self.queue = ray.wait(
+                self.queue,
+                num_returns=len(self.queue),
+                timeout=0)
+        while len(self.queue) > self.max_size:
+            _, self.queue = ray.wait(
+                    self.queue,
+                    num_returns=len(self.queue),
+                    timeout=0.01)
 
     def _wait_for_reader(self):
         """Checks for backpressure by the downstream reader."""
