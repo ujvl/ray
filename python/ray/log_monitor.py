@@ -213,6 +213,7 @@ class LogMonitor(object):
         This will query Redis once every second to check if there are new log
         files to monitor. It will also store those log files in Redis.
         """
+        return
         while True:
             self.update_log_filenames()
             self.open_closed_files()
