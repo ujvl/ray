@@ -94,6 +94,23 @@ class Source(object):
         else:
             return (-1,record)
 
+# A custom sink used to collect per-record latencies
+class Sink(object):
+    def __init__(self):
+        self.state = []
+
+    # Evicts next record
+    def evict(self, record):
+        self.state.append(record)
+
+    # Closes the sink
+    def close(self):
+        pass
+
+    # Returns sink's state
+    def get_state(self):
+        return self.state
+
 def compute_elapsed_time(record):
     generation_time, _ = record
     if generation_time != -1:
@@ -135,7 +152,7 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
     latency_filename, throughput_filename = create_filenames(
                         latency_filename, throughput_filename,
                         rounds, sample_period,
-                        record_type, record_size, queue_config, 
+                        record_type, record_size, queue_config,
                         max_reads_per_second, num_stages,
                         partitioning, task_based, fan_in)
     write_log_files(latency_filename,
