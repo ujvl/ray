@@ -25,6 +25,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "num_heartbeats_timeout": 20,
+    "async_message_max_buffer_size": 100,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000,
     "object_manager_send_threads": '$SEND_THREADS',

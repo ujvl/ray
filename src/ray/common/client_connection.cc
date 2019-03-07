@@ -36,7 +36,7 @@ std::shared_ptr<ServerConnection<T>> ServerConnection<T>::Create(
 template <class T>
 ServerConnection<T>::ServerConnection(boost::asio::basic_stream_socket<T> &&socket)
     : socket_(std::move(socket)),
-      async_write_max_messages_(1),
+      async_write_max_messages_(RayConfig::instance().async_message_max_buffer_size()),
       async_write_queue_(),
       async_write_in_flight_(false) {}
 
