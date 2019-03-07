@@ -262,7 +262,7 @@ class Environment(object):
                 # Make sure the handle is registered before proceeding
                 ray.get(handle._register_destination_handle.remote(
                                             actor_handle, channel.id))
-        actor_handle._register_handle.remote(actor_handle)
+        ray.get(actor_handle._register_handle.remote(actor_handle))
         self.physical_dataflow._register_handle(actor_id,actor_handle)
         self.physical_dataflow._register_metadata(operator.id,operator)
         assert actor_handle is not None

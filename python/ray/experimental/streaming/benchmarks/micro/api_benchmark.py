@@ -112,6 +112,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     env = Environment()
     env.set_queue_config(queue_config)
     env.set_parallelism(dataflow_parallelism)
+    #env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period))
     for stage in range(num_stages):
@@ -129,6 +130,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
+    ray.global_state.chrome_tracing_dump("dumb.json")
     # Collect logged throughputs for all actors (except the sink)
     ids = dataflow.operator_ids()
     throughputs = []
