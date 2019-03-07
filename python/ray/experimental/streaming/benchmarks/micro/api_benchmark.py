@@ -22,6 +22,8 @@ parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
 parser.add_argument("--num-stages", default=2,
                     help="the number of stages in the chain")
+parser.add_argument("--task-based", default=False,
+                    help="task-based execution")
 parser.add_argument("--dataflow-parallelism", default=1,
                     help="the number of instances per operator")
 parser.add_argument("--record-type", default="int",
@@ -86,7 +88,6 @@ class Source(object):
         if self.total_count == self.total_elements:
             return None
         record = self.__get_next_record()
-        logger.debug(record)
         self.total_count += 1
         self.count += 1
         # print(self.total_count)
@@ -107,12 +108,15 @@ def compute_elapsed_time(record):
 def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
-                            latency_file, throughput_file):
+                            latency_file, throughput_file,
+                            task_based):
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
     env.set_parallelism(dataflow_parallelism)
-    #env.enable_tasks()
+    env.enable_logging()
+    if task_based:
+        env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period))
     for stage in range(num_stages):
@@ -153,6 +157,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
+    task_based = bool(args.task_based)
     num_stages = int(args.num_stages)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
@@ -170,6 +175,7 @@ if __name__ == "__main__":
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Task-based execution: {}".format(task_based))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file: {}".format(latency_filename))
     logger.info("Throughput file: {}".format(throughput_filename))
@@ -205,4 +211,5 @@ if __name__ == "__main__":
     create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
-                            latency_filename, throughput_filename)
+                            latency_filename, throughput_filename,
+                            task_based)

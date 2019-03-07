@@ -403,7 +403,8 @@ class Environment(object):
         self.operators[source_id] = operator.CustomSourceOperator(source_id,
                                              OpType.Source,
                                              source_object,
-                                             "Source")
+                                             "Source",
+                                             logging=self.config.logging)
         return source_stream
 
     # Creates and registers a new data source that reads a
@@ -413,7 +414,8 @@ class Environment(object):
         source_id = _generate_uuid()
         source_stream = DataStream(self, source_id)
         self.operators[source_id] = operator.ReadTextFileOperator(
-            source_id, OpType.ReadTextFile, filepath, "Read Text File")
+            source_id, OpType.ReadTextFile, filepath, "Read Text File",
+            logging=self.config.logging)
         return source_stream
 
     # Constructs and deploys the physical dataflow
@@ -667,7 +669,8 @@ class DataStream(object):
             OpType.Map,
             name,
             map_fn,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers flatmap operator to the environment
@@ -683,7 +686,8 @@ class DataStream(object):
             OpType.FlatMap,
             "FlatMap",
             flatmap_fn,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers keyBy operator to the environment
@@ -700,7 +704,8 @@ class DataStream(object):
             OpType.KeyBy,
             key_selector,
             "KeyBy",
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers Reduce operator to the environment
@@ -716,7 +721,8 @@ class DataStream(object):
             OpType.Reduce,
             "Sum",
             reduce_fn,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers Sum operator to the environment
@@ -733,7 +739,8 @@ class DataStream(object):
             attribute_selector,
             "Sum",
             _sum,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers union operator to the environment
@@ -748,7 +755,8 @@ class DataStream(object):
             OpType.Union,
             other_inputs,
             "Union",
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers window operator to the environment.
@@ -766,7 +774,8 @@ class DataStream(object):
             OpType.TimeWindow,
             window_length_ms,
             "TimeWindow",
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers filter operator to the environment
@@ -781,7 +790,8 @@ class DataStream(object):
             OpType.Filter,
             "Filter",
             filter_fn,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # TODO (john): Registers window join operator to the environment
@@ -790,7 +800,8 @@ class DataStream(object):
             _generate_uuid(),
             OpType.WindowJoin,
             "WindowJoin",
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers inspect operator to the environment
@@ -805,7 +816,8 @@ class DataStream(object):
             OpType.Inspect,
             "Inspect",
             inspect_logic,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers built-in sink operator to the environment
@@ -820,7 +832,8 @@ class DataStream(object):
             filename_prefix,
             "Write Text File",
             logic,
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)
 
     # Registers sink operator to the environment
@@ -832,5 +845,6 @@ class DataStream(object):
             _generate_uuid(),
             OpType.Sink,
             "Sink",
-            num_instances=self.env.config.parallelism)
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging)
         return self.__register(op)

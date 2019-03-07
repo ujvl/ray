@@ -181,7 +181,7 @@ def benchmark_queue(rounds, latency_file,
                 count = 0
                 first_queue.put_next((time.time(),value))
             else:
-                first_queue.put_next(value)
+                first_queue.put_next((-1,value))
             value += 1
         log = "[writer] Puts per second {}"
         logger.info(log.format(N / (time.time() - start)))
@@ -286,7 +286,7 @@ if __name__ == "__main__":
             break
         count += 1
     logger.info("Ideal throughput: {}".format(count / (time.time()-start)))
-    
+
     logger.info("== Testing Batched Queue Chaining ==")
     start = time.time()
     benchmark_queue(rounds, latency_filename,

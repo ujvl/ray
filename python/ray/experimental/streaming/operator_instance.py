@@ -145,8 +145,8 @@ class OperatorInstance(object):
     def _log(self, batch_size=1, force=False):
         # Log throughput every N records
         self.records += batch_size
-        if self.records >= self.N or force is True:
-            self.throughputs.append(records / (time.time() - self.start))
+        if self.records >= self.N or (force is True and self.records > 0):
+            self.throughputs.append(self.records / (time.time() - self.start))
             self.records = 0
             self.start = time.time()
 
@@ -218,7 +218,7 @@ class ReadTextFile(OperatorInstance):
                 self.output._flush(close=True)
                 self.reader.close()
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             # Push after removing newline characters
@@ -254,7 +254,7 @@ class Map(OperatorInstance):
             if record is None:
                 self.output._flush(close=True)
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(self.map_fn(record))
@@ -270,11 +270,11 @@ class Map(OperatorInstance):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        if self.logging:
-                            self._log(batch_size=len(batch),
-                                      force=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push(self.map_fn(record))
@@ -310,7 +310,7 @@ class FlatMap(OperatorInstance):
             if record is None:
                 self.output._flush(close=True)
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self.output._push_all(self.flatmap_fn(record))
@@ -326,11 +326,11 @@ class FlatMap(OperatorInstance):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        if self.logging:
-                            self._log(batch_size=len(batch),
-                                      force=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push_all(self.flatmap_fn(record))
@@ -363,23 +363,31 @@ class Filter(OperatorInstance):
             record = self.input._pull()
             if record is None:  # Close channel and return
                 self.output._flush(close=True)
+                if self.logging:
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             if self.filter_fn(record):
                 self.output._push(record)
+            if self.logging:
+                self._log()
 
     # Task-based filter execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 if self.filter_fn(record):
                     self.output._push(record)
-
+                if self.logging:
+                    self._log(batch_size=len(batch))
 
 # Union actor
 @ray.remote
@@ -398,7 +406,7 @@ class Union(OperatorInstance):
             if record is None:  # Close channel and return
                 self.output._flush(close=True)
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(record)
@@ -410,11 +418,11 @@ class Union(OperatorInstance):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        if self.logging:
-                            self._log(batch_size=len(batch),
-                                      force=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push(record)
@@ -446,23 +454,31 @@ class Inspect(OperatorInstance):
             record = self.input._pull()
             if record is None:
                 self.output._flush(close=True)
+                if self.logging:
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self.inspect_fn(record)
             self.output._push(record)
+            if self.logging:
+                self._log()
 
     # Task-based inspect execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 self.inspect_fn(record)
                 self.output._push(record)
-
+            if self.logging:
+                self._log(batch_size=len(batch))
 
 # Reduce actor
 @ray.remote
@@ -617,7 +633,7 @@ class Source(OperatorInstance):
             if record is None:
                 self.output._flush(close=True)
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0,force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self.output._push(record)
@@ -646,6 +662,7 @@ class WriteTextFile(OperatorInstance):
         self.writer = open(self.filename, "w")
         # User-defined logic applied to each record (optional)
         self.logic = operator_metadata.logic
+        self.throughputs = []
 
     # Applies logic (if any) and writes result to a text file
     def _put_next(self, record):
@@ -661,7 +678,7 @@ class WriteTextFile(OperatorInstance):
             if record is None:
                 self.writer.close()
                 if self.logging:
-                    self._log(force=True)
+                    self._log(0, force=True)
                 signal.send(ActorExit(self.instance_id))
                 return
             self._put_next(record)
@@ -677,11 +694,11 @@ class WriteTextFile(OperatorInstance):
         for batch in batches:
             for record in batch:
                 if record is None:
+                    if self.logging:
+                        self._log(batch_size=len(batch) - 1,
+                                  force=True)
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
-                        if self.logging:
-                            self._log(batch_size=len(batch),
-                                      force=True)
                         signal.send(ActorExit(self.instance_id))
                     return
                 self._put_next(record)

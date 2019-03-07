@@ -21,6 +21,8 @@ logging.basicConfig(level=logging.INFO)
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
+parser.add_argument("--task-based", default=False,
+                    help="task-based execution")
 parser.add_argument("--fan-in", default=0,
                     help="the number of input channels to the 2nd stage")
 parser.add_argument("--fan-out", default=0,
@@ -81,13 +83,11 @@ class Source(object):
     def get_next(self):
         record = None
         if self.total_count == self.total_elements:
-            print("Source Done")
             return record
         self.record += 1
         record = self.record
         self.total_count += 1
         self.count += 1
-        print(self.record)
         if self.count == self.period:
             self.count = 0
             return (time.time(),record)  # Assign the generation timestamp
@@ -105,10 +105,14 @@ def compute_elapsed_time(record):
 # Measures latency
 def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
                     record_size, queue_config, sample_period,
-                    latency_filename, throughput_filename):
+                    latency_filename, throughput_filename,
+                    task_based):
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
+    env.enable_logging()
+    if task_based:
+        env.enable_tasks()
     source_streams = []
     for i in range(fan_in):
         stream = env.source(Source(rounds, record_type,
@@ -131,10 +135,14 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
 
 def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
                      record_size, queue_config, sample_period,
-                     latency_filename, throughput_filename):
+                     latency_filename, throughput_filename,
+                     task_based):
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
+    env.enable_logging()
+    if task_based:
+        env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period))
     if partitioning == "shuffle":
@@ -173,6 +181,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
+    task_based = int(args.task_based)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     sample_period = int(args.sample_period)
@@ -190,6 +199,7 @@ if __name__ == "__main__":
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Task-based execution: {}".format(task_based))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file: {}".format(latency_filename))
     logger.info("Throughput file: {}".format(throughput_filename))
@@ -227,9 +237,11 @@ if __name__ == "__main__":
         logger.info("== Testing fan-in ==")
         fan_in_benchmark(rounds, fan_in, partitioning, record_type,
                         record_size, queue_config, sample_period,
-                        latency_filename, throughput_filename)
+                        latency_filename, throughput_filename,
+                        task_based)
     if fan_out != 0:
         logger.info("== Testing fan-out ==")
         fan_out_benchmark(rounds, fan_out, partitioning, record_type,
                          record_size, queue_config, sample_period,
-                         latency_filename, throughput_filename)
+                         latency_filename, throughput_filename,
+                         task_based)
