@@ -17,6 +17,13 @@
     } \
   } \
 
+#define LOG_OP(OP, ID) \
+  if (prefix_ != TablePrefix::HEARTBEAT && prefix_ != TablePrefix::HEARTBEAT_BATCH) { \
+    RAY_LOG(DEBUG) << "[GCS] " OP " to" \
+        << " table " << EnumNameTablePrefix(prefix_) \
+        << " key " << ID;\
+  } \
+
 
 namespace {
 
@@ -53,6 +60,7 @@ namespace gcs {
 template <typename ID, typename Data>
 Status Log<ID, Data>::Append(const JobID &job_id, const ID &id,
                              std::shared_ptr<DataT> &dataT, const WriteCallback &done) {
+  LOG_OP("Append", id);
   num_appends_++;
   auto callback = [this, id, dataT, done](const std::string &data) {
     START_HANDLER();
@@ -80,6 +88,7 @@ template <typename ID, typename Data>
 Status Log<ID, Data>::AppendAt(const JobID &job_id, const ID &id,
                                std::shared_ptr<DataT> &dataT, const WriteCallback &done,
                                const WriteCallback &failure, int log_length) {
+  LOG_OP("AppendAt", id);
   num_appends_++;
   auto callback = [this, id, dataT, done, failure](const std::string &data) {
     START_HANDLER();
@@ -108,6 +117,7 @@ Status Log<ID, Data>::AppendAt(const JobID &job_id, const ID &id,
 
 template <typename ID, typename Data>
 Status Log<ID, Data>::Lookup(const JobID &job_id, const ID &id, const Callback &lookup) {
+  LOG_OP("Lookup", id);
   num_lookups_++;
   auto callback = [this, id, lookup](const std::string &data) {
     START_HANDLER();
@@ -186,6 +196,7 @@ Status Log<ID, Data>::Subscribe(const JobID &job_id, const ClientID &client_id,
 template <typename ID, typename Data>
 Status Log<ID, Data>::RequestNotifications(const JobID &job_id, const ID &id,
                                            const ClientID &client_id) {
+  LOG_OP("RequestNotifications", id);
   RAY_CHECK(subscribe_callback_index_ >= 0)
       << "Client requested notifications on a key before Subscribe completed";
   return GetRedisContext(id)->RunAsync("RAY.TABLE_REQUEST_NOTIFICATIONS", id,
@@ -196,6 +207,7 @@ Status Log<ID, Data>::RequestNotifications(const JobID &job_id, const ID &id,
 template <typename ID, typename Data>
 Status Log<ID, Data>::CancelNotifications(const JobID &job_id, const ID &id,
                                           const ClientID &client_id) {
+  LOG_OP("CancelNotifications", id);
   RAY_CHECK(subscribe_callback_index_ >= 0)
       << "Client canceled notifications on a key before Subscribe completed";
   return GetRedisContext(id)->RunAsync("RAY.TABLE_CANCEL_NOTIFICATIONS", id,
@@ -242,6 +254,7 @@ std::string Log<ID, Data>::DebugString() const {
 template <typename ID, typename Data>
 Status Table<ID, Data>::Add(const JobID &job_id, const ID &id,
                             std::shared_ptr<DataT> &dataT, const WriteCallback &done) {
+  LOG_OP("Add", id);
   num_adds_++;
   auto callback = [this, id, dataT, done](const std::string &data) {
     START_HANDLER();
