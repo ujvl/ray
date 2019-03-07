@@ -68,6 +68,9 @@ class Node(object):
         self.start = time.time()
         self.log_latency = log_latency
 
+    def ping(self):
+        return
+
     def read_write(self, rounds):
         debug_log = "[actor {}] Reads throttled to {} reads/s"
         log = ""
@@ -130,6 +133,7 @@ def benchmark_queue(rounds, latency_file,
     previous_queue = first_queue
     logs = []
     log_latency = False
+    nodes = []
     for i in range(num_queues):
         # Construct the batched queue
         in_queue = previous_queue
@@ -150,12 +154,18 @@ def benchmark_queue(rounds, latency_file,
             log_latency = True
         node = Node.remote(i, in_queue, out_queue,
                            max_reads_per_second,log_latency)
+        nodes.append(node)
+        previous_queue = out_queue
+
+    # Wait for all of the node actors to come up.
+    ray.get([node.ping.remote() for node in nodes])
+
+    for node in nodes:
         # Each actor returns a list of per-record latencies
         # sampled every 'sample_period' records
         # and a list of throughput values estimated for every
         # N = 100000 records in its input
         logs.append(node.read_write.remote(rounds))
-        previous_queue = out_queue
 
     value = 0 if record_type == "int" else ""
     count = 0
