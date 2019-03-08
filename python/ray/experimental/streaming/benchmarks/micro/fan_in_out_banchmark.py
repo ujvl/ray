@@ -135,7 +135,7 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
         source_streams.append(stream)
     stream = source_streams.pop()
     stream = stream.union(source_streams, id="union")
-    # TODO (john): Having one flatmap here might be a bottleneck
+    # TODO (john): Having one flatmap here might become a bottleneck
     stream = stream.flat_map(compute_elapsed_time, id="flatmap")
     # Add one sink per flatmap instance to log the per-record latencies
     _ = stream.sink(Sink(), id="sink")
@@ -245,7 +245,8 @@ def write_log_files(dump_filename, latency_filename,
     with open(throughput_filename, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
             for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
-                tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
+                tf.write(str(actor_id) + " | " + str(i) + " | " + str(
+                                                                    o) + "\n")
 
 
 if __name__ == "__main__":

@@ -195,7 +195,7 @@ def benchmark_queue(rounds, latency_file,
         rounds, sample_period,
         record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
-        background_flush, max_reads_per_second, num_queues
+        background_flush, num_queues, max_reads_per_second,
     )
 
     # Dump timeline
@@ -214,7 +214,7 @@ def benchmark_queue(rounds, latency_file,
     with open(throughput_file, "w") as tf:
         for node_id, _, throughputs in result:
             for throughput in throughputs:
-                tf.write(str(node_id) + " " + str(throughput) + "\n")
+                tf.write(str(node_id) + " | " + str(throughput) + "\n")
 
 class RecordGenerator(object):
     def __init__(self, rounds, record_type="int",

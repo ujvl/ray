@@ -221,7 +221,7 @@ class Environment(object):
             # Other input streams are not needed any more.
             # Discard them to avoid serialization errors due to
             # recursive references between stream and environment
-            operator.other_inputs.clear()
+            del operator.other_inputs[:]
             actor_handle = operator_instance.Union.remote(actor_id, operator,
                                                        input, output)
         elif operator.type == OpType.Reduce:
@@ -751,6 +751,7 @@ class DataStream(object):
         Attributes:
              other_streams list(DataStream): The list of streams to union.
         """
+        assert isinstance(other_inputs, list), other_inputs
         op = operator.UnionOperator(
             id,
             OpType.Union,

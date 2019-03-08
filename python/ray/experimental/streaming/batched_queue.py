@@ -187,7 +187,8 @@ class BatchedQueue(object):
                 num_returns=len(self.task_queue),
                 timeout=0)
         while len(self.task_queue) > self.max_size:
-            logger.debug("[writer] Waiting for downstream tasks to finish")
+            logger.debug("Waiting for ({},{}) to catch up".format(
+                                self.dst_operator_id, self.dst_instance_id))
             _, self.task_queue = ray.wait(
                     self.task_queue,
                     num_returns=len(self.task_queue),
@@ -208,7 +209,8 @@ class BatchedQueue(object):
         remote_offset = int(remote_offset)
         if self.write_item_offset - remote_offset > self.max_size:
             logger.debug(
-                "[writer] Waiting for reader to catch up {} to {} - {}".format(
+                "Waiting for ({},{}) to catch up {} to {} - {}".format(
+                    self.dst_operator_id, self.dst_instance_id,
                     remote_offset, self.write_item_offset, self.max_size))
             while self.write_item_offset - remote_offset > self.max_size:
                 time.sleep(0.01)
