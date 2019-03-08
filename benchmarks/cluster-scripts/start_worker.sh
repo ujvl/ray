@@ -32,11 +32,27 @@ ray start --redis-address=$HEAD_IP:6379 \
     "object_manager_receive_threads": '$RECEIVE_THREADS'}'
 
 sleep 5
+
+i=0
+for pid in `pgrep -w raylet`; do
+    core=$(( i % 3  + 1 ))
+    taskset -pc $core $pid
+    sudo renice -n -10 -p $pid
+    i=$(( $i + 1 ))
+done
+
 taskset -pc 0 `pgrep raylet`
-taskset -pc 0 `pgrep plasma_store`
 sudo renice -n -19 -p `pgrep raylet`
+
+#for i in `seq 0 7`; do
+#    yes > /dev/null &
+#    taskset -pc $i $!
+#done
+
 
 for pid in `pgrep -w python`; do
     taskset -pc 1-3 $pid
     #sudo renice -n -5 -p $pid
 done
+
+sleep 1
