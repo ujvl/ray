@@ -3,7 +3,10 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
-import itertools
+try:
+    from itertools import zip_longest as zip_longest
+except:
+    from itertools import izip_longest as zip_longest
 import logging
 import random
 import string
@@ -198,8 +201,7 @@ def write_log_files(all_parameters, latency_file,
     throughput_file = throughput_file + all_parameters
     with open(throughput_file, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
-            for i, o in itertools.zip_longest(in_rate,
-                                                 out_rate, fillvalue=0):
+            for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
                 tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
 
 

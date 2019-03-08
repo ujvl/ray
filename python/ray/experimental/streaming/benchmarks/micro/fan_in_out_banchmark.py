@@ -3,7 +3,10 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
-import itertools
+try:
+    from itertools import zip_longest as zip_longest
+except:
+    from itertools import izip_longest as zip_longest
 import logging
 import random
 import statistics
@@ -169,8 +172,8 @@ def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
         stream = stream.shuffle()
     elif partitioning == "broadcast":
         stream = stream.broadcast()
-    #stream = stream.map(lambda record: record,
-    #                    id="map").set_parallelism(fan_out)
+    stream = stream.map(lambda record: record,
+                        id="map").set_parallelism(fan_out)
     stream = stream.flat_map(compute_elapsed_time,
                              id="flatmap").set_parallelism(fan_out)
     # Add one sink per flatmap instance to log the per-record latencies
@@ -241,8 +244,7 @@ def write_log_files(dump_filename, latency_filename,
         rates.extend(logs)
     with open(throughput_filename, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
-            for i, o in itertools.zip_longest(in_rate,
-                                                 out_rate, fillvalue=0):
+            for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
                 tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
 
 
