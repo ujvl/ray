@@ -1,12 +1,12 @@
-import os
+import subprocess
 import time
 
 import ray
 
 # Parameters
 rounds = 4
-latency_filename = "latencies.txt"
-throughput_filename = "throughputs.txt"
+latency_filename = "data/latencies.txt"
+throughput_filename = "data/throughputs.txt"
 sample_period = 100
 record_type = "int"
 record_size = None
@@ -40,7 +40,8 @@ for num in num_queues:
                 arg4 = "--flush-timeout " + str(batch_time) + " "
                 run = command + arg1 + arg2 + arg3 + arg4
                 print("Executing: ", run)
-                os.system(run)
+                process = subprocess.Popen(run, shell=True,
+                                    stdout=subprocess.PIPE).stdout.read()
 
 # Chaining micro-benchmark
 times = "--rounds " + str(rounds) + " "
@@ -61,11 +62,13 @@ for num in num_queues:
                     # queue-based
                     run = command + arg1 + arg2 + arg3 + arg4 + arg5
                     print("Executing: ", run)
-                    os.system(run)
+                    process = subprocess.Popen(run, shell=True,
+                                        stdout=subprocess.PIPE).stdout.read()
                     # task-based
                     run += "--task-based 1"
                     print("Executing: ", run)
-                    os.system(run)
+                    process = subprocess.Popen(run, shell=True,
+                                        stdout=subprocess.PIPE).stdout.read()
 
 
 # Fan-in/out micro-benchmark
@@ -85,7 +88,8 @@ for queue_size in max_queue_size:
                 # queue-based
                 run = command + arg2 + arg3 + arg4 + arg5
                 print("Executing: ", run)
-                os.system(run)
+                process = subprocess.Popen(run, shell=True,
+                                    stdout=subprocess.PIPE).stdout.read()
                 # task-based
                 run += "--task-based 1"
                 print("Executing: ", run)
@@ -95,7 +99,8 @@ for queue_size in max_queue_size:
                 # queue-based
                 run = command + arg2 + arg3 + arg4 + arg5
                 print("Executing: ", run)
-                os.system(run)
+                process = subprocess.Popen(run, shell=True,
+                                    stdout=subprocess.PIPE).stdout.read()
                 # task-based
                 run += "--task-based 1"
                 print("Executing: ", run)
