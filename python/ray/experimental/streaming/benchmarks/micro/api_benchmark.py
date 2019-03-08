@@ -27,6 +27,7 @@ parser.add_argument("--rounds", default=10,
 parser.add_argument("--num-stages", default=2,
                     help="the number of stages in the chain")
 parser.add_argument("--task-based", default=False,
+                    action='store_true',
                     help="task-based execution")
 parser.add_argument("--dataflow-parallelism", default=1,
                     help="the number of instances per operator")
@@ -37,6 +38,8 @@ parser.add_argument("--latency-file", required=True,
                     help="the file to log per-record latencies")
 parser.add_argument("--throughput-file", required=True,
                     help="the file to log actors throughput")
+parser.add_argument("--dump-file", required=True,
+                    help="the file to dump chrome timeline")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
 parser.add_argument("--record-size", default=10,
@@ -129,8 +132,8 @@ def compute_elapsed_time(record):
 def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
-                            latency_file, throughput_file,
-                            task_based):
+                            latency_filename, throughput_filename,
+                            dump_filename, task_based):
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
@@ -169,24 +172,24 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
         partitioning, task_based, dataflow_parallelism
     )
     write_log_files(all_parameters, latency_filename,
-                    throughput_filename, dataflow)
+                    throughput_filename, dump_filename, dataflow)
 
     logger.info("Elapsed time: {}".format(time.time()-start))
 
 # Collects sampled latencies and throughputs from
 # actors in the dataflow and writes the log files
-def write_log_files(all_parameters, latency_file,
-                    throughput_file, dataflow):
+def write_log_files(all_parameters, latency_filename,
+                    throughput_filename,  dump_filename, dataflow):
 
     # Dump timeline
-    dump_file = "dump" + all_parameters
-    ray.global_state.chrome_tracing_dump(dump_file)
+    dump_filename = dump_filename + all_parameters
+    ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Collect sampled per-record latencies
     local_states = ray.get(dataflow.state_of("sink"))
     latencies = [state for state in local_states if state is not None]
-    latency_file = latency_file + all_parameters
-    with open(latency_file, "w") as tf:
+    latency_filename = latency_filename + all_parameters
+    with open(latency_filename, "w") as tf:
         for _, latency_values in latencies:
             if latency_values is not None:
                 for value in latency_values:
@@ -198,8 +201,8 @@ def write_log_files(all_parameters, latency_file,
     for id in ids:
         logs = ray.get(dataflow.logs_of(id))
         rates.extend(logs)
-    throughput_file = throughput_file + all_parameters
-    with open(throughput_file, "w") as tf:
+    throughput_filename = throughput_filename + all_parameters
+    with open(throughput_filename, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
             for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
                 tf.write(
@@ -213,10 +216,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
-    task_based = bool(args.task_based)
+    task_based = args.task_based
     num_stages = int(args.num_stages)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
+    dump_filename = str(args.dump_file)
     sample_period = int(args.sample_period)
     dataflow_parallelism = int(args.dataflow_parallelism)
     record_type = str(args.record_type)
@@ -234,6 +238,7 @@ if __name__ == "__main__":
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file: {}".format(latency_filename))
     logger.info("Throughput file: {}".format(throughput_filename))
+    logger.info("Dump file: {}".format(dump_filename))
     logger.info("Number of stages: {}".format(num_stages))
     logger.info("Parallelism: {}".format(dataflow_parallelism))
     logger.info("Record type: {}".format(record_type))
@@ -266,4 +271,4 @@ if __name__ == "__main__":
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
-                            task_based)
+                            dump_filename, task_based)

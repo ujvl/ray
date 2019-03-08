@@ -28,6 +28,8 @@ parser.add_argument("--latency-file", required=True,
                     help="the file to log per-record latencies")
 parser.add_argument("--throughput-file", required=True,
                     help="the file to log actors throughput")
+parser.add_argument("--dump-file", required=True,
+                    help="the file to dump chrome timeline")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
 parser.add_argument("--queue-size", default=10000,
@@ -111,8 +113,8 @@ class Node(object):
 
         return (self.id, self.latencies, self.throughputs)
 
-def benchmark_queue(rounds, latency_file,
-                        throughput_file,
+def benchmark_queue(rounds, latency_filename,
+                        throughput_filename, dump_filename,
                         record_type, record_size,
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
@@ -199,19 +201,19 @@ def benchmark_queue(rounds, latency_file,
     )
 
     # Dump timeline
-    dump_file = "dump" + all_parameters
-    ray.global_state.chrome_tracing_dump(dump_file)
+    dump_filename = dump_filename + all_parameters
+    ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Write sampled per-record latencies
-    latency_file = latency_file + all_parameters
-    with open(latency_file, "w") as lf:
+    latency_filename = latency_filename + all_parameters
+    with open(latency_filename, "w") as lf:
         for node_id, latencies, _ in result:
             for latency in latencies:
                 lf.write(str(latency) + "\n")
 
     # Collect throughputs from all actors
-    throughput_file = throughput_file + all_parameters
-    with open(throughput_file, "w") as tf:
+    throughput_filename = throughput_filename + all_parameters
+    with open(throughput_filename, "w") as tf:
         for node_id, _, throughputs in result:
             for throughput in throughputs:
                 tf.write(str(node_id) + " | " + str(throughput) + "\n")
@@ -266,6 +268,7 @@ if __name__ == "__main__":
     rounds = int(args.rounds)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
+    dump_filename = str(args.dump_file)
     sample_period = int(args.sample_period)
     record_type = str(args.record_type)
     record_size = int(args.record_size) if record_type == "string" else None
@@ -307,7 +310,7 @@ if __name__ == "__main__":
     logger.info("== Testing Batched Queue Chaining ==")
     start = time.time()
     benchmark_queue(rounds, latency_filename,
-                        throughput_filename,
+                        throughput_filename, dump_filename,
                         record_type, record_size,
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
