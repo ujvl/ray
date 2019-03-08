@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import itertools
 import logging
 import random
 import string
@@ -135,17 +136,18 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     if task_based:
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
-                                record_size, sample_period))
+                                record_size, sample_period),
+                                id="source")
     for stage in range(num_stages):
         if partitioning == "shuffle":
             stream = stream.shuffle()
         elif partitioning == "broadcast":
             stream = stream.broadcast()
         if stage < num_stages - 1:
-            stream = stream.map(lambda record: record)
+            stream = stream.map(lambda record: record, id="map")
         else: # Last stage actors should compute the per-record latencies
-            stream = stream.flat_map(compute_elapsed_time)
-    _ = stream.sink(Sink(), id="my_sink")
+            stream = stream.flat_map(compute_elapsed_time, id="flatmap")
+    _ = stream.sink(Sink(), id="sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
@@ -156,11 +158,11 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     batch_timeout = queue_config.max_batch_time
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
-    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
         rounds, sample_period,
         record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
-        background_flush, max_reads_per_second, num_stages,
+        background_flush, num_stages,
         partitioning, task_based, dataflow_parallelism
     )
     write_log_files(all_parameters, latency_filename,
@@ -178,7 +180,7 @@ def write_log_files(all_parameters, latency_file,
     ray.global_state.chrome_tracing_dump(dump_file)
 
     # Collect sampled per-record latencies
-    local_states = ray.get(dataflow.state_of("my_sink"))
+    local_states = ray.get(dataflow.state_of("sink"))
     latencies = [state for state in local_states if state is not None]
     latency_file = latency_file + all_parameters
     with open(latency_file, "w") as tf:
@@ -189,17 +191,16 @@ def write_log_files(all_parameters, latency_file,
 
     # Collect throughputs from all actors (except the sink)
     ids = dataflow.operator_ids()
-    throughputs = []
+    rates = []
     for id in ids:
         logs = ray.get(dataflow.logs_of(id))
-        throughputs.extend(logs)
+        rates.extend(logs)
     throughput_file = throughput_file + all_parameters
     with open(throughput_file, "w") as tf:
-        for actor_id, throughput_values in throughputs:
-            operator_id, instance_id = actor_id
-            for value in throughput_values:
-                tf.write(str(operator_id) + " " + str(
-                    instance_id) + " " + str(value) + "\n")
+        for actor_id, in_rate, out_rate in rates:
+            for i, o in itertools.zip_longest(in_rate,
+                                                 out_rate, fillvalue=0):
+                tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
 
 
 if __name__ == "__main__":
@@ -223,7 +224,6 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
-    max_reads_per_second = float(args.max_throughput)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -242,7 +242,6 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
-    logger.info("Max read throughput: {}".format(max_reads_per_second))
 
     # Estimate the ideal throughput
     source = Source(rounds, record_type, record_size)

@@ -104,7 +104,7 @@ class BatchedQueue(object):
         self.max_batch_size = max_batch_size
         self.max_batch_time = max_batch_time
         self.prefetch_depth = prefetch_depth
-        self.background_flush = background_flush
+        self.background_flush = False # background_flush
         self.task_based = task_based  # True for task-based data exchange
 
         # Common queue metadata -- This serves as the unique id of the queue
@@ -153,30 +153,29 @@ class BatchedQueue(object):
         return np.ndarray.tobytes(oid)
 
     def _flush_writes(self):
-        with self.flush_lock:
-            if not self.write_buffer:
-                return
-            if self.task_based:  # Submit a new downstream task
-                obj_id = self.destination_actor.apply.remote(
-                                    [self.write_buffer], self.channel_id)
-                self.task_queue.append(obj_id)
-            else:  # Flush batch to plasma
-                with ray.profiling.profile("flush_batch"):
-                    batch_id = self._batch_id(self.write_batch_offset)
-                    ray.worker.global_worker.put_object(
-                        ray.ObjectID(batch_id), self.write_buffer)
-            logger.debug("[writer] Flush batch {} offset {} size {}".format(
-                self.write_batch_offset, self.write_item_offset,
-                len(self.write_buffer)))
-            self.write_buffer = []
-            self.write_batch_offset += 1
-            # Check for backpressure
-            with ray.profiling.profile("wait_for_reader"):
-                if self.task_based:
-                    self._wait_for_task_reader()
-                else:
-                    self._wait_for_reader()
-            self.last_flush_time = time.time()
+        if not self.write_buffer:
+            return
+        if self.task_based:  # Submit a new downstream task
+            obj_id = self.destination_actor.apply.remote(
+                                [self.write_buffer], self.channel_id)
+            self.task_queue.append(obj_id)
+        else:  # Flush batch to plasma
+            with ray.profiling.profile("flush_batch"):
+                batch_id = self._batch_id(self.write_batch_offset)
+                ray.worker.global_worker.put_object(
+                    ray.ObjectID(batch_id), self.write_buffer)
+        logger.debug("[writer] Flush batch {} offset {} size {}".format(
+            self.write_batch_offset, self.write_item_offset,
+            len(self.write_buffer)))
+        self.write_buffer = []
+        self.write_batch_offset += 1
+        # Check for backpressure
+        with ray.profiling.profile("wait_for_reader"):
+            if self.task_based:
+                self._wait_for_task_reader()
+            else:
+                self._wait_for_reader()
+        self.last_flush_time = time.time()
 
     def _wait_for_task_reader(self):
         """Checks for backpressure by the downstream task-based reader."""

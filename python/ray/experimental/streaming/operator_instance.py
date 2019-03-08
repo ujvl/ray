@@ -70,6 +70,7 @@ class OperatorInstance(object):
         # Logging-related attributes
         self.logging = self.metadata.logging
         if self.logging:
+            self.input.enable_logging()
             self.output.enable_logging()
 
         # Enable writes to all output channels
@@ -231,7 +232,6 @@ class Map(OperatorInstance):
         OperatorInstance.__init__(self, instance_id,
                                   operator_metadata, input_gate, output_gate)
         self.map_fn = operator_metadata.logic
-        self.throughputs = []
 
     # Applies the map to each record of the input stream(s)
     # and pushes resulting records to the output stream(s)
@@ -244,9 +244,10 @@ class Map(OperatorInstance):
                 return
             self.output._push(self.map_fn(record))
 
-    # Returns the logged throughput values
+    # Returns the logged rates
     def logs(self):
-        return (self.instance_id, self.output.throughputs)
+        return (self.instance_id, self.input.rates,
+                self.output.rates)
 
     # Task-based map execution on a set of batches
     def apply(self, batches, channel_id):
@@ -278,7 +279,6 @@ class FlatMap(OperatorInstance):
         OperatorInstance.__init__(self, instance_id,
                                   operator_metadata, input_gate, output_gate)
         self.flatmap_fn = operator_metadata.logic
-        self.throughputs = []
 
     # Applies the splitter to the records of the input stream(s)
     # and pushes resulting records to the output stream(s)
@@ -291,9 +291,10 @@ class FlatMap(OperatorInstance):
                 return
             self.output._push_all(self.flatmap_fn(record))
 
-    # Returns the logged throughput values
+    # Returns the logged rates
     def logs(self):
-        return (self.instance_id, self.output.throughputs)
+        return (self.instance_id, self.input.rates,
+                self.output.rates)
 
     # Task-based flatmap execution on a set of batches
     def apply(self, batches, channel_id):
@@ -382,6 +383,12 @@ class Union(OperatorInstance):
                     return
                 self.output._push(record)
 
+    # Returns the logged rates
+    def logs(self):
+        return (self.instance_id, self.input.rates,
+                self.output.rates)
+
+
 # Inspect actor
 @ray.remote
 class Inspect(OperatorInstance):
@@ -423,6 +430,7 @@ class Inspect(OperatorInstance):
                     return
                 self.inspect_fn(record)
                 self.output._push(record)
+
 
 # Reduce actor
 @ray.remote
@@ -568,7 +576,6 @@ class Source(OperatorInstance):
                                   operator_metadata, input_gate, output_gate)
         # The user-defined source with a get_next() method
         self.source = operator_metadata.source
-        self.throughputs = []
 
     # Starts the source by calling get_next() repeatedly
     def start(self):
@@ -580,9 +587,10 @@ class Source(OperatorInstance):
                 return
             self.output._push(record)
 
-    # Returns the logged throughput values
+    # Returns the logged rates
     def logs(self):
-        return (self.instance_id, self.output.throughputs)
+        return (self.instance_id, self.input.rates,
+                self.output.rates)
 
 
 # A custom sink actor
@@ -623,9 +631,9 @@ class Sink(OperatorInstance):
         except AttributeError:
             return None
 
-    # Returns the logged throughput values
+    # Returns the logged rates
     def logs(self):
-        return (self.instance_id, [])
+        return (self.instance_id, [], [])
 
 # A sink actor that writes records to a distributed text file
 @ray.remote
@@ -644,7 +652,6 @@ class WriteTextFile(OperatorInstance):
         self.writer = open(self.filename, "w")
         # User-defined logic applied to each record (optional)
         self.logic = operator_metadata.logic
-        self.throughputs = []
 
     # Applies logic (if any) and writes result to a text file
     def _put_next(self, record):
@@ -663,9 +670,9 @@ class WriteTextFile(OperatorInstance):
                 return
             self._put_next(record)
 
-    # Returns the logged throughput values
+    # Returns the logged rates
     def logs(self):
-        return (self.instance_id, [])
+        return (self.instance_id, [], [])
 
     # Task-based sink execution on a set of batches
     def apply(self, batches, channel_id):

@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import itertools
 import logging
 import random
 import statistics
@@ -68,17 +69,6 @@ class Source(object):
         self.record_size = record_size
         self.record = -1
 
-    # Returns the next int
-    def __get_next_int(self):
-        self.record += 1
-        return self.record
-
-    # Returns the next random string
-    def __get_next_string(self):
-        return "".join(random.choice(
-                string.ascii_letters + string.digits) for _ in range(
-                                                        self.record_size))
-
     # Generates next record
     def get_next(self):
         record = None
@@ -133,29 +123,32 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
     source_streams = []
     for i in range(fan_in):
         stream = env.source(Source(rounds, record_type,
-                                    record_size, sample_period))
+                                    record_size, sample_period),
+                                    id="source")
         if partitioning == "shuffle":
             stream = stream.shuffle()
         elif partitioning == "broadcast":
             stream = stream.broadcast()
         source_streams.append(stream)
     stream = source_streams.pop()
-    stream = stream.union(source_streams)
+    stream = stream.union(source_streams, id="union")
     # TODO (john): Having one flatmap here might be a bottleneck
-    stream = stream.flat_map(compute_elapsed_time)
+    stream = stream.flat_map(compute_elapsed_time, id="flatmap")
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.sink(Sink(), id="my_sink")
+    _ = stream.sink(Sink(), id="sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
 
-    latency_filename, throughput_filename = create_filenames(
-                        latency_filename, throughput_filename,
-                        rounds, sample_period,
-                        record_type, record_size, queue_config,
-                        max_reads_per_second, num_stages,
-                        partitioning, task_based, fan_in)
-    write_log_files(latency_filename,
+    # Write log files
+    dump_filename, latency_filename, throughput_filename = create_filenames(
+                                            latency_filename, throughput_filename,
+                                            rounds, sample_period,
+                                            record_type, record_size,
+                                            queue_config, partitioning,
+                                            task_based, fan_in,
+                                            False)
+    write_log_files(dump_filename,latency_filename,
                     throughput_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
@@ -170,26 +163,31 @@ def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
     if task_based:
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
-                                record_size, sample_period))
+                                record_size, sample_period),
+                                id="source")
     if partitioning == "shuffle":
         stream = stream.shuffle()
     elif partitioning == "broadcast":
         stream = stream.broadcast()
-    stream = stream.flat_map(compute_elapsed_time).set_parallelism(fan_out)
+    #stream = stream.map(lambda record: record,
+    #                    id="map").set_parallelism(fan_out)
+    stream = stream.flat_map(compute_elapsed_time,
+                             id="flatmap").set_parallelism(fan_out)
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.sink(Sink(), id="my_sink").set_parallelism(fan_out)
+    _ = stream.sink(Sink(), id="sink").set_parallelism(fan_out)
     start = time.time()
     dataflow = env.execute()
+    env.print_physical_graph()
     ray.get(dataflow.termination_status())
-
     # Write log files
-    latency_filename, throughput_filename = create_filenames(
-                        latency_filename, throughput_filename,
-                        rounds, sample_period,
-                        record_type, record_size,
-                        queue_config, max_reads_per_second, num_stages,
-                        partitioning, task_based, fan_out)
-    write_log_files(latency_filename,
+    dump_filename, latency_filename, throughput_filename = create_filenames(
+                                            latency_filename, throughput_filename,
+                                            rounds, sample_period,
+                                            record_type, record_size,
+                                            queue_config, partitioning,
+                                            task_based, fan_out,
+                                            True)
+    write_log_files(dump_filename,latency_filename,
                     throughput_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
@@ -197,38 +195,39 @@ def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
 def create_filenames(latency_filename, throughput_filename,
                     rounds, sample_period,
                     record_type, record_size, queue_config,
-                    max_reads_per_second, num_stages,
-                    partitioning, task_based, fan_in_out):
+                    partitioning, task_based, fan_in_out, flag):
     # Create log filenames
     max_queue_size = queue_config.max_size
     max_batch_size = queue_config.max_batch_size
     batch_timeout = queue_config.max_batch_time
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
-    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
         rounds, sample_period,
         record_type, record_size, max_queue_size,
         max_batch_size, batch_timeout, prefetch_depth,
-        background_flush, max_reads_per_second, num_stages,
-        partitioning, task_based, fan_in_out
+        background_flush, partitioning,
+        task_based, fan_in_out
     )
-    latency_filename = latency_filename + all_parameters
-    throughput_filename = throughput_filename + all_parameters
-    return latency_filename, throughput_filename
+    suffix = "-in"
+    if flag:
+        suffix = "-out"
+    dump_filename = "dump" + all_parameters + suffix
+    latency_filename += all_parameters + suffix
+    throughput_filename += all_parameters + suffix
+    return dump_filename, latency_filename, throughput_filename
 
 # Collects sampled latencies and throughputs for all actors in the dataflow
-def write_log_files(all_parameters, latency_filename,
+def write_log_files(dump_filename, latency_filename,
                     throughput_filename, dataflow):
 
     # Dump timeline
-    dump_file = "dump" + all_parameters
-    ray.global_state.chrome_tracing_dump(dump_file)
+    ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Collect sampled per-record latencies
-    local_states = ray.get(dataflow.state_of("my_sink"))
+    local_states = ray.get(dataflow.state_of("sink"))
     latencies = [state for state in local_states if state is not None]
-    latency_file = latency_file + all_parameters
-    with open(latency_file, "w") as tf:
+    with open(latency_filename, "w") as tf:
         for _, latency_values in latencies:
             if latency_values is not None:
                 for value in latency_values:
@@ -236,17 +235,15 @@ def write_log_files(all_parameters, latency_filename,
 
     # Collect throughputs from all actors (except the sink)
     ids = dataflow.operator_ids()
-    throughputs = []
+    rates = []
     for id in ids:
         logs = ray.get(dataflow.logs_of(id))
-        throughputs.extend(logs)
-    throughput_file = throughput_file + all_parameters
-    with open(throughput_file, "w") as tf:
-        for actor_id, throughput_values in throughputs:
-            operator_id, instance_id = actor_id
-            for value in throughput_values:
-                tf.write(str(operator_id) + " " + str(
-                    instance_id) + " " + str(value) + "\n")
+        rates.extend(logs)
+    with open(throughput_filename, "w") as tf:
+        for actor_id, in_rate, out_rate in rates:
+            for i, o in itertools.zip_longest(in_rate,
+                                                 out_rate, fillvalue=0):
+                tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
 
 
 if __name__ == "__main__":
@@ -256,7 +253,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
-    task_based = int(args.task_based)
+    task_based = bool(args.task_based)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     sample_period = int(args.sample_period)
@@ -270,7 +267,6 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
-    max_reads_per_second = float(args.max_throughput)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -291,7 +287,6 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
-    logger.info("Max read throughput: {}".format(max_reads_per_second))
 
     # Estimate the ideal throughput
     source = Source(rounds, record_type, record_size, sample_period)

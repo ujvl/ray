@@ -120,6 +120,13 @@ class DataInput(object):
         self.all_closed = False
         self.closed_channels = []  # Used for task-based execution
 
+        # Logging-related attributes
+        self.logging = False    # Default
+        self.records = 0        # Counter
+        self.rates = []         # Input rates
+        self.start = None       # Start timestamp
+        self.period = 100000    # Measure input rate every 100K records
+
     # Fetches records from input channels in a round-robin fashion
     # TODO (john): Make sure the instance is not blocked on any of its input
     # channels
@@ -138,8 +145,9 @@ class DataInput(object):
             if self.closed[self.channel_index - 1]:
                 continue  # Channel has been 'closed', check next
             record = channel.queue.read_next()
-            logger.debug("Actor ({},{}) pulled '{}'.".format(
-                channel.src_operator_id, channel.src_instance_id, record))
+            logger.debug("Actor ({},{}) pulled '{}' from channel {}.".format(
+                channel.dst_operator_id, channel.dst_instance_id, record,
+                channel))
             if record is None:
                 # Mark channel as 'closed' and pull from the next open one
                 self.closed[self.channel_index - 1] = True
@@ -150,6 +158,11 @@ class DataInput(object):
                         break
                 if not self.all_closed:
                     continue
+
+            if record is not None:  # Log throughput
+                self.__log(batch_size=1)
+            else:
+                self.__log(batch_size=0, force=True)
             # Returns 'None' iff all input channels are 'closed'
             return record
 
@@ -159,6 +172,21 @@ class DataInput(object):
         assert channel_id not in self.closed_channels
         self.closed_channels.append(channel_id)
         return len(self.closed_channels) == self.max_index
+
+    # Enables throughput logging on output channels
+    def enable_logging(self):
+        self.logging = True
+        self.start = time.time()
+
+    # Logs input rate
+    def __log(self, batch_size=0, force=False):
+        # Log throughput every N records
+        self.records += batch_size
+        if self.records >= self.period or (
+           force is True and self.records > 0):
+            self.rates.append(self.records / (time.time() - self.start))
+            self.records = 0
+            self.start = time.time()
 
 # Selects output channel(s) and pushes data
 class DataOutput(object):
@@ -253,11 +281,11 @@ class DataOutput(object):
         # Logging-related attributes
         self.logging = False    # Default
         self.records = 0        # Counter
-        self.throughputs = []   # Throughput values
+        self.rates = []         # Output rates
         self.start = None       # Start timestamp
-        self.period = 100000    # Measure throughput every 100K records
+        self.period = 100000    # Measure output rate every 100K records
 
-    # Enables throughput logging on output channels
+    # Enables rate logging on output channels
     def enable_logging(self):
         self.logging = True
         self.start = time.time()
@@ -297,7 +325,7 @@ class DataOutput(object):
                 channel.queue._flush_writes()
         # TODO (john): Add more channel types
 
-        if self.logging:  # Log throughput
+        if self.logging:  # Log rate
             self.__log(force=True)
 
     # Returns all destination actor ids
@@ -327,8 +355,9 @@ class DataOutput(object):
     def _push(self, record):
         # Forward record
         for channel in self.forward_channels:
-            logger.debug("[writer] Push record '{}' to channel {}".format(
-                record, channel))
+            logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
+                channel.src_operator_id, channel.src_instance_id, record,
+                channel))
             channel.queue.put_next(record)
         # Forward record
         index = 0
@@ -337,8 +366,9 @@ class DataOutput(object):
             if self.round_robin_indexes[index] == len(channels):
                 self.round_robin_indexes[index] = 0     # Reset index
             channel = channels[self.round_robin_indexes[index]]
-            logger.debug("[writer] Push record '{}' to channel {}".format(
-                                                            record, channel))
+            logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
+                channel.src_operator_id, channel.src_instance_id, record,
+                channel))
             channel.queue.put_next(record)
             index += 1
         # Hash-based shuffling by key
@@ -349,21 +379,24 @@ class DataOutput(object):
                 num_instances = len(channels)  # Downstream instances
                 channel = channels[h % num_instances]
                 logger.debug(
-                    "[key_shuffle] Push record '{}' to channel {}".format(
-                        record, channel))
+                    "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    channel.src_operator_id, channel.src_instance_id, record,
+                    channel))
                 channel.queue.put_next(record)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             h = _hash(record)
             for channels in self.shuffle_channels:
                 num_instances = len(channels)  # Downstream instances
                 channel = channels[h % num_instances]
-                logger.debug("[shuffle] Push record '{}' to channel {}".format(
-                    record, channel))
+                logger.debug(
+                    "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    channel.src_operator_id, channel.src_instance_id, record,
+                    channel))
                 channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
 
-        if self.logging:  # Log throughput
+        if self.logging:  # Log rate
             self.__log(batch_size=1)
 
     # Pushes a list of records to the output
@@ -374,8 +407,10 @@ class DataOutput(object):
         # Forward records
         for record in records:
             for channel in self.forward_channels:
-                logger.debug("[writer] Push record '{}' to channel {}".format(
-                    record, channel))
+                logger.debug(
+                    "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    channel.src_operator_id, channel.src_instance_id, record,
+                    channel))
                 channel.queue.put_next(record)
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
@@ -386,8 +421,9 @@ class DataOutput(object):
                     num_instances = len(channels)  # Downstream instances
                     channel = channels[h % num_instances]
                     logger.debug(
-                        "[key_shuffle] Push record '{}' to channel {}".format(
-                            record, channel))
+                    "Actor ({},{}) pushed '{}' to channel {}.".format(
+                        channel.src_operator_id, channel.src_instance_id,
+                        record, channel))
                     channel.queue.put_next(record)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
@@ -396,22 +432,23 @@ class DataOutput(object):
                     num_instances = len(channels)  # Downstream instances
                     channel = channels[h % num_instances]
                     logger.debug(
-                        "[shuffle] Push record '{}' to channel {}".format(
-                            record, channel))
+                        "Actor ({},{}) pushed '{}' to channel {}.".format(
+                        channel.src_operator_id, channel.src_instance_id,
+                        record, channel))
                     channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
 
-        if self.logging:  # Log throughput
+        if self.logging:  # Log rate
             self.__log(batch_size=len(records))
 
-    # Logs throughput
+    # Logs output rate
     def __log(self, batch_size=0, force=False):
         # Log throughput every N records
         self.records += batch_size
         if self.records >= self.period or (
            force is True and self.records > 0):
-            self.throughputs.append(self.records / (time.time() - self.start))
+            self.rates.append(self.records / (time.time() - self.start))
             self.records = 0
             self.start = time.time()
 

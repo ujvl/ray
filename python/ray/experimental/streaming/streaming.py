@@ -137,8 +137,8 @@ class PhysicalDataflow(object):
             state.append(actor_handle.state.remote())
         return state
 
-    # Returns a list of futures representing the logged throughput
-    # values for all actors executing the given operator
+    # Returns a list of futures representing the logged
+    # rates for all actors executing the given operator
     def logs_of(self, operator_id):
         logs = []  # One log object per operator instance
         actor_handles = self.actor_handles.get(operator_id)
@@ -399,10 +399,9 @@ class Environment(object):
     # TODO (john): There should be different types of sources, e.g. sources
     # reading from Kafka, text files, etc.
     # TODO (john): Handle case where environment parallelism is set
-    def source(self, source_object):
-        source_id = _generate_uuid()
-        source_stream = DataStream(self, source_id)
-        self.operators[source_id] = operator.CustomSourceOperator(source_id,
+    def source(self, source_object, id=_generate_uuid()):
+        source_stream = DataStream(self, id)
+        self.operators[id] = operator.CustomSourceOperator(id,
                                              OpType.Source,
                                              source_object,
                                              "Source",
@@ -660,14 +659,14 @@ class DataStream(object):
     # generating and processing watermarks
 
     # Registers map operator to the environment
-    def map(self, map_fn, name="Map"):
+    def map(self, map_fn, name="Map", id=_generate_uuid()):
         """Applies a map operator to the stream.
 
         Attributes:
              map_fn (function): The user-defined logic of the map.
         """
         op = operator.Operator(
-            _generate_uuid(),
+            id,
             OpType.Map,
             name,
             map_fn,
@@ -676,7 +675,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers flatmap operator to the environment
-    def flat_map(self, flatmap_fn):
+    def flat_map(self, flatmap_fn, id=_generate_uuid()):
         """Applies a flatmap operator to the stream.
 
         Attributes:
@@ -684,7 +683,7 @@ class DataStream(object):
              (e.g. split()).
         """
         op = operator.Operator(
-            _generate_uuid(),
+            id,
             OpType.FlatMap,
             "FlatMap",
             flatmap_fn,
@@ -746,14 +745,14 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers union operator to the environment
-    def union(self, other_inputs):
+    def union(self, other_inputs, id=_generate_uuid()):
         """Unions the stream with one or more other streams.
 
         Attributes:
              other_streams list(DataStream): The list of streams to union.
         """
         op = operator.UnionOperator(
-            _generate_uuid(),
+            id,
             OpType.Union,
             other_inputs,
             "Union",
