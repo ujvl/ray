@@ -7,6 +7,7 @@ import ray
 rounds = 1
 latency_filename = "data/queue/latencies.txt"
 throughput_filename = "data/queue/throughputs.txt"
+dump_filename = "data/queue/dump.json"
 sample_period = 100
 record_type = "int"
 record_size = None
@@ -18,7 +19,6 @@ background_flush = False
 num_queues = [2]
 num_stages = [2]
 max_reads_per_second = float("inf")
-task_based = [0,1]
 partitioning = "round_robin"                # "shuffle", "broadcast"
 dataflow_parallelism = [1]
 fan_in = [2,4,8,16]
@@ -29,7 +29,8 @@ times = "--rounds " + str(rounds) + " "
 period = "--sample-period " + str(100) + " "
 lf = "--latency-file " + latency_filename + " "
 tf = "--throughput-file " + throughput_filename + " "
-command = "python batched_queue_benchmark.py " + times + period + lf + tf
+df = "--dump-file " + dump_filename + " "
+command = "python batched_queue_benchmark.py " + times + period + lf + tf + df
 for num in num_queues:
     arg1 = "--num-queues " + str(num) + " "
     for queue_size in max_queue_size:
@@ -43,12 +44,17 @@ for num in num_queues:
                 code = subprocess.call(run, shell=True,
                                     stdout=subprocess.PIPE)
 
+latency_filename = "results/api/latencies.txt"
+throughput_filename = "results/api/throughputs.txt"
+dump_filename = "results/api/api.json"
+
 # Chaining micro-benchmark
 times = "--rounds " + str(rounds) + " "
 period = "--sample-period " + str(100) + " "
 lf = "--latency-file " + latency_filename + " "
 tf = "--throughput-file " + throughput_filename + " "
-command = "python api_benchmark.py " + times + period + lf + tf
+df = "--dump-file " + dump_filename + " "
+command = "python api_benchmark.py " + times + period + lf + tf + df
 for num in num_queues:
     arg1 = "--num-stages " + str(num) + " "
     for queue_size in max_queue_size:
@@ -65,7 +71,7 @@ for num in num_queues:
                     code = subprocess.call(run, shell=True,
                                         stdout=subprocess.PIPE)
                     # task-based
-                    run += "--task-based 1"
+                    run += "--task-based"
                     print("Executing: ", run)
                     code = subprocess.call(run, shell=True,
                                         stdout=subprocess.PIPE)

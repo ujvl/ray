@@ -282,9 +282,11 @@ if __name__ == "__main__":
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Number of queues: {}".format(num_queues))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file: {}".format(latency_filename))
     logger.info("Throughput file: {}".format(throughput_filename))
+    logger.info("Dump file: {}".format(dump_filename))
     logger.info("Record type: {}".format(record_type))
     if record_type == "string":
         logger.info("Record size: {}".format(record_size))
