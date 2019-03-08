@@ -20,7 +20,7 @@ num_stages = [1,2,3,4,5,6,7,8,9,10]
 max_reads_per_second = float("inf")
 task_based = [0,1]
 partitioning = "round_robin"                # "shuffle", "broadcast"
-dataflow_parallelism = [1,2,4,8]
+dataflow_parallelism = [1,2]
 fan_in = [2,4,8,16]
 fan_out = [2,4,8,16]
 
@@ -40,8 +40,8 @@ for num in num_queues:
                 arg4 = "--flush-timeout " + str(batch_time) + " "
                 run = command + arg1 + arg2 + arg3 + arg4
                 print("Executing: ", run)
-                process = subprocess.Popen(run, shell=True,
-                                    stdout=subprocess.PIPE).stdout.read()
+                code = subprocess.call(run, shell=True,
+                                    stdout=subprocess.PIPE)
 
 # Chaining micro-benchmark
 times = "--rounds " + str(rounds) + " "
@@ -62,13 +62,13 @@ for num in num_queues:
                     # queue-based
                     run = command + arg1 + arg2 + arg3 + arg4 + arg5
                     print("Executing: ", run)
-                    process = subprocess.Popen(run, shell=True,
-                                        stdout=subprocess.PIPE).stdout.read()
+                    code = subprocess.call(run, shell=True,
+                                        stdout=subprocess.PIPE)
                     # task-based
                     run += "--task-based 1"
                     print("Executing: ", run)
-                    process = subprocess.Popen(run, shell=True,
-                                        stdout=subprocess.PIPE).stdout.read()
+                    code = subprocess.call(run, shell=True,
+                                        stdout=subprocess.PIPE)
 
 
 # Fan-in/out micro-benchmark
@@ -88,8 +88,8 @@ for queue_size in max_queue_size:
                 # queue-based
                 run = command + arg2 + arg3 + arg4 + arg5
                 print("Executing: ", run)
-                process = subprocess.Popen(run, shell=True,
-                                    stdout=subprocess.PIPE).stdout.read()
+                code = subprocess.call(run, shell=True,
+                                    stdout=subprocess.PIPE)
                 # task-based
                 run += "--task-based 1"
                 print("Executing: ", run)
@@ -99,8 +99,8 @@ for queue_size in max_queue_size:
                 # queue-based
                 run = command + arg2 + arg3 + arg4 + arg5
                 print("Executing: ", run)
-                process = subprocess.Popen(run, shell=True,
-                                    stdout=subprocess.PIPE).stdout.read()
+                code = subprocess.call(run, shell=True,
+                                    stdout=subprocess.PIPE)
                 # task-based
                 run += "--task-based 1"
                 print("Executing: ", run)
