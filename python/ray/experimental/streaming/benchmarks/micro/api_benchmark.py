@@ -202,7 +202,8 @@ def write_log_files(all_parameters, latency_file,
     with open(throughput_file, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
             for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
-                tf.write(str(actor_id) + " " + str(i) + " " + str(o) + "\n")
+                tf.write(
+                    str(actor_id) + " | " + str(i) + " | " + str(o) + "\n")
 
 
 if __name__ == "__main__":
