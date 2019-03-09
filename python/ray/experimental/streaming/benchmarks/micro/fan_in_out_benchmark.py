@@ -26,6 +26,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
 parser.add_argument("--task-based", default=False,
+                    action='store_true',
                     help="task-based execution")
 parser.add_argument("--fan-in", default=0,
                     help="the number of input channels to the 2nd stage")
@@ -127,18 +128,18 @@ def fan_in_benchmark(rounds, fan_in, partitioning, record_type,
     for i in range(fan_in):
         stream = env.source(Source(rounds, record_type,
                                     record_size, sample_period),
-                                    id="source")
+                                    name="source_"+str(i))
         if partitioning == "shuffle":
             stream = stream.shuffle()
         elif partitioning == "broadcast":
             stream = stream.broadcast()
         source_streams.append(stream)
     stream = source_streams.pop()
-    stream = stream.union(source_streams, id="union")
+    stream = stream.union(source_streams, name="union")
     # TODO (john): Having one flatmap here might become a bottleneck
-    stream = stream.flat_map(compute_elapsed_time, id="flatmap")
+    stream = stream.flat_map(compute_elapsed_time, name="flatmap")
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.sink(Sink(), id="sink")
+    _ = stream.sink(Sink(), name="sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
@@ -167,17 +168,17 @@ def fan_out_benchmark(rounds, fan_out, partitioning, record_type,
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period),
-                                id="source")
+                                name="source")
     if partitioning == "shuffle":
         stream = stream.shuffle()
     elif partitioning == "broadcast":
         stream = stream.broadcast()
     stream = stream.map(lambda record: record,
-                        id="map").set_parallelism(fan_out)
+                        name="map").set_parallelism(fan_out)
     stream = stream.flat_map(compute_elapsed_time,
-                             id="flatmap").set_parallelism(fan_out)
+                             name="flatmap").set_parallelism(fan_out)
     # Add one sink per flatmap instance to log the per-record latencies
-    _ = stream.sink(Sink(), id="sink").set_parallelism(fan_out)
+    _ = stream.sink(Sink(), name="sink").set_parallelism(fan_out)
     start = time.time()
     dataflow = env.execute()
     env.print_physical_graph()
@@ -256,7 +257,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
-    task_based = bool(args.task_based)
+    task_based = args.task_based
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     sample_period = int(args.sample_period)

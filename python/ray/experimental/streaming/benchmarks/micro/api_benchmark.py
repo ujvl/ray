@@ -143,17 +143,17 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period),
-                                id="source")
+                                name="source")
     for stage in range(num_stages):
         if partitioning == "shuffle":
             stream = stream.shuffle()
         elif partitioning == "broadcast":
             stream = stream.broadcast()
         if stage < num_stages - 1:
-            stream = stream.map(lambda record: record, id="map")
+            stream = stream.map(lambda record: record, name="map+"+str(stage))
         else: # Last stage actors should compute the per-record latencies
-            stream = stream.flat_map(compute_elapsed_time, id="flatmap")
-    _ = stream.sink(Sink(), id="sink")
+            stream = stream.flat_map(compute_elapsed_time, name="flatmap")
+    _ = stream.sink(Sink(), name="sink")
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
@@ -186,7 +186,8 @@ def write_log_files(all_parameters, latency_filename,
     ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Collect sampled per-record latencies
-    local_states = ray.get(dataflow.state_of("sink"))
+    sink_id = dataflow.operator_id("sink")
+    local_states = ray.get(dataflow.state_of(sink_id))
     latencies = [state for state in local_states if state is not None]
     latency_filename = latency_filename + all_parameters
     with open(latency_filename, "w") as tf:

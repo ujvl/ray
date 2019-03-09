@@ -54,7 +54,7 @@ if __name__ == "__main__":
     env.read_text_file(input_file) \
        .flat_map(splitter) \
        .key_by(key_selector) \
-       .sum(attribute_selector, id="123") \
+       .sum(attribute_selector, name="123") \
        .inspect(print)     # Prints the content of the stream to stdout
 
     start = time.time()
