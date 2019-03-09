@@ -158,11 +158,11 @@ class DataInput(object):
                         break
                 if not self.all_closed:
                     continue
-
-            if record is not None:  # Log throughput
-                self.__log(batch_size=1)
-            else:
-                self.__log(batch_size=0, force=True)
+            if self.logging:
+                if record is not None:  # Log throughput
+                    self.__log(batch_size=1)
+                else:
+                    self.__log(batch_size=0, force=True)
             # Returns 'None' iff all input channels are 'closed'
             return record
 
