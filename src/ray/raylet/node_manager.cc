@@ -426,6 +426,9 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
                     << " is removed from cluster. It may be reconstructed.";
       HandleDisconnectedActor(actor_entry.first, /*was_local=*/false,
                               /*intentional_disconnect=*/false);
+      // Try to reconstruct the actor immediately.
+      reconstruction_policy_.ListenAndMaybeReconstruct(
+          actor_entry.second.GetActorCreationDependency(), false);
     }
   }
   // Notify the object directory that the client has been removed so that it
@@ -537,6 +540,8 @@ void NodeManager::HandleActorStateTransition(const ActorID &actor_id,
                  << actor_registration.GetRemainingReconstructions();
 
   if (actor_registration.GetState() == ActorState::ALIVE) {
+    // The actor is live, so stop listening for the actor's creation.
+    reconstruction_policy_.Cancel(actor_registration.GetActorCreationDependency());
     // The actor's location is now known. Dequeue any methods that were
     // submitted before the actor's location was known.
     // (See design_docs/task_states.rst for the state transition diagram.)
@@ -569,6 +574,8 @@ void NodeManager::HandleActorStateTransition(const ActorID &actor_id,
       SubmitTask(method, Lineage());
     }
   } else if (actor_registration.GetState() == ActorState::DEAD) {
+    // The actor is dead, so stop listening for the actor's creation.
+    reconstruction_policy_.Cancel(actor_registration.GetActorCreationDependency());
     // When an actor dies, loop over all of the queued tasks for that actor
     // and treat them as failed.
     auto tasks_to_remove = local_queues_.GetTaskIdsForActor(actor_id);
