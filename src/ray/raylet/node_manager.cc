@@ -1309,6 +1309,7 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
           }
         }));
   }
+  lineage_cache_.RemoveWaitingTask(spec.TaskId());
 }
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
