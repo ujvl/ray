@@ -9,6 +9,7 @@ import time
 import signal
 import subprocess
 import json
+import sys
 
 import numpy as np
 import ray
@@ -309,23 +310,31 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         return should_checkpoint
 
     def save_checkpoint(self, actor_id, checkpoint_id):
-        debug("Saving checkpoint", self.num_iterations, checkpoint_id)
+        with ray.profiling.profile("save_checkpoint"):
+            debug("Saving checkpoint", self.num_iterations, checkpoint_id)
 
-        checkpoint = {}
-        for attr in self.checkpoint_attrs:
-            checkpoint[attr] = getattr(self, attr)
-        checkpoint["checkpoint_id"] = checkpoint_id
-        debug(checkpoint)
+            start = time.time()
+            checkpoint = {}
+            for attr in self.checkpoint_attrs:
+                checkpoint[attr] = getattr(self, attr)
+            checkpoint["checkpoint_id"] = checkpoint_id
+            size = sys.getsizeof(checkpoint)
+            checkpoint = pickle.dumps(checkpoint)
+            end = time.time()
+            debug("pickle took", end - start, "checkpoint bytes", size, "checkpoint size", len(checkpoint))
 
-        checkpoint_dir = os.path.join(self.checkpoint_dir, checkpoint_id.hex())
-        os.mkdir(checkpoint_dir)
-        checkpoint_path = os.path.join(checkpoint_dir, "checkpoint")
-        with open(checkpoint_path, 'wb+') as f:
-            f.write(pickle.dumps(checkpoint))
+            start = time.time()
+            checkpoint_dir = os.path.join(self.checkpoint_dir, checkpoint_id.hex())
+            os.mkdir(checkpoint_dir)
+            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint")
+            with open(checkpoint_path, 'wb+') as f:
+                f.write(checkpoint)
+            end = time.time()
+            debug("write took", end - start)
 
-        # Reset our state once the checkpoint completes.
-        self.reset()
-        self.num_iterations += 1
+            # Reset our state once the checkpoint completes.
+            self.reset()
+            self.num_iterations += 1
 
     def restore(self, checkpoint_id):
         debug("Trying to restore", checkpoint_id)
