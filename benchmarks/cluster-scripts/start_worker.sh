@@ -33,16 +33,20 @@ ray start --redis-address=$HEAD_IP:6379 \
 
 sleep 5
 
-i=0
-for pid in `pgrep -w raylet`; do
-    core=$(( i % 3  + 1 ))
-    taskset -pc $core $pid
-    sudo renice -n -10 -p $pid
-    i=$(( $i + 1 ))
-done
+#i=0
+#for pid in `pgrep -w raylet`; do
+#    core=$(( i % 3  + 1 ))
+#    taskset -pc $core $pid
+#    sudo renice -n -10 -p $pid
+#    i=$(( $i + 1 ))
+#done
 
 taskset -pc 0 `pgrep raylet`
 sudo renice -n -19 -p `pgrep raylet`
+if [[ $# -ne 3 ]]; then
+    yes > /dev/null &
+    taskset -pc 0 $!
+fi
 
 #for i in `seq 0 7`; do
 #    yes > /dev/null &
@@ -50,9 +54,9 @@ sudo renice -n -19 -p `pgrep raylet`
 #done
 
 
-for pid in `pgrep -w python`; do
-    taskset -pc 1-3 $pid
-    #sudo renice -n -5 -p $pid
-done
+#for pid in `pgrep -w python`; do
+#    taskset -pc 1-3 $pid
+#    #sudo renice -n -5 -p $pid
+#done
 
 sleep 1
