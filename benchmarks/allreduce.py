@@ -98,17 +98,21 @@ class WeightPartition(object):
         self.buffer_data[s:e] = partition
         self.committed[i] = True
 
-    def add_partition(self, i, batch):
-        self.batches[i] += batch
+    def add_partition(self, i, batch, in_place):
+        if in_place:
+            self.batches[i] += batch
+        else:
+            self.batches[i] = self.batches[i] + batch
 
 
 class RingAllReduceWorker(object):
-    def __init__(self, worker_index, num_workers, buffer_size):
+    def __init__(self, worker_index, num_workers, buffer_size, in_place):
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.workers = {}
         self.reset(buffer_size=buffer_size)
         self.num_iterations = 0
+        self.in_place = in_place
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -162,10 +166,11 @@ class RingAllReduceWorker(object):
         # Send the first chunk to our receiver.
         self.send(self.worker_index, True)
 
-        with ray.profiling.profile("init_weights"):
-            input_data = np.copy(input_data)
-            input_data.flags.writeable = True
-            self.weight_partition.set_weights(input_data)
+        if self.in_place:
+            with ray.profiling.profile("init_weights"):
+                input_data = np.copy(input_data)
+                input_data.flags.writeable = True
+                self.weight_partition.set_weights(input_data)
 
         # Resend any buffered data that was received before the allreduce
         # started.
@@ -202,7 +207,7 @@ class RingAllReduceWorker(object):
         if aggregate:
             # We received a partially reduced chunk. Add the partition.
             with ray.profiling.profile("add_partition"):
-                self.weight_partition.add_partition(index, batch_buffer)
+                self.weight_partition.add_partition(index, batch_buffer, self.in_place)
             received = self.aggregate_received
             # If this is the last chunk to be sent by our sender, then this
             # chunk has been fully reduced. Send it to the next worker, but
@@ -270,9 +275,10 @@ class RingAllReduceWorker(object):
 
 class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
                                         ray.actor.Checkpointable):
-    def __init__(self, worker_index, num_workers, buffer_size, checkpoint_dir):
+    def __init__(self, worker_index, num_workers, buffer_size, in_place,
+            checkpoint_dir):
         super(CheckpointableRingAllReduceWorker, self).__init__(
-            worker_index, num_workers, buffer_size)
+            worker_index, num_workers, buffer_size, in_place)
 
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_attrs = [
@@ -284,6 +290,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             "out_oids",
             "done_oid",
             "num_iterations",
+            "in_place",
         ]
         self._should_checkpoint = False
 
@@ -506,6 +513,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
     os.mkdir(checkpoint_dir)
 
     # Create workers.
+    in_place = False
     workers = []
     for worker_index in range(num_workers):
         actor_resources = {node_resources[worker_index]: 1}
@@ -513,7 +521,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             resources=actor_resources,
             max_reconstructions=100)(CheckpointableRingAllReduceWorker)
         workers.append(
-            cls.remote(worker_index, num_workers, data_size, checkpoint_dir))
+            cls.remote(worker_index, num_workers, data_size, in_place, checkpoint_dir))
 
     # Exchange actor handles.
     for i in range(num_workers):
