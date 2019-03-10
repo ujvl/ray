@@ -76,7 +76,8 @@ class Task {
   void IncrementNumForwards();
 
   /// Increment the number of times this task has been reconstructed.
-  void IncrementNumReconstructions();
+  void IncrementNumExecutions();
+  void IncrementNumResubmissions();
 
   const std::vector<ObjectID> &GetImmutableDependencies() const;
 

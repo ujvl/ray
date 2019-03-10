@@ -43,15 +43,23 @@ int TaskExecutionSpecification::NumForwards() const {
 }
 
 void TaskExecutionSpecification::IncrementNumForwards() {
-  execution_spec_.num_reconstructions += 1;
+  execution_spec_.num_forwards += 1;
 }
 
-int TaskExecutionSpecification::NumReconstructions() const {
-  return execution_spec_.num_forwards;
+int TaskExecutionSpecification::NumExecutions() const {
+  return execution_spec_.num_executions;
 }
 
-void TaskExecutionSpecification::IncrementNumReconstructions() {
-  execution_spec_.num_reconstructions += 1;
+int TaskExecutionSpecification::NumResubmissions() const {
+  return execution_spec_.num_resubmissions;
+}
+
+void TaskExecutionSpecification::IncrementNumExecutions() {
+  execution_spec_.num_executions += 1;
+}
+
+void TaskExecutionSpecification::IncrementNumResubmissions() {
+  execution_spec_.num_resubmissions += 1;
 }
 
 int64_t TaskExecutionSpecification::LastTimestamp() const {

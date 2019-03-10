@@ -72,10 +72,12 @@ class TaskExecutionSpecification {
   /// Get the number of times this task has been reconstructed.
   ///
   /// \return The number of times this task has been reconstructed.
-  int NumReconstructions() const;
+  int NumExecutions() const;
+  int NumResubmissions() const;
 
   /// Increment the number of times this task has been reconstructed.
-  void IncrementNumReconstructions();
+  void IncrementNumExecutions();
+  void IncrementNumResubmissions();
 
   /// Get the task's last timestamp.
   ///

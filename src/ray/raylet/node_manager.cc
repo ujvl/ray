@@ -1307,6 +1307,7 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded) {
   const TaskSpecification &spec = task.GetTaskSpecification();
+  const TaskExecutionSpecification &exec_spec = task.GetTaskExecutionSpec();
   const TaskID &task_id = spec.TaskId();
   RAY_LOG(DEBUG) << "Submitting task: task_id=" << task_id
                  << ", actor_id=" << spec.ActorId()
@@ -1314,6 +1315,8 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
                  << ", actor_handle_id=" << spec.ActorHandleId()
                  << ", actor_counter=" << spec.ActorCounter()
                  << ", parent_task_id=" << spec.ParentTaskId()
+                 << ", num_executions=" << exec_spec.NumExecutions()
+                 << ", num_resubmissions=" << exec_spec.NumResubmissions()
                  << ", task_descriptor=" << spec.FunctionDescriptorString() << " on node "
                  << gcs_client_->client_table().GetLocalClientId();
 
@@ -1687,7 +1690,7 @@ bool NodeManager::AssignTask(const Task &task) {
             RAY_CHECK(spec.NewActorHandles().empty());
           }
 
-          assigned_task.IncrementNumReconstructions();
+          assigned_task.IncrementNumExecutions();
           // We started running the task, so the task is ready to write to GCS.
           if (!lineage_cache_.AddReadyTask(assigned_task)) {
             RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
@@ -1880,7 +1883,7 @@ void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
 
     // If this task was previously executed, or if this is the first time that
     // the actor is executing, then release this task's execution dependency.
-    if (task.GetTaskExecutionSpec().NumReconstructions() > 0 ||
+    if (task.GetTaskExecutionSpec().NumExecutions() > 0 ||
         actor_entry->second.GetActorVersion() == 0) {
       const auto &execution_dependencies =
           task.GetTaskExecutionSpec().ExecutionDependencies();
@@ -1913,7 +1916,8 @@ void NodeManager::HandleTaskReconstruction(const TaskID &task_id) {
              const ray::protocol::TaskT &task_data) {
         // The task was in the GCS task table. Use the stored task spec to
         // re-execute the task.
-        const Task task(task_data);
+        Task task(task_data);
+        task.IncrementNumResubmissions();
         ResubmitTask(task);
       },
       /*failure_callback=*/
@@ -1927,9 +1931,9 @@ void NodeManager::HandleTaskReconstruction(const TaskID &task_id) {
                "allocation via "
             << "ray.init(redis_max_memory=<max_memory_bytes>).";
         // Use a copy of the cached task spec to re-execute the task.
-        const Task task = lineage_cache_.GetTaskOrDie(task_id);
+        Task task = lineage_cache_.GetTaskOrDie(task_id);
+        task.IncrementNumResubmissions();
         ResubmitTask(task);
-
       }));
 }
 
@@ -2092,7 +2096,7 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
     if (local_queues_.HasTask(parent_task_id)) {
       const auto state = local_queues_.GetTaskState(parent_task_id);
       const auto &parent_task = local_queues_.GetTaskOfState(parent_task_id, state);
-      if (parent_task.GetTaskExecutionSpec().NumReconstructions() == 0) {
+      if (parent_task.GetTaskExecutionSpec().NumExecutions() <= 1) {
         push = true;
       }
     } else {
@@ -2123,7 +2127,9 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
   RAY_LOG(DEBUG) << "Forwarding task " << task_id << " from "
                  << gcs_client_->client_table().GetLocalClientId() << " to " << node_id
                  << " spillback="
-                 << lineage_cache_entry_task.GetTaskExecutionSpec().NumForwards();
+                 << lineage_cache_entry_task.GetTaskExecutionSpec().NumForwards()
+                 << " num_resubmissions="
+                 << lineage_cache_entry_task.GetTaskExecutionSpec().NumResubmissions();
 
   // Lookup remote server connection for this node_id and use it to send the request.
   auto it = remote_server_connections_.find(node_id);

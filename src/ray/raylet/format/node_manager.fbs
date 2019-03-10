@@ -89,8 +89,10 @@ table TaskExecutionSpecification {
   last_timestamp: double;
   // The number of times this task was spilled back by local schedulers.
   num_forwards: int;
-  // The number of times this task has been reconstructed.
-  num_reconstructions: int;
+  // The number of times this task has been executed.
+  num_executions: int;
+  // The number of times this task has been resubmitted.
+  num_resubmissions: int;
 }
 
 table Task {
