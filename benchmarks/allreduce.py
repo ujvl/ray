@@ -397,7 +397,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # task that we submitted.
 
 
-def allreduce(workers, test_failure, check_results, kill_node_fn):
+def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
     # Get the initial weights on each of the workers so we can check the
     # results.
     weight_ids = [
@@ -427,7 +427,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn):
         time.sleep(time_to_sleep)
         kill_node_fn()
 
-    timeout_s = 0.5
+    timeout_s = 0.1
     done_oids = [ray.ObjectID(done_oid) for done_oid in done_oids]
 
     # Suppress reconstruction since these object IDs were generated
@@ -438,8 +438,12 @@ def allreduce(workers, test_failure, check_results, kill_node_fn):
                 done_oids, suppress_reconstruction=True, timeout=timeout_s)
             break
         except ray.exceptions.RayGetTimeoutError:
-            heartbeats = [worker.heartbeat.remote() for worker in workers]
-            ray.get(heartbeats)
+            clients = ray.global_state.client_table()
+            failed = len([client for client in clients if not client['IsInsertion']]) > 0
+            if failed > num_failed:
+                num_failed = failed
+                heartbeats = [worker.heartbeat.remote() for worker in workers]
+                ray.get(heartbeats)
 
     log.info("Finished in %f", time.time() - start)
     # Check the results on each of the workers.
@@ -455,6 +459,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn):
         outputs = ray.get([ray.ObjectID(out_oid) for out_oid in out_oids])
         for output in outputs:
             assert np.allclose(expected, output)
+
+    return num_failed
 
 
 def main(redis_address, test_single_node, num_workers, data_size,
@@ -562,6 +568,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     ]
             subprocess.Popen(command)
 
+    num_failed = 0
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
@@ -570,7 +577,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             fail_iteration = True
         elif (not test_local and i == num_iterations // 4 and test_failure):
             fail_iteration = True
-        allreduce(workers, fail_iteration, check_results, kill_node)
+        num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed)
         time.sleep(1)
 
     if dump is not None:
