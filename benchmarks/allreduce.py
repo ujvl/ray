@@ -531,8 +531,8 @@ def main(redis_address, test_single_node, num_workers, data_size,
 
     # Exchange actor handles.
     for i in range(num_workers):
-        for j in range(num_workers):
-            workers[i].add_remote_worker.remote(j, workers[j])
+        receiver_index = (i + 1) % num_workers
+        workers[i].add_remote_worker.remote(receiver_index, workers[receiver_index])
 
     # Ensure workers are assigned to unique nodes.
     if not test_local:
