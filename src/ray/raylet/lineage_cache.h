@@ -30,6 +30,7 @@ enum class GcsStatus {
   /// The task has been written to the GCS and we are waiting for an
   /// acknowledgement of the commit.
   COMMITTING,
+  COMMITTED,
 };
 
 /// \class LineageEntry

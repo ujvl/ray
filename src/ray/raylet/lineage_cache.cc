@@ -308,6 +308,9 @@ void GetUncommittedLineageHelper(const TaskID &task_id, const Lineage &lineage_f
   if (!entry) {
     return;
   }
+  if (entry->GetStatus() == GcsStatus::COMMITTED) {
+    return;
+  }
   // If this task has already been forwarded to this node, then we can stop.
   if (entry->WasExplicitlyForwarded(node_id)) {
     return;
@@ -338,6 +341,7 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
     RAY_CHECK(entry);
     RAY_CHECK(uncommitted_lineage.SetEntry(entry->TaskData(), entry->GetStatus()));
   }
+  RAY_LOG(DEBUG) << "Uncommitted lineage for task " << task_id << " size is " << uncommitted_lineage.GetEntries().size();
   return uncommitted_lineage;
 }
 
@@ -394,24 +398,28 @@ bool LineageCache::UnsubscribeTask(const TaskID &task_id) {
 }
 
 void LineageCache::EvictTask(const TaskID &task_id) {
-  // If we haven't received a commit for this task yet, do not evict.
-  auto commit_it = committed_tasks_.find(task_id);
-  if (commit_it == committed_tasks_.end()) {
-    return;
-  }
+  //auto commit_it = committed_tasks_.find(task_id);
+  //if (commit_it == committed_tasks_.end()) {
+  //  return;
+  //}
   // If the entry has already been evicted, exit.
   auto entry = lineage_.GetEntry(task_id);
   if (!entry) {
     return;
   }
-  // Only evict tasks that we were subscribed to or that we were committing.
-  if (!(entry->GetStatus() == GcsStatus::UNCOMMITTED_REMOTE ||
-        entry->GetStatus() == GcsStatus::COMMITTING)) {
+  // If we haven't received a commit for this task yet, do not evict.
+  if (entry->GetStatus() != GcsStatus::COMMITTED) {
     return;
   }
+  //// Only evict tasks that we were subscribed to or that we were committing.
+  //if (!(entry->GetStatus() == GcsStatus::UNCOMMITTED_REMOTE ||
+  //      entry->GetStatus() == GcsStatus::COMMITTING)) {
+  //  return;
+  //}
   // Entries cannot be safely evicted until their parents are all evicted.
   for (const auto &parent_id : entry->GetParentTaskIds()) {
     if (ContainsTask(parent_id)) {
+      RAY_LOG(DEBUG) << "Cannot evict " << task_id << " because parent still uncommitted " << parent_id;
       return;
     }
   }
@@ -419,7 +427,7 @@ void LineageCache::EvictTask(const TaskID &task_id) {
   // Evict the task.
   RAY_LOG(DEBUG) << "Evicting task " << task_id << " on " << client_id_;
   lineage_.PopEntry(task_id);
-  committed_tasks_.erase(commit_it);
+  //committed_tasks_.erase(commit_it);
   // Try to evict the children of the evict task. These are the tasks that have
   // a dependency on the evicted task.
   const auto children = lineage_.GetChildren(task_id);
@@ -432,13 +440,14 @@ void LineageCache::EvictTask(const TaskID &task_id) {
 
 void LineageCache::HandleEntryCommitted(const TaskID &task_id) {
   RAY_LOG(DEBUG) << "Task committed: " << task_id;
-  auto entry = lineage_.GetEntry(task_id);
+  auto entry = lineage_.GetEntryMutable(task_id);
   if (!entry) {
     // The task has already been evicted due to a previous commit notification.
     return;
   }
   // Record the commit acknowledgement and attempt to evict the task.
-  committed_tasks_.insert(task_id);
+  //committed_tasks_.insert(task_id);
+  entry->SetStatus(GcsStatus::COMMITTED);
   EvictTask(task_id);
   // We got the notification about the task's commit, so no longer need any
   // more notifications.
