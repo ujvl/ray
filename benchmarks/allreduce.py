@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 import logging
+import datetime
 import os
 import time
 import signal
@@ -445,7 +446,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
                 heartbeats = [worker.heartbeat.remote() for worker in workers]
                 ray.get(heartbeats)
 
-    log.info("Finished in %f", time.time() - start)
+    latency = time.time() - start
+    log.info("Finished in %f", latency)
     # Check the results on each of the workers.
     if check_results:
         # Check that all of the workers end up with the same shards.
@@ -460,11 +462,19 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
         for output in outputs:
             assert np.allclose(expected, output)
 
-    return num_failed
+    return latency, num_failed
 
 
 def main(redis_address, test_single_node, num_workers, data_size,
-         num_iterations, check_results, dump, test_failure):
+         num_iterations, check_results, dump, test_failure, record_latency):
+    latency_file = None
+    if record_latency:
+        latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
+                data_size * 4 // 1e6,
+                num_workers,
+                str(datetime.datetime.now()))
+        log.info("Logging latency to file %s", latency_file)
+
     internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
@@ -569,6 +579,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             subprocess.Popen(command)
 
     num_failed = 0
+    latencies = []
     for i in range(num_iterations):
         log.info("Starting iteration %d", i)
 
@@ -577,8 +588,14 @@ def main(redis_address, test_single_node, num_workers, data_size,
             fail_iteration = True
         elif (not test_local and i == num_iterations // 4 and test_failure):
             fail_iteration = True
-        num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed)
+        latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed)
+        latencies.append(latency)
         time.sleep(1)
+
+    if latency_file is not None:
+        with open(latency_file, 'w+') as f:
+            for latency in latencies:
+                f.write('{}\n'.format(latency))
 
     if dump is not None:
         events = ray.global_state.chrome_tracing_dump()
@@ -627,6 +644,10 @@ if __name__ == "__main__":
         type=str,
         help='A filename to dump the task timeline')
     parser.add_argument(
+        '--record-latency',
+        action='store_true',
+        help='Whether to record the latency')
+    parser.add_argument(
         '--test-failure',
         action='store_true',
         help='Whether or not to test worker failure')
@@ -634,4 +655,4 @@ if __name__ == "__main__":
 
     main(args.redis_address, args.test_single_node, args.num_workers,
          args.size, args.num_iterations, args.check_results, args.dump,
-         args.test_failure)
+         args.test_failure, args.record_latency)
