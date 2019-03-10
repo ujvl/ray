@@ -1549,8 +1549,12 @@ void NodeManager::EnqueuePlaceableTask(const Task &task) {
   // TODO(atumanov): add task lookup hashmap and change EnqueuePlaceableTask to take
   // a vector of TaskIDs. Trigger MoveTask internally.
   // Subscribe to the task's dependencies.
+  bool delay_pull = true;
+  if (task.GetTaskExecutionSpec().NumResubmissions() > 0) {
+    delay_pull = false;
+  }
   static_cast<void>(task_dependency_manager_.SubscribeDependencies(
-      task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies(), /*delay_pull=*/true));
+      task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies(), /*delay_pull=*/delay_pull));
   // Assuming execution dependencies are only set for actor tasks, it is safe
   // to request fast reconstruction. This is because actor tasks are only
   // allowed to execute on the node where the actor lives.
