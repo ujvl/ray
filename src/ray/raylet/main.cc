@@ -76,6 +76,7 @@ int main(int argc, char *argv[]) {
   node_manager_config.num_workers_per_process =
       RayConfig::instance().num_workers_per_process();
   node_manager_config.maximum_startup_concurrency = maximum_startup_concurrency;
+  node_manager_config.gcs_delay_ms = RayConfig::instance().gcs_delay_ms();
 
   if (!python_worker_command.empty()) {
     node_manager_config.worker_commands.emplace(
@@ -124,7 +125,8 @@ int main(int argc, char *argv[]) {
   auto gcs_client = std::make_shared<ray::gcs::AsyncGcsClient>(redis_address, redis_port,
                                                                redis_password);
   RAY_LOG(DEBUG) << "Initializing GCS client "
-                 << gcs_client->client_table().GetLocalClientId();
+                 << gcs_client->client_table().GetLocalClientId()
+                 << " gcs delay " << node_manager_config.gcs_delay_ms;
 
   ray::raylet::Raylet server(main_service, raylet_socket_name, node_ip_address,
                              redis_address, redis_port, redis_password,

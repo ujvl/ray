@@ -466,7 +466,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
 
 
 def main(redis_address, test_single_node, num_workers, data_size,
-         num_iterations, check_results, dump, test_failure, record_latency):
+         num_iterations, check_results, dump, test_failure, record_latency,
+         gcs_delay_ms):
     latency_file = None
     if record_latency:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
@@ -479,6 +480,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
         "object_manager_repeated_push_delay_ms": 1000,
+        "gcs_delay_ms": gcs_delay_ms,
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.
@@ -651,8 +653,12 @@ if __name__ == "__main__":
         '--test-failure',
         action='store_true',
         help='Whether or not to test worker failure')
+    parser.add_argument(
+        '--gcs-delay-ms',
+        default=-1,
+        help='Delay when writing back to GCS. The default is to use the lineage stash.')
     args = parser.parse_args()
 
     main(args.redis_address, args.test_single_node, args.num_workers,
          args.size, args.num_iterations, args.check_results, args.dump,
-         args.test_failure, args.record_latency)
+         args.test_failure, args.record_latency, args.gcs_delay_ms)

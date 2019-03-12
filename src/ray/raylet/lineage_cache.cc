@@ -192,8 +192,8 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size)
-    : client_id_(client_id), task_storage_(task_storage), task_pubsub_(task_pubsub) {}
+                           uint64_t max_lineage_size, bool disabled)
+    : disabled_(disabled), client_id_(client_id), task_storage_(task_storage), task_pubsub_(task_pubsub) {}
 
 /// A helper function to add some uncommitted lineage to the local cache.
 void LineageCache::AddUncommittedLineage(const TaskID &task_id,
@@ -221,6 +221,10 @@ void LineageCache::AddUncommittedLineage(const TaskID &task_id,
 }
 
 bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_lineage) {
+  if (disabled_) {
+    return true;
+  }
+
   auto task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "Add waiting task " << task_id << " on " << client_id_;
 
@@ -252,6 +256,10 @@ bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_l
 }
 
 bool LineageCache::AddReadyTask(const Task &task) {
+  if (disabled_) {
+    return true;
+  }
+
   const TaskID task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "Add ready task " << task_id << " on " << client_id_;
 
@@ -268,6 +276,10 @@ bool LineageCache::AddReadyTask(const Task &task) {
 }
 
 bool LineageCache::RemoveWaitingTask(const TaskID &task_id) {
+  if (disabled_) {
+    return true;
+  }
+
   RAY_LOG(DEBUG) << "Remove waiting task " << task_id << " on " << client_id_;
   auto entry = lineage_.GetEntryMutable(task_id);
   if (!entry) {
@@ -295,6 +307,10 @@ bool LineageCache::RemoveWaitingTask(const TaskID &task_id) {
 }
 
 void LineageCache::MarkTaskAsForwarded(const TaskID &task_id, const ClientID &node_id) {
+  if (disabled_) {
+    return;
+  }
+
   RAY_CHECK(!node_id.is_nil());
   lineage_.GetEntryMutable(task_id)->MarkExplicitlyForwarded(node_id);
 }
@@ -329,6 +345,8 @@ void GetUncommittedLineageHelper(const TaskID &task_id, const Lineage &lineage_f
 
 Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
                                                  const ClientID &node_id) const {
+  RAY_CHECK(!disabled_);
+
   Lineage uncommitted_lineage;
   // Add all uncommitted ancestors from the lineage cache to the uncommitted
   // lineage of the requested task.
@@ -468,6 +486,8 @@ bool LineageCache::ContainsTask(const TaskID &task_id) const {
 }
 
 const Lineage &LineageCache::GetLineage() const { return lineage_; }
+
+bool LineageCache::Disabled() const { return disabled_; }
 
 std::string LineageCache::DebugString() const {
   std::stringstream result;

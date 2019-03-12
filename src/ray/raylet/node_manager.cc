@@ -52,6 +52,7 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
       heartbeat_period_(std::chrono::milliseconds(config.heartbeat_period_ms)),
       debug_dump_period_(config.debug_dump_period_ms),
       temp_dir_(config.temp_dir),
+      gcs_delay_ms_(config.gcs_delay_ms),
       object_manager_profile_timer_(io_service),
       initial_config_(config),
       local_available_resources_(config.resource_config),
@@ -73,7 +74,7 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           gcs_client_->task_lease_table()),
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client_->raylet_task_table(), gcs_client_->raylet_task_table(),
-                     config.max_lineage_size),
+                     config.max_lineage_size, /*disabled=*/gcs_delay_ms_ >= 0),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_() {
@@ -103,7 +104,9 @@ ray::Status NodeManager::RegisterGcs() {
   const auto task_committed_callback = [this](gcs::AsyncGcsClient *client,
                                               const TaskID &task_id,
                                               const ray::protocol::TaskT &task_data) {
-    lineage_cache_.HandleEntryCommitted(task_id);
+    if (!lineage_cache_.Disabled()) {
+      lineage_cache_.HandleEntryCommitted(task_id);
+    }
   };
   RAY_RETURN_NOT_OK(gcs_client_->raylet_task_table().Subscribe(
       JobID::nil(), gcs_client_->client_table().GetLocalClientId(),
@@ -1586,57 +1589,22 @@ void NodeManager::EnqueuePlaceableTask(const Task &task) {
   task_dependency_manager_.TaskPending(task);
 }
 
-bool NodeManager::AssignTask(const Task &task) {
-  const TaskSpecification &spec = task.GetTaskSpecification();
+void NodeManager::FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback) {
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = task.ToFlatbuffer(fbb);
+  fbb.Finish(message);
+  auto task_data = std::make_shared<protocol::TaskT>();
+  auto root = flatbuffers::GetRoot<protocol::Task>(fbb.GetBufferPointer());
+  root->UnPackTo(task_data.get());
+  RAY_CHECK_OK(gcs_client_->raylet_task_table().Add(task.GetTaskSpecification().DriverId(),
+                                 task.GetTaskSpecification().TaskId(), task_data, task_callback));
+}
 
-  // If this is an actor task, check that the new task has the correct counter.
-  if (spec.IsActorTask()) {
-    // An actor task should only be ready to be assigned if it matches the
-    // expected task counter.
-    int64_t expected_task_counter =
-        GetExpectedTaskCounter(actor_registry_, spec.ActorId(), spec.ActorHandleId());
-    RAY_CHECK(spec.ActorCounter() == expected_task_counter)
-        << "Expected actor counter: " << expected_task_counter << ", task "
-        << spec.TaskId() << " has: " << spec.ActorCounter();
-  }
-
-  // Try to get an idle worker that can execute this task.
-  std::shared_ptr<Worker> worker = worker_pool_.PopWorker(spec);
-  if (worker == nullptr) {
-    // There are no workers that can execute this task.
-    if (!spec.IsActorTask()) {
-      // There are no more non-actor workers available to execute this task.
-      // Start a new worker.
-      worker_pool_.StartWorkerProcess(spec.GetLanguage());
-      // Push an error message to the user if the worker pool tells us that it is
-      // getting too big.
-      const std::string warning_message = worker_pool_.WarningAboutSize();
-      if (warning_message != "") {
-        RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
-            JobID::nil(), "worker_pool_large", warning_message, current_time_ms()));
-      }
-    }
-    // We couldn't assign this task, as no worker available.
-    return false;
-  }
-
+void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> worker) {
+  const auto &spec = task.GetTaskSpecification();
   RAY_LOG(DEBUG) << "Assigning task " << spec.TaskId() << " to worker with pid "
                  << worker->Pid();
   flatbuffers::FlatBufferBuilder fbb;
-
-  // Resource accounting: acquire resources for the assigned task.
-  auto acquired_resources =
-      local_available_resources_.Acquire(spec.GetRequiredResources());
-  const auto &my_client_id = gcs_client_->client_table().GetLocalClientId();
-  RAY_CHECK(cluster_resource_map_[my_client_id].Acquire(spec.GetRequiredResources()));
-
-  if (spec.IsActorCreationTask()) {
-    // Check that we are not placing an actor creation task on a node with 0 CPUs.
-    RAY_CHECK(cluster_resource_map_[my_client_id].GetTotalResources().GetNumCpus() != 0);
-    worker->SetLifetimeResourceIds(acquired_resources);
-  } else {
-    worker->SetTaskResourceIds(acquired_resources);
-  }
 
   ResourceIdSet resource_id_set =
       worker->GetTaskResourceIds().Plus(worker->GetLifetimeResourceIds());
@@ -1645,7 +1613,7 @@ bool NodeManager::AssignTask(const Task &task) {
   auto message = protocol::CreateGetTaskReply(fbb, spec.ToFlatbuffer(fbb),
                                               fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
-  // Give the callback a copy of the task so it can modify it.
+
   Task assigned_task(task);
   worker->Connection()->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
@@ -1728,6 +1696,74 @@ bool NodeManager::AssignTask(const Task &task) {
           DispatchTasks(MakeTasksWithResources({assigned_task}));
         }
       });
+
+}
+
+bool NodeManager::AssignTask(const Task &task) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
+
+  // If this is an actor task, check that the new task has the correct counter.
+  if (spec.IsActorTask()) {
+    // An actor task should only be ready to be assigned if it matches the
+    // expected task counter.
+    int64_t expected_task_counter =
+        GetExpectedTaskCounter(actor_registry_, spec.ActorId(), spec.ActorHandleId());
+    RAY_CHECK(spec.ActorCounter() == expected_task_counter)
+        << "Expected actor counter: " << expected_task_counter << ", task "
+        << spec.TaskId() << " has: " << spec.ActorCounter();
+  }
+
+  // Try to get an idle worker that can execute this task.
+  std::shared_ptr<Worker> worker = worker_pool_.PopWorker(spec);
+  if (worker == nullptr) {
+    // There are no workers that can execute this task.
+    if (!spec.IsActorTask()) {
+      // There are no more non-actor workers available to execute this task.
+      // Start a new worker.
+      worker_pool_.StartWorkerProcess(spec.GetLanguage());
+      // Push an error message to the user if the worker pool tells us that it is
+      // getting too big.
+      const std::string warning_message = worker_pool_.WarningAboutSize();
+      if (warning_message != "") {
+        RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
+            JobID::nil(), "worker_pool_large", warning_message, current_time_ms()));
+      }
+    }
+    // We couldn't assign this task, as no worker available.
+    return false;
+  }
+
+  // Resource accounting: acquire resources for the assigned task.
+  auto acquired_resources =
+      local_available_resources_.Acquire(spec.GetRequiredResources());
+  const auto &my_client_id = gcs_client_->client_table().GetLocalClientId();
+  RAY_CHECK(cluster_resource_map_[my_client_id].Acquire(spec.GetRequiredResources()));
+
+  if (spec.IsActorCreationTask()) {
+    // Check that we are not placing an actor creation task on a node with 0 CPUs.
+    RAY_CHECK(cluster_resource_map_[my_client_id].GetTotalResources().GetNumCpus() != 0);
+    worker->SetLifetimeResourceIds(acquired_resources);
+  } else {
+    worker->SetTaskResourceIds(acquired_resources);
+  }
+
+  if (gcs_delay_ms_ >= 0) {
+    gcs::raylet::TaskTable::WriteCallback task_callback = [this, worker, task](
+        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+      AssignTaskToWorker(task, worker);
+    };
+    if (gcs_delay_ms_ == 0) {
+      FlushTask(task, task_callback);
+    } else {
+      auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
+      auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
+      gcs_timer->async_wait([this, gcs_timer, task, task_callback](const boost::system::error_code &error) {
+        FlushTask(task, task_callback);
+      });
+    }
+  } else {
+    AssignTaskToWorker(task, worker);
+  }
 
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
@@ -2134,7 +2170,10 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
 
   // Get and serialize the task's unforwarded, uncommitted lineage.
   Lineage uncommitted_lineage;
-  if (lineage_cache_.ContainsTask(task_id)) {
+  if (lineage_cache_.Disabled()) {
+    // For testing purposes only. The lineage cache is disabled.
+    uncommitted_lineage.SetEntry(task, GcsStatus::NONE);
+  } else if (lineage_cache_.ContainsTask(task_id)) {
     uncommitted_lineage = lineage_cache_.GetUncommittedLineageOrDie(task_id, node_id);
   } else {
     // TODO: We expected the lineage to be in cache, but it was evicted (#3813).

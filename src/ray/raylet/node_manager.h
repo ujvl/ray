@@ -48,6 +48,7 @@ struct NodeManagerConfig {
   std::string store_socket_name;
   /// The path to the ray temp dir.
   std::string temp_dir;
+  int gcs_delay_ms;
 };
 
 class NodeManager {
@@ -180,6 +181,8 @@ class NodeManager {
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
   bool AssignTask(const Task &task);
+  void AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> worker);
+  void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback);
   /// Handle a worker finishing its assigned task.
   ///
   /// \param worker The worker that finished the task.
@@ -451,6 +454,7 @@ class NodeManager {
   int64_t debug_dump_period_;
   /// The path to the ray temp dir.
   std::string temp_dir_;
+  int gcs_delay_ms_;
   /// The timer used to get profiling information from the object manager and
   /// push it to the GCS.
   boost::asio::steady_timer object_manager_profile_timer_;

@@ -219,7 +219,8 @@ class LineageCache {
   /// TODO(swang): Pass in the policy (interface?).
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
-               gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size);
+               gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
+               bool disabled = false);
 
   /// Add a task that is waiting for execution and its uncommitted lineage.
   /// These entries will not be written to the GCS until set to ready.
@@ -300,6 +301,8 @@ class LineageCache {
   /// \return string.
   std::string DebugString() const;
 
+  bool Disabled() const;
+
  private:
   FRIEND_TEST(LineageCacheTest, BarReturnsZeroOnNull);
   /// Flush a task that is in UNCOMMITTED_READY state.
@@ -319,6 +322,7 @@ class LineageCache {
   void AddUncommittedLineage(const TaskID &task_id, const Lineage &uncommitted_lineage,
                              std::unordered_set<TaskID> &subscribe_tasks);
 
+  bool disabled_;
   /// The client ID, used to request notifications for specific tasks.
   /// TODO(swang): Move the ClientID into the generic Table implementation.
   ClientID client_id_;
