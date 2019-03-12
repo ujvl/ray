@@ -371,7 +371,6 @@ def generate_box_plot(latencies, x_label, y_label,
                       labels, plot_repo, plot_file_name):
     # Create a figure instance
     latencies_plot = plt.figure(1, figsize=(9, 6))
-    plt.xticks(rotation=45)
     # Create an axes instance
     ax = latencies_plot.add_subplot(111)
     ax.set_xlabel(x_label)
@@ -382,9 +381,10 @@ def generate_box_plot(latencies, x_label, y_label,
     ax.boxplot(data)
     ax.set_xticklabels(labels)
     # Set axis font size
-    for item in ([ax.title, ax.xaxis.label,
-        ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels()):
+    for item in ([ax.title, ax.xaxis.label, ax.yaxis.label]):
         item.set_fontsize(14)
+    for item in (ax.get_xticklabels() + ax.get_yticklabels()):
+        item.set_fontsize(10)
     # Save rates figure
     if plot_repo[-1] != "/":
         plot_repo += "/"
@@ -444,7 +444,7 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
         verticalalignment='top')
     # Set axis font size
     for item in ax.get_xticklabels():
-        item.set_fontsize(8)
+        item.set_fontsize(10)
     ax.set_yscale('log')
     # TODO (john): Add actor ids at the bottom of each bar or add a legend
     # Save rates figure
@@ -638,6 +638,8 @@ def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
                            labels, plot_repo, plot_filename,
                            plot_type=="cdf")
 
+# Creates a log file containing all parameters
+# of the experiment the plot corresponds to
 def write_plot_metadata(plot_repo, plot_file_prefix,
                         plot_id, experiment_args):
     if plot_repo[-1] != "/":
@@ -647,11 +649,12 @@ def write_plot_metadata(plot_repo, plot_file_prefix,
         for arg in experiment_args:
             tag, values = arg
             mf.write(tag + ": ")
-            if len(values) > 1:
+            if len(values) > 1:  # A collection of values is given
                 mf.write(str(values))
-            else:
+            else:  # A single value is given
                 mf.write(str(values[0]))
             mf.write("\n")
+
 
 if __name__ == "__main__":
 
@@ -764,11 +767,10 @@ if __name__ == "__main__":
                 elif tag == "num_stages":
                     latency_vs_chain_length(latencies, plot_repo, values,
                                             plot_file_prefix, plot_type)
-                else:
-                    sys.exit("Unrecognized option.")
-            # All parameters are fixed
-            x_label = "Samples"
-            y_label = "End-to-end record latency [s]"
-            labels = [""]
-            generate_line_plot(latencies, x_label, y_label, labels,
-                               plot_repo, plot_file_prefix, plot_type==cdf)
+                else:  # All parameters are fixed
+                    x_label = "Samples"
+                    y_label = "End-to-end record latency [s]"
+                    labels = [""]
+                    generate_line_plot(latencies, x_label, y_label, labels,
+                                       plot_repo, plot_file_prefix,
+                                       plot_type==cdf)
