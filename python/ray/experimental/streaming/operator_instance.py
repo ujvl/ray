@@ -141,6 +141,11 @@ class OperatorInstance(object):
             self.records_processed = 0
         return reschedule
 
+    # Returns the logged rates (if any)
+    def logs(self):
+        return (self.instance_id, self.input.rates,
+                self.output.rates)
+
     # Starts the spinning actor (implemented by the subclasses)
     def start(self):  # Used in queue-based execution
         pass
@@ -244,11 +249,6 @@ class Map(OperatorInstance):
                 return
             self.output._push(self.map_fn(record))
 
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, self.input.rates,
-                self.output.rates)
-
     # Task-based map execution on a set of batches
     def apply(self, batches, channel_id):
         for batch in batches:
@@ -290,11 +290,6 @@ class FlatMap(OperatorInstance):
                 signal.send(ActorExit(self.instance_id))
                 return
             self.output._push_all(self.flatmap_fn(record))
-
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, self.input.rates,
-                self.output.rates)
 
     # Task-based flatmap execution on a set of batches
     def apply(self, batches, channel_id):
@@ -383,11 +378,6 @@ class Union(OperatorInstance):
                     return
                 self.output._push(record)
 
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, self.input.rates,
-                self.output.rates)
-
 
 # Inspect actor
 @ray.remote
@@ -430,7 +420,6 @@ class Inspect(OperatorInstance):
                     return
                 self.inspect_fn(record)
                 self.output._push(record)
-
 
 # Reduce actor
 @ray.remote
@@ -587,11 +576,6 @@ class Source(OperatorInstance):
                 return
             self.output._push(record)
 
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, self.input.rates,
-                self.output.rates)
-
 
 # A custom sink actor
 @ray.remote
@@ -631,9 +615,6 @@ class Sink(OperatorInstance):
         except AttributeError:
             return None
 
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, [], [])
 
 # A sink actor that writes records to a distributed text file
 @ray.remote

@@ -150,7 +150,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
         elif partitioning == "broadcast":
             stream = stream.broadcast()
         if stage < num_stages - 1:
-            stream = stream.map(lambda record: record, name="map+"+str(stage))
+            stream = stream.map(lambda record: record, name="map_"+str(stage))
         else: # Last stage actors should compute the per-record latencies
             stream = stream.flat_map(compute_elapsed_time, name="flatmap")
     _ = stream.sink(Sink(), name="sink")
@@ -196,7 +196,7 @@ def write_log_files(all_parameters, latency_filename,
                 for value in latency_values:
                     tf.write(str(value) + "\n")
 
-    # Collect throughputs from all actors (except the sink)
+    # Collect throughputs from all actors
     ids = dataflow.operator_ids()
     rates = []
     for id in ids:
@@ -205,9 +205,14 @@ def write_log_files(all_parameters, latency_filename,
     throughput_filename = throughput_filename + all_parameters
     with open(throughput_filename, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
+            operator_id, instance_id = actor_id
+            operator_name = dataflow.name_of(operator_id)
             for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
                 tf.write(
-                    str(actor_id) + " | " + str(i) + " | " + str(o) + "\n")
+                    str("(" + str(operator_id) + ", " + str(
+                     operator_name) + ", " + str(
+                     instance_id)) + ")" + " | " + str(
+                     i) + " | " + str(o) + "\n")
 
 
 if __name__ == "__main__":

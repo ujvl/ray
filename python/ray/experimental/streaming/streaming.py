@@ -135,6 +135,10 @@ class PhysicalDataflow(object):
         names = set(self.operator_names.keys())
         return list(keys_and_names-names)
 
+    # Returns the name of the operator
+    def name_of(self, operator_id):
+        return self.operator_metadata[operator_id].name
+
     # Returns a list of futures representing the union of in-memory
     # states of all actors executing the given operator
     def state_of(self, operator_id_or_name):
