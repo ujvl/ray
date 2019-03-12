@@ -13,12 +13,6 @@ import uuid
 from statistics import mean, stdev
 from statsmodels.distributions.empirical_distribution import ECDF
 
-# Generates UUIDs
-def _generate_uuid():
-    return uuid.uuid4()
-
-## 'agg' backend is used to create plot as a .png file
-mpl.use('agg')
 
 # Max number of parameters across all types of experiments
 NUM_PARAMETERS = 13
@@ -38,7 +32,7 @@ _index_of = {"rounds":0,"sample_period":1,
              "dataflow_parallelism":12,
              "num_queues":9, "max_reads":10}
 
-# Default file prfixes
+# Default file prefixes
 latency_plot_file_prefix = "latency_plot_"
 throughput_plot_file_prefix = "throughput_plot_"
 latency_file_prefix = "latencies.txt"
@@ -59,11 +53,19 @@ queue_size = [1000, 10000, 100000]  # in number of batches
 batch_timeout = [0.01, 0.1]  # in secs
 prefetch_depth = [10]
 
+# Used to load parameters from a configuration file
+class LoadFromFile(argparse.Action):
+    def __call__ (self, parser, namespace, conf_file, option_string = None):
+        args = []
+        with conf_file as cf:
+            for line in cf:
+                line = line.strip()
+                if line and line[0] != "#":
+                    args.append(line)
+        print("Args: ",args)
+        parser.parse_args(args, namespace)
 
 parser = argparse.ArgumentParser()
-
-parser.add_argument("--conf-file", default=None,
-                    help="a configuration file")
 
 parser.add_argument("--plot-type", default="latency",
                     choices = ["api_overhead", "latency",
@@ -72,16 +74,13 @@ parser.add_argument("--plot-type", default="latency",
 parser.add_argument("--cdf", default=False,
                     action = 'store_true',
                     help="whether to generate latency CDFs instead of lines")
-parser.add_argument("--plot-repo",
+parser.add_argument("--plot-repo", default="./",
                     help="the folder to store plots")
 parser.add_argument("--plot-file", default=latency_plot_file_prefix,
                     help="the plot file prefix")
 
-parser.add_argument("--plain-queues", default="False",
-                    help="plain queues or queues + Streaming API")
-
 # File-related parameteres
-parser.add_argument("--file-repo",
+parser.add_argument("--file-repo", default="./",
                     help="the folder containing the log files")
 parser.add_argument("--latency-file", default=latency_file_prefix,
                     help="the file containing per-record latencies")
@@ -97,6 +96,7 @@ parser.add_argument("--num-stages", default=2,
 parser.add_argument("--dataflow-parallelism", default=1,
                     help="the number of instances per operator")
 parser.add_argument("--partitioning", default="round_robin",
+                    choices = ["round_robin", "shuffle", "broadcast"],
                     help="type of partitioning used after each stage")
 parser.add_argument("--task-based", default="False",
                     help="task- or queue-based execution")
@@ -122,6 +122,13 @@ parser.add_argument("--background-flush", default=False,
 parser.add_argument("--max-reads", default=float("inf"),
                     help="Maximum read throughput for batched queues")
 
+parser.add_argument("--conf-file", type=open, action=LoadFromFile,
+                    help="load parameters from a configuration file")
+
+
+# 'agg' backend is used to create plot as a .png file
+mpl.use('agg')
+
 # Colors
 reds = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-2, vmax=2),
                              cmap="Reds")
@@ -131,16 +138,14 @@ blues = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-3, vmax=3),
                               cmap="Blues")
 
 # Line color generator
-def gen_colors():
-    return cycle([blues, reds, greens])
-
-colors = gen_colors()
+colors = cycle([blues, reds, greens])
 
 # Linestyle generator
-def gen_linestyles():
-    return cycle(['solid', 'dashed', 'dotted', 'dashdot'])
-linestyles = gen_linestyles()
+linestyles = cycle(['solid', 'dashed', 'dotted', 'dashdot'])
 
+# Generates plot UUIDs
+def _generate_uuid():
+    return uuid.uuid4()
 
 # Parses an argument and returns its value(s)
 def _parse_arg(arg, type="string"):
@@ -160,7 +165,7 @@ def _parse_arg(arg, type="string"):
     return content
 
 # Collects all varying parameters and their values from a given configuration
-# Returns a list of the form [(parameter_tag, [value])]
+# Returns a list of tuples of the form (parameter_tag, values)
 def _varying_parameters(experiment_args):
     varying_parameters = []
     for tag, arg in experiment_args:
@@ -169,7 +174,7 @@ def _varying_parameters(experiment_args):
     return varying_parameters
 
 # Collects all value combinations in the case of multiple varying parameters
-# Returns a tuple of the form (combined_parameter_tag,[value_combination])
+# Returns a tuple of the form (combined_parameters_tag, value_combinations)
 def _varying_combination(varying_parameters):
     combined_tag = "("
     combined_values = []
@@ -180,15 +185,8 @@ def _varying_combination(varying_parameters):
     combined_values = list(product(*combined_values))
     return combined_tag, combined_values
 
-# Generates line labels
+# Generates line labels for the plot legend
 def _generate_labels(parameter_names, parameter_values, label_prefix=""):
-    """Generates line labels.
-
-    Attributes:
-         label_prefix (str): An optional common prefix for all labels
-         parameter_names (list): A list of parameters we vary
-         parameter_values (list): A list of value combinations
-    """
     labels = []
     label = label_prefix
     for parameter in parameter_names:
@@ -208,7 +206,9 @@ def _is_pair(api_parameters, queue_parameters):
                 return False
     return True
 
-# Collects per-record latencies from all necessary files
+# Collects per-record latencies from log files
+# Files are identified using exp_args
+# Returns a list of tuples of the form (parameter_tag, latencies)
 def collect_latencies(file_repo, latency_file_prefix,
                       exp_args, plain_queues=False):
     all_latencies = []  # One list of measured latencies per file
@@ -254,6 +254,9 @@ def collect_latencies(file_repo, latency_file_prefix,
     return all_latencies
 
 # Collects actor input/output rates from all necessary files
+# Files are identified using exp_args
+# Returns a list of tuples of the form (parameter_tag, rates),
+# where rates = (mean input rate, stdev, mean output rate, stdev)
 def collect_rates(file_repo, throughput_file_prefix,
                       exp_args, plain_queues=False):
     all_rates = []  # One list of measured rates per file
@@ -320,7 +323,6 @@ def collect_rates(file_repo, throughput_file_prefix,
                         out_stdev = 0.0
                     rates.append((actor_id, in_mean, in_stdev,
                                   out_mean, out_stdev))
-            # A list of elements of the form (experiment args, [actor rates])
             all_rates.append((parameters_combination, rates))
         except FileNotFoundError:
             sys.exit("Could not find file '{}'".format(filename))
@@ -354,11 +356,11 @@ def generate_line_plot(latencies, x_label, y_label, labels,
     ax.legend(fontsize=8)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
-    # Set axis font size
+    # Set font sizes
     for item in ([ax.title, ax.xaxis.label,
         ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(16)
-    # Save rates figure
+    # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
     latencies_plot.savefig(
@@ -380,12 +382,12 @@ def generate_box_plot(latencies, x_label, y_label,
     data = [data for _, data in latencies]
     ax.boxplot(data)
     ax.set_xticklabels(labels)
-    # Set axis font size
+    # Set font sizes
     for item in ([ax.title, ax.xaxis.label, ax.yaxis.label]):
         item.set_fontsize(14)
     for item in (ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(10)
-    # Save rates figure
+    # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
     latencies_plot.savefig(
@@ -396,12 +398,14 @@ def generate_box_plot(latencies, x_label, y_label,
 # Generates a barchart
 def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
                            plot_repo, plot_file_name):
-    num_exps = len(rates)
+    # TODO (john): Add actor ids at the bottom of each bar or add a legend
+    num_exps = len(rates)  # Total number of experiments included in the plot
     ind = np.arange(num_exps)  # The x-axis locations for the groups
     bar_width = 1
     throughput_plot, ax = plt.subplots()
-    # We need num_exps * num_operators * 2 bars in total
-    num_operators = len(rates[0][1])
+    num_actors = len(rates[0][1])
+    # We need 'num_exps * num_actors * 2' bars in total
+    # because each actor has an input and an output rate
     bars = []
     actor_ids = []
     pos = 0
@@ -423,31 +427,29 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
     ax.set_ylabel(y_label)
     x_ticks_positions = []
     offset = 0
-    group_width = bar_width * num_operators * 2
+    group_width = bar_width * num_actors * 2
     for i in range(num_exps):
         point = (group_width - bar_width) / 2
         pos = offset + point
         offset += group_width + step
         x_ticks_positions.append(pos)
     ax.set_xticks(x_ticks_positions)
-
+    # Generate short a-axis tick labels
     short_xticks = ["Exp"+str(i) for i in range(len(exp_labels))]
     ax.set_xticklabels(tuple(short_xticks))
-    # Move actual ticks outside the plot
+    # Move actual x-axis tick labels outside the plot
     new_labels = ""
     i = 0
     for label in exp_labels:
         new_labels += "Exp" + str(i) + ": " + label + "\n"
         i += 1
-    # Place a text box with long legends outside the plot
     ax.text(1.05, 0.95, new_labels, transform=ax.transAxes, fontsize=10,
         verticalalignment='top')
-    # Set axis font size
+    # Set font size for x-axis tick labels
     for item in ax.get_xticklabels():
         item.set_fontsize(10)
     ax.set_yscale('log')
-    # TODO (john): Add actor ids at the bottom of each bar or add a legend
-    # Save rates figure
+    # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
     throughput_plot.savefig(
@@ -459,7 +461,7 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
 def latency_vs_throughput():
     pass
 
-# Generates boxplots showinw the overhead of
+# Generates boxplots showing the overhead of
 # using the Streaming API over batch queues
 def api_overhead(latencies, plot_repo, varying_parameters,
                  plot_file_prefix, plot_type="boxplot"):
@@ -638,7 +640,7 @@ def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
                            labels, plot_repo, plot_filename,
                            plot_type=="cdf")
 
-# Creates a log file containing all parameters
+# Writes a log file containing all parameters
 # of the experiment the plot corresponds to
 def write_plot_metadata(plot_repo, plot_file_prefix,
                         plot_id, experiment_args):
@@ -659,6 +661,7 @@ def write_plot_metadata(plot_repo, plot_file_prefix,
 if __name__ == "__main__":
 
     args = parser.parse_args()
+    print("Args:",args)
 
     # Plotting arguments
     plot_type = str(args.plot_type)
@@ -702,13 +705,15 @@ if __name__ == "__main__":
     exp_args.append(("max_reads",
                          _parse_arg(args.max_reads, type="float")))
 
+    # Store plot metadata
     plot_id = str(_generate_uuid())
     plot_file_prefix += plot_id + "-"
-    # Store plot metadata
     write_plot_metadata(plot_repo, plot_file_prefix, plot_id, exp_args)
+
     # All parameters for which a collection of values is given
     varying_parameters = _varying_parameters(exp_args)
-    if plot_type == "throughput":
+
+    if plot_type == "throughput":  # It is a throughput plot
         if cdf:
             sys.exit("CDF are not supported for throughput plots.")
         plot_type = "barchart"
@@ -719,7 +724,7 @@ if __name__ == "__main__":
                   varying_parameters) > 1 else varying_parameters[
                   0] if len(varying_parameters) > 0 else None
         actor_rates(rates, plot_repo, varying, plot_file_prefix, plot_type)
-    else:
+    else:  # It is a latency plot
         # Collect latencies from log files
         latencies = collect_latencies(file_repo,latency_file_prefix,exp_args)
         if plot_type == "api_overhead":  # Streaming API vs plain queues
@@ -749,7 +754,7 @@ if __name__ == "__main__":
                                            varying_combination,
                                            plot_file_prefix,
                                            plot_type)
-        else:  # Identify parameter to generate appropriate plot labels
+        else:  # Identify parameter to generate the respective plot labels
             plot_type = "cdf" if cdf else "line"
             for tag, values in varying_parameters:
                 if tag == "max_queue_size":
