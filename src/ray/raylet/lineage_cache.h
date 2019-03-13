@@ -3,6 +3,7 @@
 
 #include <gtest/gtest_prod.h>
 #include <boost/optional.hpp>
+#include <deque>
 
 // clang-format off
 #include "ray/common/common_protocol.h"
@@ -331,6 +332,7 @@ class LineageCache {
   /// The pubsub storage system for task information. This can be used to
   /// request notifications for the commit of a task entry.
   gcs::PubsubInterface<TaskID> &task_pubsub_;
+  uint64_t max_lineage_size_;
   /// The set of tasks that have been committed but not evicted.
   std::unordered_set<TaskID> committed_tasks_;
   /// All tasks and objects that we are responsible for writing back to the
@@ -339,6 +341,9 @@ class LineageCache {
   /// The tasks that we've subscribed to notifications for from the pubsub
   /// storage system. We will receive a notification for these tasks on commit.
   std::unordered_set<TaskID> subscribed_tasks_;
+
+  std::unordered_set<TaskID> evicted_pool_;
+  std::deque<TaskID> evicted_queue_;
 };
 
 }  // namespace raylet

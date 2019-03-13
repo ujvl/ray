@@ -193,7 +193,7 @@ LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
                            uint64_t max_lineage_size, bool disabled)
-    : disabled_(disabled), client_id_(client_id), task_storage_(task_storage), task_pubsub_(task_pubsub) {}
+    : disabled_(disabled), client_id_(client_id), task_storage_(task_storage), task_pubsub_(task_pubsub), max_lineage_size_(max_lineage_size) {}
 
 /// A helper function to add some uncommitted lineage to the local cache.
 void LineageCache::AddUncommittedLineage(const TaskID &task_id,
@@ -203,6 +203,9 @@ void LineageCache::AddUncommittedLineage(const TaskID &task_id,
   // there is nothing to copy into the merged lineage.
   auto entry = uncommitted_lineage.GetEntry(task_id);
   if (!entry) {
+    return;
+  }
+  if (evicted_pool_.count(task_id) > 0) {
     return;
   }
   RAY_CHECK(entry->GetStatus() == GcsStatus::UNCOMMITTED_REMOTE);
@@ -449,6 +452,8 @@ void LineageCache::EvictTask(const TaskID &task_id) {
   // Evict the task.
   RAY_LOG(DEBUG) << "Evicting task " << task_id << " on " << client_id_;
   lineage_.PopEntry(task_id);
+  evicted_pool_.insert(task_id);
+  evicted_queue_.push_back(task_id);
   //committed_tasks_.erase(commit_it);
   // Try to evict the children of the evict task. These are the tasks that have
   // a dependency on the evicted task.
@@ -474,6 +479,11 @@ void LineageCache::HandleEntryCommitted(const TaskID &task_id) {
   // We got the notification about the task's commit, so no longer need any
   // more notifications.
   UnsubscribeTask(task_id);
+
+  while (evicted_queue_.size() > max_lineage_size_) {
+    evicted_pool_.erase(evicted_queue_.front());
+    evicted_queue_.pop_front();
+  }
 }
 
 const Task &LineageCache::GetTaskOrDie(const TaskID &task_id) const {

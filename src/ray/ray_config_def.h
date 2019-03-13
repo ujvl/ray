@@ -52,7 +52,7 @@ RAY_CONFIG(int64_t, worker_fetch_request_size, 10000);
 /// This is used to bound the size of the Raylet's lineage cache. This is
 /// the maximum uncommitted lineage size that any remote task in the cache
 /// can have before eviction will be attempted.
-RAY_CONFIG(uint64_t, max_lineage_size, 100);
+RAY_CONFIG(uint64_t, max_lineage_size, 100000);
 
 /// This is a temporary constant used by actors to determine how many dummy
 /// objects to store.
