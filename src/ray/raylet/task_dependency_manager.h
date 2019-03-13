@@ -41,20 +41,29 @@ class TaskDependencyManager {
   bool CheckObjectLocal(const ObjectID &object_id) const;
 
   /// Subscribe to object depedencies required by the task and check whether
-  /// all dependencies are fulfilled. This will track this task's dependencies
-  /// until UnsubscribeDependencies is called on the same task ID. If any
-  /// dependencies are remote, then they will be requested. When the last
-  /// remote dependency later appears locally via a call to HandleObjectLocal,
-  /// the subscribed task will be returned by the HandleObjectLocal call,
-  /// signifying that it is ready to run. This method may be called multiple
-  /// times per task.
+  /// all dependencies are fulfilled. If any dependencies are remote, then they
+  /// will be requested. This method may be called multiple times per task.
+  ///
+  /// For ray.get dependencies, this call will track this task's dependencies
+  /// until UnsubscribeGetDependencies is called on the same task ID. When the
+  /// last remote dependency later appears locally via a call to
+  /// HandleObjectLocal, the subscribed task will be returned by the
+  /// HandleObjectLocal call, signifying that it is ready to run.
+  ///
+  /// For ray.wait dependencies, the task will be automatically unsubscribed
+  /// once the dependencies become local.
   ///
   /// \param task_id The ID of the task whose dependencies to subscribe to.
   /// \param required_objects The objects required by the task.
+  /// \param ray_get Whether the task called ray.get on the dependencies (and
+  /// is blocked), or called ray.wait. ray.get dependencies will stay active
+  /// until UnsubscribeGetDependencies is called, whereas ray.wait dependencies
+  /// will stay active until the dependency becomes local.
   /// \return Whether all of the given dependencies for the given task are
   /// local.
   bool SubscribeDependencies(const TaskID &task_id,
                              const std::vector<ObjectID> &required_objects,
+                             bool ray_get,
                              bool delay_pull = false,
                              bool fast_reconstruction = false);
 
@@ -64,7 +73,15 @@ class TaskDependencyManager {
   ///
   /// \param task_id The ID of the task whose dependencies to unsubscribe from.
   /// \return Whether the task was subscribed before.
-  bool UnsubscribeDependencies(const TaskID &task_id);
+  bool UnsubscribeGetDependencies(const TaskID &task_id);
+
+  /// Unsubscribe from required and non-blocking object dependencies. If the
+  /// objects were remote and are no longer required by any subscribed task,
+  /// then they will be canceled.
+  ///
+  /// \param task_id The ID of the task whose dependencies to unsubscribe from.
+  /// \return Whether the task was subscribed before.
+  bool UnsubscribeAllDependencies(const TaskID &task_id);
 
   /// Mark that the given task is pending execution. Any objects that it creates
   /// are now considered to be pending creation. If there are any subscribed
@@ -123,17 +140,24 @@ class TaskDependencyManager {
 
  private:
   struct RequiredTask {
-    std::unordered_map<ray::ObjectID, std::vector<ray::TaskID>> required_objects;
+    std::unordered_map<ray::ObjectID, std::unordered_set<ray::TaskID>> required_objects;
     bool fast_reconstruction;
     bool delay_pull;
   };
 
   /// A struct to represent the object dependencies of a task.
   struct TaskDependencies {
-    /// The objects that the task is dependent on. These must be local before
-    /// the task is ready to execute.
-    std::unordered_set<ObjectID> object_dependencies;
-    /// The number of object arguments that are not available locally. This
+    /// The objects that the task depends on. These are either the arguments to
+    /// the task or objects that the task calls `ray.get` on. These must be
+    /// local before the task is ready to execute. Objects are removed from
+    /// this set once UnsubscribeGetDependencies is called.
+    std::unordered_set<ObjectID> get_dependencies;
+    /// The objects that the task is fetching. These are objects that the task
+    /// called `ray.wait` on that are not yet local. These may be fetched while
+    /// the task is executing. An object will be automatically removed from
+    /// this set once it becomes local.
+    std::unordered_set<ObjectID> wait_dependencies;
+    /// The number of get_dependencies that are not available locally. This
     /// must be zero before the task is ready to execute.
     int64_t num_missing_dependencies;
   };
@@ -170,6 +194,19 @@ class TaskDependencyManager {
   /// The task lease has an expiration time. If we do not renew the lease
   /// before that time, then other nodes may choose to execute the task.
   void AcquireTaskLease(const TaskID &task_id);
+  /// Removes the task from the stored list of tasks that depend on the object.
+  ///
+  /// \param dependent_task_id The task that no longer depends on the object.
+  /// \param object_id The object that the task was dependent on.
+  void RemoveTaskDependency(const TaskID &dependent_task_id, const ObjectID &object_id);
+  /// Unsubscribe from the given non-blocking object dependency. If the
+  /// objects were remote and are no longer required by any subscribed task,
+  /// then they will be canceled.
+  ///
+  /// \param task_id The ID of the task whose dependency to unsubscribe from.
+  /// \param object_id The ID of the dependency to unsubscribe from.
+  /// \return Whether the task was subscribed before.
+  bool UnsubscribeWaitDependency(const TaskID &task_id, const ObjectID &object_id);
 
   /// The object manager, used to fetch required objects from remote nodes.
   ObjectManagerInterface &object_manager_;
