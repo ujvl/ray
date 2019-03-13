@@ -467,9 +467,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms):
-    latency_file = None
-    if record_latency:
+         gcs_delay_ms, latency_file):
+    if record_latency and latency_file is None:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
                 data_size * 4 // 1e6,
                 num_workers,
@@ -651,6 +650,10 @@ if __name__ == "__main__":
         action='store_true',
         help='Whether to record the latency')
     parser.add_argument(
+        '--latency-file',
+        default=None,
+        help='File to record the latency')
+    parser.add_argument(
         '--test-failure',
         action='store_true',
         help='Whether or not to test worker failure')
@@ -662,4 +665,5 @@ if __name__ == "__main__":
 
     main(args.redis_address, args.test_single_node, args.num_workers,
          args.size, args.num_iterations, args.check_results, args.dump,
-         args.test_failure, args.record_latency, args.gcs_delay_ms)
+         args.test_failure, args.record_latency, args.gcs_delay_ms,
+         args.latency_file)
