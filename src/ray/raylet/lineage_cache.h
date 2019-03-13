@@ -271,7 +271,7 @@ class LineageCache {
   /// \return The uncommitted, unforwarded lineage of the task. The returned lineage
   /// includes the entry for the requested entry_id.
   Lineage GetUncommittedLineageOrDie(const TaskID &task_id,
-                                     const ClientID &node_id) const;
+                                     const ClientID &node_id);
 
   /// Handle the commit of a task entry in the GCS. This attempts to evict the
   /// task if possible.

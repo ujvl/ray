@@ -312,15 +312,18 @@ void LineageCache::MarkTaskAsForwarded(const TaskID &task_id, const ClientID &no
   }
 
   RAY_CHECK(!node_id.is_nil());
-  lineage_.GetEntryMutable(task_id)->MarkExplicitlyForwarded(node_id);
+  auto entry = lineage_.GetEntryMutable(task_id);
+  if (entry) {
+    entry->MarkExplicitlyForwarded(node_id);
+  }
 }
 
 /// A helper function to get the uncommitted lineage of a task.
-void GetUncommittedLineageHelper(const TaskID &task_id, const Lineage &lineage_from,
+void GetUncommittedLineageHelper(const TaskID &task_id, Lineage &lineage_from,
                                  Lineage &lineage_to, const ClientID &node_id) {
   // If the entry is not found in the lineage to merge, then we stop since
   // there is nothing to copy into the merged lineage.
-  auto entry = lineage_from.GetEntry(task_id);
+  auto entry = lineage_from.GetEntryMutable(task_id);
   if (!entry) {
     return;
   }
@@ -331,6 +334,7 @@ void GetUncommittedLineageHelper(const TaskID &task_id, const Lineage &lineage_f
   if (entry->WasExplicitlyForwarded(node_id)) {
     return;
   }
+  entry->MarkExplicitlyForwarded(node_id);
 
   // Insert a copy of the entry into lineage_to.  If the insert is successful,
   // then continue the DFS. The insert will fail if the new entry has an equal
@@ -344,7 +348,7 @@ void GetUncommittedLineageHelper(const TaskID &task_id, const Lineage &lineage_f
 }
 
 Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
-                                                 const ClientID &node_id) const {
+                                                 const ClientID &node_id) {
   RAY_CHECK(!disabled_);
 
   Lineage uncommitted_lineage;
