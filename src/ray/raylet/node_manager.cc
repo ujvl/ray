@@ -74,7 +74,7 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           gcs_client_->task_lease_table()),
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client_->raylet_task_table(), gcs_client_->raylet_task_table(),
-                     config.max_lineage_size, /*disabled=*/gcs_delay_ms_ >= 0),
+                     config.max_lineage_size, RayConfig::instance().lineage_stash_max_failures()),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_() {

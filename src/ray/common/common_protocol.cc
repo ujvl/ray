@@ -24,6 +24,15 @@ const std::vector<ray::ObjectID> from_flatbuf(
   return object_ids;
 }
 
+const std::unordered_set<ray::ObjectID> set_from_flatbuf(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>> &vector) {
+  std::unordered_set<ray::ObjectID> object_ids;
+  for (int64_t i = 0; i < vector.Length(); i++) {
+    object_ids.insert(from_flatbuf(*vector.Get(i)));
+  }
+  return object_ids;
+}
+
 const std::vector<ray::ObjectID> object_ids_from_flatbuf(
     const flatbuffers::String &string) {
   const auto &object_ids = string_from_flatbuf(string);
@@ -63,6 +72,16 @@ to_flatbuf(flatbuffers::FlatBufferBuilder &fbb, ray::ObjectID object_ids[],
 flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
 to_flatbuf(flatbuffers::FlatBufferBuilder &fbb,
            const std::vector<ray::ObjectID> &object_ids) {
+  std::vector<flatbuffers::Offset<flatbuffers::String>> results;
+  for (auto object_id : object_ids) {
+    results.push_back(to_flatbuf(fbb, object_id));
+  }
+  return fbb.CreateVector(results);
+}
+
+flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
+to_flatbuf(flatbuffers::FlatBufferBuilder &fbb,
+           const std::unordered_set<ray::ObjectID> &object_ids) {
   std::vector<flatbuffers::Offset<flatbuffers::String>> results;
   for (auto object_id : object_ids) {
     results.push_back(to_flatbuf(fbb, object_id));

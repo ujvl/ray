@@ -6,6 +6,11 @@ namespace ray {
 
 namespace raylet {
 
+LineageEntry::LineageEntry(const Task &task, GcsStatus status, const std::unordered_set<ClientID> &forwarded_to)
+    : status_(status), task_(task), forwarded_to_(forwarded_to) {
+  ComputeParentTaskIds();
+}
+
 LineageEntry::LineageEntry(const Task &task, GcsStatus status)
     : status_(status), task_(task) {
   ComputeParentTaskIds();
@@ -29,6 +34,10 @@ void LineageEntry::ResetStatus(GcsStatus new_status) {
 
 void LineageEntry::MarkExplicitlyForwarded(const ClientID &node_id) {
   forwarded_to_.insert(node_id);
+}
+
+const std::unordered_set<ClientID> &LineageEntry::ForwardedTo() const {
+  return forwarded_to_;
 }
 
 bool LineageEntry::WasExplicitlyForwarded(const ClientID &node_id) const {
@@ -66,8 +75,9 @@ Lineage::Lineage(const protocol::ForwardTaskRequest &task_request) {
   // Deserialize and set entries for the uncommitted tasks.
   auto tasks = task_request.uncommitted_tasks();
   for (auto it = tasks->begin(); it != tasks->end(); it++) {
-    const auto &task = **it;
-    RAY_CHECK(SetEntry(task, GcsStatus::UNCOMMITTED_REMOTE));
+    const auto &lineage_entry = *it;
+    std::unordered_set<ClientID> forwarded_to = set_from_flatbuf(*lineage_entry->forwarded_to());
+    RAY_CHECK(SetEntry(*lineage_entry->task(), GcsStatus::UNCOMMITTED_REMOTE, forwarded_to));
   }
 }
 
@@ -103,6 +113,11 @@ void Lineage::AddChild(const TaskID &parent_id, const TaskID &child_id) {
 }
 
 bool Lineage::SetEntry(const Task &task, GcsStatus status) {
+  static const std::unordered_set<ClientID> empty_forwarded_to;
+  return SetEntry(task, status, empty_forwarded_to);
+}
+
+bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_set<ClientID> &forwarded_to) {
   // Get the status of the current entry at the key.
   auto task_id = task.GetTaskSpecification().TaskId();
   auto it = entries_.find(task_id);
@@ -118,7 +133,7 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status) {
       updated = true;
     }
   } else {
-    LineageEntry new_entry(task, status);
+    LineageEntry new_entry(task, status, forwarded_to);
     it = entries_.emplace(std::make_pair(task_id, std::move(new_entry))).first;
     updated = true;
   }
@@ -169,9 +184,12 @@ flatbuffers::Offset<protocol::ForwardTaskRequest> Lineage::ToFlatbuffer(
     flatbuffers::FlatBufferBuilder &fbb, const TaskID &task_id) const {
   RAY_CHECK(GetEntry(task_id));
   // Serialize the task and object entries.
-  std::vector<flatbuffers::Offset<protocol::Task>> uncommitted_tasks;
+  std::vector<flatbuffers::Offset<protocol::TaskLineageEntry>> uncommitted_tasks;
   for (const auto &entry : entries_) {
-    uncommitted_tasks.push_back(entry.second.TaskData().ToFlatbuffer(fbb));
+    const auto &task = entry.second.TaskData().ToFlatbuffer(fbb);
+    auto forwarded_to = to_flatbuf(fbb, entry.second.ForwardedTo());
+    const auto &task_entry = CreateTaskLineageEntry(fbb, task, forwarded_to);
+    uncommitted_tasks.push_back(task_entry);
   }
 
   auto request = protocol::CreateForwardTaskRequest(fbb, to_flatbuf(fbb, task_id),
@@ -192,8 +210,13 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size, bool disabled)
-    : disabled_(disabled), client_id_(client_id), task_storage_(task_storage), task_pubsub_(task_pubsub), max_lineage_size_(max_lineage_size) {}
+                           uint64_t max_lineage_size, int64_t max_failures)
+    : disabled_(max_failures == 0),
+      client_id_(client_id),
+      task_storage_(task_storage),
+      task_pubsub_(task_pubsub),
+      max_lineage_size_(max_lineage_size),
+      max_failures_(max_failures) {}
 
 /// A helper function to add some uncommitted lineage to the local cache.
 void LineageCache::AddUncommittedLineage(const TaskID &task_id,
@@ -215,7 +238,7 @@ void LineageCache::AddUncommittedLineage(const TaskID &task_id,
   // If the insert is successful, then continue the DFS. The insert will fail
   // if the new entry has an equal or lower GCS status than the current entry
   // in our cache. This also prevents us from traversing the same node twice.
-  if (lineage_.SetEntry(entry->TaskData(), entry->GetStatus())) {
+  if (lineage_.SetEntry(entry->TaskData(), entry->GetStatus(), entry->ForwardedTo())) {
     subscribe_tasks.insert(task_id);
     for (const auto &parent_id : parent_ids) {
       AddUncommittedLineage(parent_id, uncommitted_lineage, subscribe_tasks);
@@ -240,6 +263,11 @@ bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_l
   // Add the submitted task to the lineage cache as UNCOMMITTED_WAITING. It
   // should be marked as UNCOMMITTED_READY once the task starts execution.
   auto added = lineage_.SetEntry(task, GcsStatus::UNCOMMITTED_WAITING);
+  // Mark tasks that might've been submitted locally as having been forwarded
+  // to this node.
+  if (max_failures_ >= 0) {
+    MarkTaskAsForwarded(task_id, client_id_);
+  }
 
   // Do not subscribe to the waiting task itself. We just added it as
   // UNCOMMITTED_WAITING, so the task is local.
@@ -323,7 +351,8 @@ void LineageCache::MarkTaskAsForwarded(const TaskID &task_id, const ClientID &no
 
 /// A helper function to get the uncommitted lineage of a task.
 void GetUncommittedLineageHelper(const TaskID &task_id, Lineage &lineage_from,
-                                 Lineage &lineage_to, const ClientID &node_id) {
+                                 Lineage &lineage_to, const ClientID &node_id,
+                                 int64_t max_failures) {
   // If the entry is not found in the lineage to merge, then we stop since
   // there is nothing to copy into the merged lineage.
   auto entry = lineage_from.GetEntryMutable(task_id);
@@ -331,6 +360,11 @@ void GetUncommittedLineageHelper(const TaskID &task_id, Lineage &lineage_from,
     return;
   }
   if (entry->GetStatus() == GcsStatus::COMMITTED) {
+    return;
+  }
+  // If we have set f as the maximum number of failures to tolerate, then only
+  // add the entry if it has not yet been forwarded to f other nodes.
+  if (max_failures >= 0 && entry->ForwardedTo().size() > static_cast<size_t>(max_failures)) {
     return;
   }
   // If this task has already been forwarded to this node, then we can stop.
@@ -343,9 +377,9 @@ void GetUncommittedLineageHelper(const TaskID &task_id, Lineage &lineage_from,
   // then continue the DFS. The insert will fail if the new entry has an equal
   // or lower GCS status than the current entry in lineage_to. This also
   // prevents us from traversing the same node twice.
-  if (lineage_to.SetEntry(entry->TaskData(), entry->GetStatus())) {
+  if (lineage_to.SetEntry(entry->TaskData(), entry->GetStatus(), entry->ForwardedTo())) {
     for (const auto &parent_id : entry->GetParentTaskIds()) {
-      GetUncommittedLineageHelper(parent_id, lineage_from, lineage_to, node_id);
+      GetUncommittedLineageHelper(parent_id, lineage_from, lineage_to, node_id, max_failures);
     }
   }
 }
@@ -357,14 +391,14 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
   Lineage uncommitted_lineage;
   // Add all uncommitted ancestors from the lineage cache to the uncommitted
   // lineage of the requested task.
-  GetUncommittedLineageHelper(task_id, lineage_, uncommitted_lineage, node_id);
+  GetUncommittedLineageHelper(task_id, lineage_, uncommitted_lineage, node_id, max_failures_);
   // The lineage always includes the requested task id, so add the task if it
   // wasn't already added. The requested task may not have been added if it was
   // already explicitly forwarded to this node before.
   if (uncommitted_lineage.GetEntries().empty()) {
     auto entry = lineage_.GetEntry(task_id);
     RAY_CHECK(entry);
-    RAY_CHECK(uncommitted_lineage.SetEntry(entry->TaskData(), entry->GetStatus()));
+    RAY_CHECK(uncommitted_lineage.SetEntry(entry->TaskData(), entry->GetStatus(), entry->ForwardedTo()));
   }
   RAY_LOG(DEBUG) << "Uncommitted lineage for task " << task_id << " size is " << uncommitted_lineage.GetEntries().size();
   return uncommitted_lineage;

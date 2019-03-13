@@ -4,6 +4,7 @@
 #include "ray/gcs/format/gcs_generated.h"
 
 #include <unordered_map>
+#include <unordered_set>
 
 #include "ray/id.h"
 
@@ -26,6 +27,9 @@ ray::ObjectID from_flatbuf(const flatbuffers::String &string);
 /// @param vector The flatbuffer vector.
 /// @return The vector of object IDs.
 const std::vector<ray::ObjectID> from_flatbuf(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>> &vector);
+
+const std::unordered_set<ray::ObjectID> set_from_flatbuf(
     const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>> &vector);
 
 /// Convert a flatbuffer of string that concatenated
@@ -63,6 +67,10 @@ to_flatbuf(flatbuffers::FlatBufferBuilder &fbb, ray::ObjectID object_ids[],
 flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
 to_flatbuf(flatbuffers::FlatBufferBuilder &fbb,
            const std::vector<ray::ObjectID> &object_ids);
+
+flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
+to_flatbuf(flatbuffers::FlatBufferBuilder &fbb,
+           const std::unordered_set<ray::ObjectID> &object_ids);
 
 /// Convert a flatbuffer string to a std::string.
 ///

@@ -22,6 +22,7 @@ RAY_CONFIG(int64_t, handler_warning_timeout_ms, 100);
 
 RAY_CONFIG(int64_t, async_message_max_buffer_size, 1);
 RAY_CONFIG(int, gcs_delay_ms, -1);
+RAY_CONFIG(int64_t, lineage_stash_max_failures, -1);
 
 /// The duration between heartbeats. These are sent by the raylet.
 RAY_CONFIG(int64_t, heartbeat_timeout_milliseconds, 100);

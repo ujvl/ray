@@ -46,6 +46,7 @@ class LineageEntry {
   /// \param status The status of this entry, according to its write status in
   /// the GCS.
   LineageEntry(const Task &task, GcsStatus status);
+  LineageEntry(const Task &task, GcsStatus status, const std::unordered_set<ClientID> &forwarded_to);
 
   /// Get this entry's GCS status.
   ///
@@ -71,6 +72,8 @@ class LineageEntry {
   ///
   /// \param node_id The ID of the remote node manager.
   void MarkExplicitlyForwarded(const ClientID &node_id);
+
+  const std::unordered_set<ClientID> &ForwardedTo() const;
 
   /// Gets whether this entry was explicitly forwarded to a remote node.
   ///
@@ -157,6 +160,7 @@ class Lineage {
   /// \param status The GCS status.
   /// \return Whether the entry was set.
   bool SetEntry(const Task &task, GcsStatus status);
+  bool SetEntry(const Task &task, GcsStatus status, const std::unordered_set<ClientID> &forwarded_to);
 
   /// Delete and return an entry from the lineage.
   ///
@@ -221,7 +225,7 @@ class LineageCache {
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
-               bool disabled = false);
+               int64_t max_failures);
 
   /// Add a task that is waiting for execution and its uncommitted lineage.
   /// These entries will not be written to the GCS until set to ready.
@@ -333,6 +337,7 @@ class LineageCache {
   /// request notifications for the commit of a task entry.
   gcs::PubsubInterface<TaskID> &task_pubsub_;
   uint64_t max_lineage_size_;
+  int64_t max_failures_;
   /// The set of tasks that have been committed but not evicted.
   std::unordered_set<TaskID> committed_tasks_;
   /// All tasks and objects that we are responsible for writing back to the

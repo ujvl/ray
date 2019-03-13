@@ -154,12 +154,17 @@ table RegisterNodeManagerRequest {
   client_id: string;
 }
 
+table TaskLineageEntry {
+  task: Task;
+  forwarded_to: [string];
+}
+
 table ForwardTaskRequest {
   // The ID of the task to be forwarded.
   task_id: string;
   // The tasks in the uncommitted lineage of the forwarded task. This
   // should include task_id.
-  uncommitted_tasks: [Task];
+  uncommitted_tasks: [TaskLineageEntry];
 }
 
 table FetchOrReconstruct {
