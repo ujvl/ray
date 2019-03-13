@@ -6,12 +6,12 @@ NUM_RAYLETS=$1
 NUM_REDIS_SHARDS=${2:-1}
 #LINEAGE_POLICY=$2
 #MAX_LINEAGE_SIZE=$3
-#GCS_DELAY_MS=$4
+GCS_DELAY_MS=${3:--1}
 
 HEAD_IP=$(head -n 1 ~/workers.txt)
 WORKER_IPS=$(tail -n $NUM_RAYLETS ~/workers.txt)
 
-if [[ $# -le 2 && $# -ge 1 ]]
+if [[ $# -le 3 && $# -ge 1 ]]
 then
 	echo "Starting cluster with $NUM_RAYLETS raylets, $NUM_REDIS_SHARDS Redis shards..."
 else
@@ -22,11 +22,11 @@ fi
 bash $DIR/stop_cluster.sh
 
 echo "Starting head with $NUM_REDIS_SHARDS Redis shards..."
-bash $DIR/start_head.sh $NUM_REDIS_SHARDS
+bash $DIR/start_head.sh $NUM_REDIS_SHARDS $GCS_DELAY_MS
 echo "Done starting head"
 
 echo "Starting workers $WORKER_IPS with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
-parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -O "StrictHostKeyChecking=no" -I 'bash -s - '$HEAD_IP < $DIR/start_worker.sh
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -O "StrictHostKeyChecking=no" -I 'bash -s - '$HEAD_IP $GCS_DELAY_MS < $DIR/start_worker.sh
 echo "Done starting workers"
 
 #sleep 10

@@ -1,8 +1,9 @@
 #!/bin/bash
 
 HEAD_IP=$1
-NODE_RESOURCE=${2:-'Node'$RANDOM}
-SLEEP_TIME=${3:-$(( $RANDOM % 5 ))}
+GCS_DELAY_MS=$2
+NODE_RESOURCE=${3:-'Node'$RANDOM}
+SLEEP_TIME=${4:-$(( $RANDOM % 5 ))}
 
 SEND_THREADS=8
 RECEIVE_THREADS=8
@@ -24,6 +25,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     --huge-pages \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
+    "gcs_delay_ms": '$GCS_DELAY_MS',
     "num_heartbeats_timeout": 20,
     "async_message_max_buffer_size": 100,
     "object_manager_repeated_push_delay_ms": 1000,

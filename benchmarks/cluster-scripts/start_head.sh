@@ -1,6 +1,7 @@
 #!/bin/bash
 
 NUM_REDIS_SHARDS=$1
+GCS_DELAY_MS=$2
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
 
@@ -15,6 +16,7 @@ ray start --head \
   --huge-pages \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
+    "gcs_delay_ms": '$GCS_DELAY_MS',
     "num_heartbeats_timeout": 20,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000}'

@@ -576,6 +576,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
+                    str(args.gcs_delay_ms),
                     node_resource,
                     ]
             subprocess.Popen(command)
