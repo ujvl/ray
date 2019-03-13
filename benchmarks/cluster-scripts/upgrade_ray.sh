@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-CHECKOUT=${2:-0}
+CHECKOUT=${1:-0}
 
 if [[ $CHECKOUT -ne 0 ]]
 then
