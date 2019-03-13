@@ -34,11 +34,11 @@ parser.add_argument("--dataflow-parallelism", default=1,
 parser.add_argument("--record-type", default="int",
                     choices = ["int","string"],
                     help="the number of instances per operator")
-parser.add_argument("--latency-file", required=True,
+parser.add_argument("--latency-file", default="latencies",
                     help="the file to log per-record latencies")
-parser.add_argument("--throughput-file", required=True,
+parser.add_argument("--throughput-file", default="throughputs",
                     help="the file to log actors throughput")
-parser.add_argument("--dump-file", required=True,
+parser.add_argument("--dump-file", default=None,
                     help="the file to dump chrome timeline")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
@@ -182,8 +182,9 @@ def write_log_files(all_parameters, latency_filename,
                     throughput_filename,  dump_filename, dataflow):
 
     # Dump timeline
-    dump_filename = dump_filename + all_parameters
-    ray.global_state.chrome_tracing_dump(dump_filename)
+    if dump_filename:
+        dump_filename = dump_filename + all_parameters
+        ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Collect sampled per-record latencies
     sink_id = dataflow.operator_id("sink")
@@ -278,3 +279,4 @@ if __name__ == "__main__":
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based)
+    ray.shutdown()

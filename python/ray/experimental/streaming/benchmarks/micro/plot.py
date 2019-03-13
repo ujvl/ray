@@ -62,7 +62,6 @@ class LoadFromFile(argparse.Action):
                 line = line.strip()
                 if line and line[0] != "#":
                     args.append(line)
-        print("Args: ",args)
         parser.parse_args(args, namespace)
 
 parser = argparse.ArgumentParser()
@@ -130,15 +129,17 @@ parser.add_argument("--conf-file", type=open, action=LoadFromFile,
 mpl.use('agg')
 
 # Colors
-reds = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-2, vmax=2),
+reds = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
                              cmap="Reds")
-greens = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-3, vmax=3),
+greens = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
                                cmap="Greens")
-blues = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-3, vmax=3),
+blues = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
                               cmap="Blues")
+oranges = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
+                              cmap="Oranges")
 
 # Line color generator
-colors = cycle([blues, reds, greens])
+colors = cycle([blues, reds, greens, oranges])
 
 # Linestyle generator
 linestyles = cycle(['solid', 'dashed', 'dotted', 'dashdot'])
@@ -347,15 +348,16 @@ def generate_line_plot(latencies, x_label, y_label, labels,
             cdf = ECDF(data)
             ax.plot(cdf.x, cdf.y, label=label,
                     linestyle=next(linestyles),
-                    linewidth=2, c=next(colors).to_rgba(1))
+                    linewidth=1, c=next(colors).to_rgba(1))
         else:
             samples = [s for s in range(0,len(data))]
             ax.plot(samples, data, label=label,
                     linestyle=next(linestyles),
-                    linewidth=2, c=next(colors).to_rgba(1))
+                    linewidth=1, c=next(colors).to_rgba(1))
     ax.legend(fontsize=8)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
+    # ax.set_yscale('log')
     # Set font sizes
     for item in ([ax.title, ax.xaxis.label,
         ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels()):
@@ -381,7 +383,8 @@ def generate_box_plot(latencies, x_label, y_label,
     ax.get_yaxis().tick_left()
     data = [data for _, data in latencies]
     ax.boxplot(data)
-    ax.set_xticklabels(labels)
+    ax.set_yscale('log')
+    ax.set_xticklabels(labels, rotation=45)
     # Set font sizes
     for item in ([ax.title, ax.xaxis.label, ax.yaxis.label]):
         item.set_fontsize(14)
@@ -401,32 +404,57 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
     # TODO (john): Add actor ids at the bottom of each bar or add a legend
     num_exps = len(rates)  # Total number of experiments included in the plot
     ind = np.arange(num_exps)  # The x-axis locations for the groups
-    bar_width = 1
     throughput_plot, ax = plt.subplots()
+    bar_width = 1
     num_actors = len(rates[0][1])
+    num_actors_ignore = 0
+    # TODO (john): This assumes that all experiments
+    # have the same number of actors
+    for actor_id, _, _, _, _ in rates[0][1]:
+        actor_name = actor_id.split(",")[1].strip()
+        if actor_name == "flatmap" or actor_name == "sink":
+            num_actors_ignore += 1
     # We need 'num_exps * num_actors * 2' bars in total
     # because each actor has an input and an output rate
     bars = []
     actor_ids = []
     pos = 0
     step = 2 * bar_width
+    legend_set = False
     for exp, all_rates in rates:
         for actor_id, in_rate, in_var, out_rate, out_var in all_rates:
-            bar_1 = ax.bar(pos, in_rate, bar_width,
-                           color=next(colors).to_rgba(1),
-                           yerr=in_var)
-            actor_ids.append(actor_id)
-            bars.append(bar_1)
-            bar_2 = ax.bar(pos + bar_width, out_rate, bar_width,
-                           next(colors).to_rgba(1), yerr=out_var)
-            actor_ids.append(actor_id)
-            bars.append(bar_2)
-            pos += step
+            actor_name = actor_id.split(",")[1].strip()
+            if actor_name == "source" or "map_" in actor_name:
+                bar_1 = ax.bar(pos, in_rate, bar_width,
+                               color=next(colors).to_rgba(1),
+                               yerr=0)
+                actor_ids.append(actor_id)
+                bars.append(bar_1)
+                if not legend_set and actor_name == "source":
+                    label = "Source"
+                    bar_2 = ax.bar(pos + bar_width, out_rate,
+                                   label=label, color="rosybrown",
+                                   width=bar_width, yerr=0)
+                    bar_2[0].set_hatch("/")
+                    legend_set = True
+                elif actor_name == "source":
+                    bar_2 = ax.bar(pos + bar_width, out_rate,
+                                   color="rosybrown", yerr=0)
+                    bar_2[0].set_hatch("/")
+                else:
+                    bar_2 = ax.bar(pos + bar_width, out_rate,
+                                   color=next(colors).to_rgba(1),
+                                   width=bar_width, yerr=0)
+                actor_ids.append(actor_id)
+                bars.append(bar_2)
+                pos += step
         pos += step
     ax.set_ylabel(x_label)
     ax.set_ylabel(y_label)
+    ax.legend(fontsize=12)
     x_ticks_positions = []
     offset = 0
+    num_actors -= num_actors_ignore
     group_width = bar_width * num_actors * 2
     for i in range(num_exps):
         point = (group_width - bar_width) / 2
@@ -448,7 +476,7 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
     # Set font size for x-axis tick labels
     for item in ax.get_xticklabels():
         item.set_fontsize(10)
-    ax.set_yscale('log')
+    # ax.set_yscale('log')
     # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
@@ -510,7 +538,7 @@ def actor_rates(rates, plot_repo, varying_parameters,
             bar_labels.append(actor_id)
     if plot_type == "barchart":
         x_axis_label = ""
-        y_axis_label = "Actor Throughput [records/s]"
+        y_axis_label = "Actor rate [records/s]"
         plot_filename = plot_file_prefix + "-actor-rates.png"
         generate_barchart_plot(rates, x_axis_label, y_axis_label,
                                bar_labels, exp_labels, plot_repo,
@@ -629,11 +657,11 @@ def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
     if plot_type == "line":
         x_axis_label = "Samples"
         y_axis_label = "End-to-end record latency [s]"
-        plot_filename = plot_file_prefix + combined_names + ".png"
+        plot_filename = plot_file_prefix + "-" + combined_names + ".png"
     elif plot_type == "cdf":
         x_axis_label = "End-to-end record latency [s]"
         y_axis_label = "Percentage [%]"
-        plot_filename = plot_file_prefix + combined_names + "-cdf.png"
+        plot_filename = plot_file_prefix + "-" + combined_names + "-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
     generate_line_plot(latencies, x_axis_label, y_axis_label,
@@ -661,7 +689,6 @@ def write_plot_metadata(plot_repo, plot_file_prefix,
 if __name__ == "__main__":
 
     args = parser.parse_args()
-    print("Args:",args)
 
     # Plotting arguments
     plot_type = str(args.plot_type)
@@ -705,10 +732,8 @@ if __name__ == "__main__":
     exp_args.append(("max_reads",
                          _parse_arg(args.max_reads, type="float")))
 
-    # Store plot metadata
     plot_id = str(_generate_uuid())
-    plot_file_prefix += plot_id + "-"
-    write_plot_metadata(plot_repo, plot_file_prefix, plot_id, exp_args)
+    plot_file_prefix += plot_id
 
     # All parameters for which a collection of values is given
     varying_parameters = _varying_parameters(exp_args)
@@ -754,7 +779,8 @@ if __name__ == "__main__":
                                            varying_combination,
                                            plot_file_prefix,
                                            plot_type)
-        else:  # Identify parameter to generate the respective plot labels
+        elif len(varying_parameters) == 1:
+            # Identify parameter to generate the respective plot labels
             plot_type = "cdf" if cdf else "line"
             for tag, values in varying_parameters:
                 if tag == "max_queue_size":
@@ -772,10 +798,15 @@ if __name__ == "__main__":
                 elif tag == "num_stages":
                     latency_vs_chain_length(latencies, plot_repo, values,
                                             plot_file_prefix, plot_type)
-                else:  # All parameters are fixed
-                    x_label = "Samples"
-                    y_label = "End-to-end record latency [s]"
-                    labels = [""]
-                    generate_line_plot(latencies, x_label, y_label, labels,
-                                       plot_repo, plot_file_prefix,
-                                       plot_type==cdf)
+                else:
+                    sys.exit("Unrecognized or unsupported option.")
+        else:
+            # All parameters are fixed
+            x_label = "Samples"
+            y_label = "End-to-end record latency [s]"
+            labels = [""]
+            generate_line_plot(latencies, x_label, y_label, labels,
+                               plot_repo, plot_file_prefix,
+                               plot_type==cdf)
+    # Store plot metadata
+    write_plot_metadata(plot_repo, plot_file_prefix, plot_id, exp_args)

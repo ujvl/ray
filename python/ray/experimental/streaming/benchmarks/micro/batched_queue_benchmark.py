@@ -17,18 +17,18 @@ logging.basicConfig(level=logging.INFO)
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
-parser.add_argument("--num-queues", default=1,
+parser.add_argument("--num-stages", default=1,
                     help="the number of queues in the chain")
 parser.add_argument("--record-type", default="int",
                     choices = ["int","string"],
                     help="the number of instances per operator")
 parser.add_argument("--record-size", default=10,
                     help="the size of a record of type string in bytes")
-parser.add_argument("--latency-file", required=True,
+parser.add_argument("--latency-file", default="latencies",
                     help="the file to log per-record latencies")
-parser.add_argument("--throughput-file", required=True,
+parser.add_argument("--throughput-file", default="throughput",
                     help="the file to log actors throughput")
-parser.add_argument("--dump-file", required=True,
+parser.add_argument("--dump-file", default=None,
                     help="the file to dump chrome timeline")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
@@ -119,8 +119,8 @@ def benchmark_queue(rounds, latency_filename,
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
-                        num_queues, max_reads_per_second=float("inf")):
-    assert num_queues >= 1
+                        num_stages, max_reads_per_second=float("inf")):
+    assert num_stages >= 1
     first_queue = BatchedQueue(
         "ID",           # Dummy channel id
         "SRC_OP_ID",    # Dummy source operator id
@@ -136,11 +136,11 @@ def benchmark_queue(rounds, latency_filename,
     logs = []
     log_latency = False
     nodes = []
-    for i in range(num_queues):
+    for i in range(num_stages):
         # Construct the batched queue
         in_queue = previous_queue
         out_queue = None
-        if i < num_queues-1:
+        if i < num_stages-1:
             out_queue = BatchedQueue(
                 "ID",           # Dummy channel id
                 "SRC_OP_ID",    # Dummy source operator id
@@ -197,12 +197,13 @@ def benchmark_queue(rounds, latency_filename,
         rounds, sample_period,
         record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
-        background_flush, num_queues, max_reads_per_second
+        background_flush, num_stages, max_reads_per_second
     )
 
     # Dump timeline
-    dump_filename = dump_filename + all_parameters
-    ray.global_state.chrome_tracing_dump(dump_filename)
+    if dump_filename:
+        dump_filename = dump_filename + all_parameters
+        ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Write sampled per-record latencies
     latency_filename = latency_filename + all_parameters
@@ -277,12 +278,12 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
-    num_queues = int(args.num_queues)
+    num_stages = int(args.num_stages)
     max_reads_per_second = float(args.max_throughput)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
-    logger.info("Number of queues: {}".format(num_queues))
+    logger.info("Number of queues: {}".format(num_stages))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file: {}".format(latency_filename))
     logger.info("Throughput file: {}".format(throughput_filename))
@@ -317,5 +318,6 @@ if __name__ == "__main__":
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
-                        num_queues, max_reads_per_second)
+                        num_stages, max_reads_per_second)
     logger.info("Elapsed time: {}".format(time.time()-start))
+    ray.shutdown()
