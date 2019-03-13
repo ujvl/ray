@@ -2047,6 +2047,8 @@ void NodeManager::ResubmitTask(const Task &task) {
     return;
   }
 
+  task_dependency_manager_.HandleTaskResubmitted(task.GetTaskSpecification().TaskId());
+
   RAY_LOG(INFO) << "Resubmitting task " << task.GetTaskSpecification().TaskId()
                 << " on client " << gcs_client_->client_table().GetLocalClientId();
   // The task may be reconstructed. Submit it with an empty lineage, since any

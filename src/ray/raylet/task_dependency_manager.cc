@@ -152,6 +152,64 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectLocal(
   return ready_task_ids;
 }
 
+void TaskDependencyManager::HandleTaskResubmitted(
+    const ray::TaskID &task_id) {
+  auto creating_task_entry = required_tasks_.find(task_id);
+  if (creating_task_entry == required_tasks_.end()) {
+    return;
+  }
+
+  auto &required_objects = creating_task_entry->second.required_objects;
+  for (auto required_object_it = required_objects.begin(); required_object_it
+      != required_objects.end(); ) {
+    const auto object_id = required_object_it->first;
+    // Find any tasks that are dependent on the newly available object.
+    std::vector<TaskID> task_ids_to_remove;
+    for (auto &dependent_task_id : required_object_it->second) {
+      auto it = task_dependencies_.find(dependent_task_id);
+      RAY_CHECK(it != task_dependencies_.end());
+      auto &task_entry = it->second;
+
+      // If the task called ray.wait on the object, then we can now remove
+      // the task's dependency on the object.
+      auto wait_it = task_entry.wait_dependencies.find(object_id);
+      if (wait_it != task_entry.wait_dependencies.end()) {
+        RAY_LOG(DEBUG) << "Removing wait dependency " << dependent_task_id << " on " << object_id;
+        // The object is now local, so the ray.wait call has been fulfilled.
+        task_entry.wait_dependencies.erase(wait_it);
+        if (task_entry.get_dependencies.find(object_id) ==
+            task_entry.get_dependencies.end()) {
+          // The task called ray.wait on the object, but not ray.get, so it
+          // no longer depends on the object. Therefore, it is safe to remove
+          // the dependent task from the set of tasks that depend on the
+          // local object.
+          task_ids_to_remove.push_back(dependent_task_id);
+        }
+      }
+
+      // All ray.get and ray.wait dependencies have been fulfilled for this
+      // task, so it is safe to remove.
+      if (task_entry.get_dependencies.empty() && task_entry.wait_dependencies.empty()) {
+        task_dependencies_.erase(it);
+      }
+    }
+
+    for (const auto &task_id : task_ids_to_remove) {
+      required_object_it->second.erase(task_id);
+    }
+
+    if (required_object_it->second.empty()) {
+      required_object_it = required_objects.erase(required_object_it);
+    } else {
+      required_object_it++;
+    }
+
+    // The object is now local, so cancel any in-progress operations to make the
+    // object local.
+    HandleRemoteDependencyCanceled(object_id);
+   }
+}
+
 std::vector<TaskID> TaskDependencyManager::HandleObjectMissing(
     const ray::ObjectID &object_id) {
   // Remove the object from the table of locally available objects.

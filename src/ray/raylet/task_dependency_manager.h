@@ -108,6 +108,8 @@ class TaskDependencyManager {
   /// local.
   std::vector<TaskID> HandleObjectLocal(const ray::ObjectID &object_id);
 
+  void HandleTaskResubmitted(const ray::TaskID &task_id);
+
   /// Handle an object that is no longer locally available. If there are any
   /// subscribed tasks that depend on this object, then the object will be
   /// requested.
