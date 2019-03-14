@@ -1351,11 +1351,20 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
     return;
   }
 
-  // Add the task and its uncommitted lineage to the lineage cache.
-  if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
-    RAY_LOG(WARNING)
-        << "Task " << task_id
-        << " already in lineage cache. This is most likely due to reconstruction.";
+  if (!forwarded) {
+    // We started running the task, so the task is ready to write to GCS.
+    if (!lineage_cache_.AddReadyTask(task)) {
+      RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
+                       << " This is most likely due to reconstruction.";
+    }
+  } else {
+    // Add the task and its uncommitted lineage to the lineage cache.
+    if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
+      RAY_LOG(WARNING)
+          << "Task " << task_id
+          << " already in lineage cache. This is most likely due to reconstruction.";
+    }
+    lineage_cache_.RemoveWaitingTask(task_id);
   }
 
   if (spec.IsActorTask()) {
@@ -2229,14 +2238,14 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
           // If we were able to forward the task, remove the forwarded task from the
           // lineage cache since the receiving node is now responsible for writing
           // the task to the GCS.
-          if (!lineage_cache_.RemoveWaitingTask(task_id)) {
-            RAY_LOG(WARNING) << "Task " << task_id << " already removed from the lineage"
-                             << " cache. This is most likely due to reconstruction.";
-          } else {
-            // Mark as forwarded so that the task and its lineage is not
-            // re-forwarded in the future to the receiving node.
-            lineage_cache_.MarkTaskAsForwarded(task_id, node_id);
-          }
+          //if (!lineage_cache_.RemoveWaitingTask(task_id)) {
+          //  RAY_LOG(WARNING) << "Task " << task_id << " already removed from the lineage"
+          //                   << " cache. This is most likely due to reconstruction.";
+          //} else {
+          //  // Mark as forwarded so that the task and its lineage is not
+          //  // re-forwarded in the future to the receiving node.
+          //}
+          lineage_cache_.MarkTaskAsForwarded(task_id, node_id);
 
           // Notify the task dependency manager that we are no longer responsible
           // for executing this task.

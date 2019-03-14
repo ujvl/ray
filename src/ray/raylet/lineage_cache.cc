@@ -295,7 +295,9 @@ bool LineageCache::AddReadyTask(const Task &task) {
   }
 
   const TaskID task_id = task.GetTaskSpecification().TaskId();
-  RAY_LOG(DEBUG) << "Add ready task " << task_id << " version " << task.GetTaskExecutionSpec().Version() << " on " << client_id_;
+  RAY_LOG(DEBUG) << "Add ready task " << task_id
+    << " version " << task.GetTaskExecutionSpec().Version()
+    << " on " << client_id_;
 
   // Set the task to READY.
   if (lineage_.SetEntry(task, GcsStatus::UNCOMMITTED_READY, {client_id_})) {
