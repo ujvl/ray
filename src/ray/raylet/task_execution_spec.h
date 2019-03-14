@@ -79,6 +79,8 @@ class TaskExecutionSpecification {
   void IncrementNumExecutions();
   void IncrementNumResubmissions();
 
+  int Version() const;
+
   /// Get the task's last timestamp.
   ///
   /// \return The timestamp when this task was last received for scheduling.

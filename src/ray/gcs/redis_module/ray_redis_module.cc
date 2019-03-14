@@ -3,6 +3,7 @@
 
 #include "ray/common/common_protocol.h"
 #include "ray/gcs/format/gcs_generated.h"
+#include "ray/raylet/format/node_manager_generated.h"
 #include "ray/id.h"
 #include "ray/status.h"
 #include "ray/util/logging.h"
@@ -288,6 +289,61 @@ int TableAdd_DoPublish(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
 /// \return The current value at the key, or OK if there is no value.
 int TableAdd_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   TableAdd_DoWrite(ctx, argv, argc, /*mutated_key_str=*/nullptr);
+  return TableAdd_DoPublish(ctx, argv, argc);
+}
+
+int TaskTableAdd_DoWrite(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+                     RedisModuleString **mutated_key_str) {
+  if (argc != 5) {
+    return RedisModule_WrongArity(ctx);
+  }
+  RedisModuleString *prefix_str = argv[1];
+  RedisModuleString *id = argv[3];
+  RedisModuleString *data = argv[4];
+
+  RedisModuleKey *key;
+  REPLY_AND_RETURN_IF_NOT_OK(OpenPrefixedKey(
+      &key, ctx, prefix_str, id, REDISMODULE_READ | REDISMODULE_WRITE, mutated_key_str));
+  bool do_update = true;
+  int return_status = REDISMODULE_OK;
+
+  if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+    size_t value_len = 0;
+    char *value_buf = RedisModule_StringDMA(key, &value_len, REDISMODULE_READ);
+
+    size_t update_len = 0;
+    const char *update_buf = RedisModule_StringPtrLen(data, &update_len);
+
+    auto value = flatbuffers::GetRoot<ray::protocol::Task>(value_buf);
+    auto update = flatbuffers::GetRoot<ray::protocol::Task>(update_buf);
+    if (value->task_execution_spec() != nullptr && update->task_execution_spec() != nullptr) {
+      if (update->task_execution_spec()->version() >= value->task_execution_spec()->version()) {
+        if (update->task_execution_spec()->version() == value->task_execution_spec()->version()) {
+          // Do not update if our version is equal to the current.
+          do_update = false;
+        }
+      } else {
+        // Do not update if our version is less than the current.
+        do_update = false;
+        return_status = REDISMODULE_ERR;
+      }
+    }
+  }
+
+  if (do_update) {
+    RedisModule_StringSet(key, data);
+  }
+  if (return_status == REDISMODULE_ERR) {
+    static const char *reply = "ERR newer entry exists";
+    RedisModule_ReplyWithStringBuffer(ctx, reply, strlen(reply));
+  }
+  return return_status;
+}
+
+int TaskTableAdd_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+  if (TaskTableAdd_DoWrite(ctx, argv, argc, /*mutated_key_str=*/nullptr) != REDISMODULE_OK) {
+    return REDISMODULE_ERR;
+  }
   return TableAdd_DoPublish(ctx, argv, argc);
 }
 
@@ -751,6 +807,7 @@ int DebugString_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int 
 
 // Wrap all Redis commands with Redis' auto memory management.
 AUTO_MEMORY(TableAdd_RedisCommand);
+AUTO_MEMORY(TaskTableAdd_RedisCommand);
 AUTO_MEMORY(TableAppend_RedisCommand);
 AUTO_MEMORY(TableLookup_RedisCommand);
 AUTO_MEMORY(TableRequestNotifications_RedisCommand);
@@ -776,6 +833,11 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
   }
 
   if (RedisModule_CreateCommand(ctx, "ray.table_add", TableAdd_RedisCommand,
+                                "write pubsub", 0, 0, 0) == REDISMODULE_ERR) {
+    return REDISMODULE_ERR;
+  }
+
+  if (RedisModule_CreateCommand(ctx, "ray.task_table_add", TaskTableAdd_RedisCommand,
                                 "write pubsub", 0, 0, 0) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }

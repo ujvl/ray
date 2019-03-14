@@ -554,6 +554,26 @@ Status ActorCheckpointIdTable::AddCheckpointId(const JobID &job_id,
   return Lookup(job_id, actor_id, lookup_callback, failure_callback);
 }
 
+Status raylet::TaskTable::Add(const JobID &job_id, const TaskID &id, std::shared_ptr<ray::protocol::TaskT> &dataT,
+           const WriteCallback &done) {
+  LOG_OP("TaskTableAdd", id);
+  auto callback = [this, id, dataT, done](const std::string &data) {
+    START_HANDLER();
+    if (done != nullptr) {
+      (done)(client_, id, *dataT);
+    }
+    END_HANDLER("Add", id);
+
+    return true;
+  };
+  flatbuffers::FlatBufferBuilder fbb;
+  fbb.ForceDefaults(true);
+  fbb.Finish(ray::protocol::Task::Pack(fbb, dataT.get()));
+  return GetRedisContext(id)->RunAsync("RAY.TASK_TABLE_ADD", id,
+                                       fbb.GetBufferPointer(), fbb.GetSize(), prefix_,
+                                       pubsub_channel_, std::move(callback));
+}
+
 template class Log<ObjectID, ObjectTableData>;
 template class Log<TaskID, ray::protocol::Task>;
 template class Table<TaskID, ray::protocol::Task>;

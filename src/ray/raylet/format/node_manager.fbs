@@ -93,6 +93,7 @@ table TaskExecutionSpecification {
   num_executions: int;
   // The number of times this task has been resubmitted.
   num_resubmissions: int;
+  version: int;
 }
 
 table Task {

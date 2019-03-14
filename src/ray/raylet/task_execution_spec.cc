@@ -56,10 +56,15 @@ int TaskExecutionSpecification::NumResubmissions() const {
 
 void TaskExecutionSpecification::IncrementNumExecutions() {
   execution_spec_.num_executions += 1;
+  execution_spec_.version += 1;
 }
 
 void TaskExecutionSpecification::IncrementNumResubmissions() {
   execution_spec_.num_resubmissions += 1;
+}
+
+int TaskExecutionSpecification::Version() const {
+  return execution_spec_.version;
 }
 
 int64_t TaskExecutionSpecification::LastTimestamp() const {

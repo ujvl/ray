@@ -502,6 +502,9 @@ class TaskTable : public Table<TaskID, ray::protocol::Task> {
     prefix_ = TablePrefix::RAYLET_TASK;
   }
 
+  Status Add(const JobID &job_id, const TaskID &id, std::shared_ptr<ray::protocol::TaskT> &data,
+             const WriteCallback &done) override;
+
   TaskTable(const std::vector<std::shared_ptr<RedisContext>> &contexts,
             AsyncGcsClient *client, gcs::CommandType command_type)
       : TaskTable(contexts, client) {

@@ -256,6 +256,64 @@ TEST_F(TestGcsWithAsio, TestLogAppendAt) {
   TestLogAppendAt(job_id_, client_);
 }
 
+void TestTaskTableAdd(const JobID &job_id, std::shared_ptr<gcs::AsyncGcsClient> client) {
+  TaskID task_id = TaskID::from_random();
+  std::string task_specification = "123";
+  ray::protocol::TaskExecutionSpecificationT execution_spec;
+
+  auto task = std::make_shared<ray::protocol::TaskT>();
+  task->task_specification = task_specification;
+  task->task_execution_spec.reset(new ray::protocol::TaskExecutionSpecificationT());
+  task->task_execution_spec->dependencies = {"1"};
+
+  // Check that we added the correct task.
+  auto done_callback = [task_id](gcs::AsyncGcsClient *client, const UniqueID &id,
+                                    const ray::protocol::TaskT &d) {
+    ASSERT_EQ(id, task_id);
+    test->IncrementNumCallbacks();
+  };
+
+  // Will succeed.
+  RAY_CHECK_OK(client->raylet_task_table().Add(job_id, task_id, task,
+                                               /*done callback=*/done_callback));
+
+  // Append at index 0 will fail.
+  task->task_execution_spec->version++;
+  task->task_execution_spec->dependencies.push_back("2");
+  RAY_CHECK_OK(client->raylet_task_table().Add(job_id, task_id, task,
+                                               /*done callback=*/done_callback));
+
+  task->task_execution_spec->version++;
+  task->task_execution_spec->dependencies.push_back("3");
+  RAY_CHECK_OK(client->raylet_task_table().Add(job_id, task_id, task,
+                                               /*done callback=*/done_callback));
+  const auto dependencies = task->task_execution_spec->dependencies;
+  const auto version = task->task_execution_spec->version;
+
+  task->task_execution_spec->version--;
+  task->task_execution_spec->dependencies.push_back("4");
+  RAY_CHECK_OK(client->raylet_task_table().Add(job_id, task_id, task,
+                                               /*done callback=*/done_callback));
+
+  auto lookup_callback = [dependencies, version](gcs::AsyncGcsClient *client, const UniqueID &id,
+                                    const ray::protocol::TaskT &data) {
+    ASSERT_EQ(dependencies, data.task_execution_spec->dependencies);
+    ASSERT_EQ(version, data.task_execution_spec->version);
+    test->Stop();
+  };
+  RAY_CHECK_OK(
+      client->raylet_task_table().Lookup(job_id, task_id, lookup_callback, nullptr));
+  // Run the event loop. The loop will only stop if the Lookup callback is
+  // called (or an assertion failure).
+  test->Start();
+  ASSERT_EQ(test->NumCallbacks(), 4);
+}
+
+TEST_F(TestGcsWithAsio, TestTaskTableAdd) {
+  test = this;
+  TestTaskTableAdd(job_id_, client_);
+}
+
 void TestDeleteKeysFromLog(const JobID &job_id,
                            std::shared_ptr<gcs::AsyncGcsClient> client,
                            std::vector<std::shared_ptr<ObjectTableDataT>> &data_vector) {
