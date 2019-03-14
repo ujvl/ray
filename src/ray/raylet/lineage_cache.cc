@@ -64,9 +64,10 @@ const Task &LineageEntry::TaskData() const { return task_; }
 
 Task &LineageEntry::TaskDataMutable() { return task_; }
 
-void LineageEntry::UpdateTaskData(const Task &task) {
+void LineageEntry::UpdateTaskData(const Task &task, const std::unordered_set<ClientID> &forwarded_to) {
   task_.CopyTaskExecutionSpec(task);
   ComputeParentTaskIds();
+  forwarded_to_ = forwarded_to;
 }
 
 Lineage::Lineage() {}
@@ -125,12 +126,14 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
   std::unordered_set<TaskID> old_parents;
   if (it != entries_.end()) {
     if (it->second.SetStatus(status)) {
-      // The task's spec may have changed, so record its old dependencies.
-      old_parents = it->second.GetParentTaskIds();
-      // SetStatus() would check if the new status is greater,
-      // if it succeeds, go ahead to update the task field.
-      it->second.UpdateTaskData(task);
-      updated = true;
+      if (task.GetTaskExecutionSpec().Version() > it->second.TaskData().GetTaskExecutionSpec().Version()) {
+        // The task's spec version is greater, so record its old dependencies.
+        old_parents = it->second.GetParentTaskIds();
+        // SetStatus() would check if the new status is greater,
+        // if it succeeds, go ahead to update the task field.
+        it->second.UpdateTaskData(task, forwarded_to);
+        updated = true;
+      }
     }
   } else {
     LineageEntry new_entry(task, status, forwarded_to);
@@ -292,10 +295,10 @@ bool LineageCache::AddReadyTask(const Task &task) {
   }
 
   const TaskID task_id = task.GetTaskSpecification().TaskId();
-  RAY_LOG(DEBUG) << "Add ready task " << task_id << " on " << client_id_;
+  RAY_LOG(DEBUG) << "Add ready task " << task_id << " version " << task.GetTaskExecutionSpec().Version() << " on " << client_id_;
 
   // Set the task to READY.
-  if (lineage_.SetEntry(task, GcsStatus::UNCOMMITTED_READY)) {
+  if (lineage_.SetEntry(task, GcsStatus::UNCOMMITTED_READY, {client_id_})) {
     // Attempt to flush the task.
     FlushTask(task_id);
     return true;
@@ -411,7 +414,8 @@ void LineageCache::FlushTask(const TaskID &task_id) {
 
   gcs::raylet::TaskTable::WriteCallback task_callback = [this](
       ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-    HandleEntryCommitted(id);
+    int version = data.task_execution_spec->version;
+    HandleEntryCommitted(id, version);
   };
   auto task = lineage_.GetEntry(task_id);
   // TODO(swang): Make this better...
@@ -499,11 +503,16 @@ void LineageCache::EvictTask(const TaskID &task_id) {
   return;
 }
 
-void LineageCache::HandleEntryCommitted(const TaskID &task_id) {
-  RAY_LOG(DEBUG) << "Task committed: " << task_id;
+void LineageCache::HandleEntryCommitted(const TaskID &task_id, int version) {
+  RAY_LOG(DEBUG) << "Task committed: " << task_id << " version " << version;
   auto entry = lineage_.GetEntryMutable(task_id);
   if (!entry) {
     // The task has already been evicted due to a previous commit notification.
+    return;
+  }
+  // The committed task has a lower version than ours, so wait for more
+  // notifications.
+  if (version < entry->TaskData().GetTaskExecutionSpec().Version()) {
     return;
   }
   // Record the commit acknowledgement and attempt to evict the task.

@@ -106,7 +106,7 @@ class LineageEntry {
   /// Update the task data with a new task.
   ///
   /// \return Void.
-  void UpdateTaskData(const Task &task);
+  void UpdateTaskData(const Task &task, const std::unordered_set<ClientID> &forwarded_to);
 
  private:
   /// Compute cached parent task IDs. This task is dependent on values returned
@@ -282,7 +282,7 @@ class LineageCache {
   /// task if possible.
   ///
   /// \param task_id The ID of the task entry that was committed.
-  void HandleEntryCommitted(const TaskID &task_id);
+  void HandleEntryCommitted(const TaskID &task_id, int version);
 
   /// Get a task. The task must be in the lineage cache.
   ///

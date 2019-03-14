@@ -94,7 +94,8 @@ class LineageCacheTest : public ::testing::Test {
         lineage_cache_(ClientID::from_random(), mock_gcs_, mock_gcs_, max_lineage_size_, -1) {
     mock_gcs_.Subscribe([this](ray::gcs::AsyncGcsClient *client, const TaskID &task_id,
                                const ray::protocol::TaskT &data) {
-      lineage_cache_.HandleEntryCommitted(task_id);
+      int version = data.task_execution_spec->version;
+      lineage_cache_.HandleEntryCommitted(task_id, version);
     });
   }
 

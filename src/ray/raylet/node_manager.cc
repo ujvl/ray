@@ -105,7 +105,8 @@ ray::Status NodeManager::RegisterGcs() {
                                               const TaskID &task_id,
                                               const ray::protocol::TaskT &task_data) {
     if (!lineage_cache_.Disabled()) {
-      lineage_cache_.HandleEntryCommitted(task_id);
+      int version = task_data.task_execution_spec->version;
+      lineage_cache_.HandleEntryCommitted(task_id, version);
     }
   };
   RAY_RETURN_NOT_OK(gcs_client_->raylet_task_table().Subscribe(
