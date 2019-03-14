@@ -62,6 +62,7 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
                         int num_returns, int64_t timeout_milliseconds,
                         c_bool wait_local, const CTaskID &current_task_id,
                         c_bool suppress_reconstruction,
+                        c_bool request_once,
                         WaitResultPair *result)
         CRayStatus PushError(const CDriverID &job_id, const c_string &type,
                              const c_string &error_message, double timestamp)

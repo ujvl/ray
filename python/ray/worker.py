@@ -2345,7 +2345,8 @@ def put(value):
 def wait(object_ids,
          num_returns=1,
          timeout=None,
-         suppress_reconstruction=False):
+         suppress_reconstruction=False,
+         request_once=False):
     """Return a list of IDs that are ready and a list of IDs that are not.
 
     .. warning::
@@ -2434,7 +2435,7 @@ def wait(object_ids,
         timeout_milliseconds = int(timeout * 1000)
         ready_ids, remaining_ids = worker.raylet_client.wait(
             object_ids, num_returns, timeout_milliseconds, False,
-            worker.current_task_id, suppress_reconstruction)
+            worker.current_task_id, suppress_reconstruction, request_once)
         return ready_ids, remaining_ids
 
 

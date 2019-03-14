@@ -135,6 +135,14 @@ class TaskDependencyManager {
   /// all tasks that depend on the task must also be included in the set.
   void RemoveTasksAndRelatedObjects(const std::unordered_set<TaskID> &task_ids);
 
+  /// Unsubscribe from the given non-blocking object dependency. If the
+  /// objects were remote and are no longer required by any subscribed task,
+  /// then they will be canceled.
+  ///
+  /// \param task_id The ID of the task whose dependency to unsubscribe from.
+  /// \param object_id The ID of the dependency to unsubscribe from.
+  /// \return Whether the task was subscribed before.
+  bool UnsubscribeWaitDependency(const TaskID &task_id, const ObjectID &object_id);
   /// Returns debug string for class.
   ///
   /// \return string.
@@ -201,14 +209,6 @@ class TaskDependencyManager {
   /// \param dependent_task_id The task that no longer depends on the object.
   /// \param object_id The object that the task was dependent on.
   void RemoveTaskDependency(const TaskID &dependent_task_id, const ObjectID &object_id);
-  /// Unsubscribe from the given non-blocking object dependency. If the
-  /// objects were remote and are no longer required by any subscribed task,
-  /// then they will be canceled.
-  ///
-  /// \param task_id The ID of the task whose dependency to unsubscribe from.
-  /// \param object_id The ID of the dependency to unsubscribe from.
-  /// \return Whether the task was subscribed before.
-  bool UnsubscribeWaitDependency(const TaskID &task_id, const ObjectID &object_id);
 
   /// The object manager, used to fetch required objects from remote nodes.
   ObjectManagerInterface &object_manager_;

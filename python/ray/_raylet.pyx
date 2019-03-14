@@ -259,7 +259,8 @@ cdef class RayletClient:
 
     def wait(self, object_ids, int num_returns, int64_t timeout_milliseconds,
              c_bool wait_local, TaskID current_task_id,
-             c_bool suppress_reconstruction):
+             c_bool suppress_reconstruction,
+             c_bool request_once):
         cdef:
             WaitResultPair result
             c_vector[CObjectID] wait_ids
@@ -270,6 +271,7 @@ cdef class RayletClient:
                                                 wait_local,
                                                 current_task_id.data,
                                                 suppress_reconstruction,
+                                                request_once,
                                                 &result))
         return (VectorToObjectIDs(result.first),
                 VectorToObjectIDs(result.second))

@@ -298,12 +298,15 @@ ray::Status RayletClient::NotifyUnblocked(const TaskID &current_task_id) {
 ray::Status RayletClient::Wait(const std::vector<ObjectID> &object_ids, int num_returns,
                                int64_t timeout_milliseconds, bool wait_local,
                                const TaskID &current_task_id,
-                               bool suppress_reconstruction, WaitResultPair *result) {
+                               bool suppress_reconstruction,
+                               bool request_once,
+                               WaitResultPair *result) {
   // Write request.
   flatbuffers::FlatBufferBuilder fbb;
   auto message = ray::protocol::CreateWaitRequest(
       fbb, to_flatbuf(fbb, object_ids), num_returns, timeout_milliseconds, wait_local,
-      to_flatbuf(fbb, current_task_id), suppress_reconstruction);
+      to_flatbuf(fbb, current_task_id), suppress_reconstruction,
+      request_once);
   fbb.Finish(message);
   std::unique_ptr<uint8_t[]> reply;
   auto status = conn_->AtomicRequestReply(MessageType::WaitRequest,

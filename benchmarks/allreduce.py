@@ -354,7 +354,8 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # Check whether all of the output ObjectIDs are available. If not, then
         # we cannot restore from this checkpoint.
         out_oids = checkpoint["out_oids"]
-        _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0)
+        _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0,
+                           request_once=False)
         if lost:
             return False
 
@@ -392,7 +393,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         receiver = self.get_receiver()
         # The timeout here could be 0, but the ray.wait bug needs to be fixed
         # first.
-        ray.wait([receiver._ray_actor_cursor], num_returns=1, timeout=0.4)
+        ray.wait([receiver._ray_actor_cursor], num_returns=1, timeout=0)
         # NOTE: We cannot submit any tasks here, because they can potentially
         # end up with the same task ID as an actual task from the previous run
         # (e.g., a receive task). Instead, we just call `ray.wait` on the last

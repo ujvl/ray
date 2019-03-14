@@ -194,6 +194,7 @@ table WaitRequest {
   // this task is blocked.
   task_id: string;
   suppress_reconstruction: bool;
+  request_once: bool;
 }
 
 table WaitReply {
