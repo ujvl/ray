@@ -370,6 +370,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # Restore the final object IDs indicating that this all-reduce has
         # finished.
         self.finish()
+        self.reset()
         self.num_iterations += 1
         self._should_checkpoint = False
 
@@ -479,6 +480,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
         "object_manager_repeated_push_delay_ms": 1000,
+        "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": gcs_delay_ms,
     })
     plasma_store_memory_gb = 5

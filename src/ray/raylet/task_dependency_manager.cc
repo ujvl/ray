@@ -395,7 +395,7 @@ bool TaskDependencyManager::UnsubscribeWaitDependency(const TaskID &task_id,
   }
   task_entry.wait_dependencies.erase(wait_it);
 
-  if (task_entry.get_dependencies.find(object_id) != task_entry.get_dependencies.end()) {
+  if (task_entry.get_dependencies.find(object_id) == task_entry.get_dependencies.end()) {
     RemoveTaskDependency(task_id, object_id);
   }
 

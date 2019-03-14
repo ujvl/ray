@@ -1950,7 +1950,7 @@ void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
 
     // If this task was previously executed, or if this is the first time that
     // the actor is executing, then release this task's execution dependency.
-    if (task.GetTaskExecutionSpec().NumExecutions() > 0 ||
+    if (task.GetTaskExecutionSpec().NumExecutions() > 1 ||
         actor_entry->second.GetActorVersion() == 0) {
       const auto &execution_dependencies =
           task.GetTaskExecutionSpec().ExecutionDependencies();
