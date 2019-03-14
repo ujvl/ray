@@ -17,6 +17,7 @@ ray start --head \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
+    "lineage_stash_max_failures": 2,
     "num_heartbeats_timeout": 20,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000}'
