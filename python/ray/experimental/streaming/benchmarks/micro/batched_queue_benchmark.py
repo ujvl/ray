@@ -147,7 +147,7 @@ def benchmark_queue(rounds, latency_filename,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
                         num_stages, max_reads_per_second=float("inf")):
-    assert num_stages > 1
+    assert num_stages >= 1
 
     first_queue = BatchedQueue(
         "ID",           # Dummy channel id
