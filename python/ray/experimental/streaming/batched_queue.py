@@ -32,28 +32,6 @@ def plasma_get(object_id):
         pass
     return client.get(plasma_id)
 
-
-# TODO: doing the timer in Python land is a bit slow
-class FlushThread(threading.Thread):
-    """A thread that flushes periodically to plasma.
-
-    Attributes:
-         interval: The flush timeout per batch.
-         flush_fn: The flush function.
-    """
-
-    def __init__(self, interval, flush_fn):
-        threading.Thread.__init__(self)
-        self.interval = interval  # Interval is the max_batch_time
-        self.flush_fn = flush_fn
-        self.daemon = True
-
-    def run(self):
-        while True:
-            time.sleep(self.interval)  # Flushing period
-            self.flush_fn()
-
-
 class BatchedQueue(object):
     """A batched queue for actor to actor communication.
 
@@ -100,8 +78,9 @@ class BatchedQueue(object):
         self.dst_operator_id = dst_operator_id
         self.dst_instance_id = dst_instance_id
         self.channel_id = channel_id
-        self.max_size = max_size
+        self.max_size_batches = max_size
         self.max_batch_size = max_batch_size
+        self.max_size = max_size * max_batch_size
         self.max_batch_time = max_batch_time
         self.prefetch_depth = prefetch_depth
         self.background_flush = False # background_flush
@@ -127,17 +106,14 @@ class BatchedQueue(object):
         self.cached_remote_offset = 0
         self.task_queue = []
 
-        self.flush_lock = threading.RLock()
-        self.flush_thread = FlushThread(self.max_batch_time,
-                                        self._flush_writes)
-
         self.source_actor = None
         self.destination_actor = None
 
+        # Used to simulate backpressure in task-based execution
+        self.records_sent = 0
+
     def __getstate__(self):
         state = dict(self.__dict__)
-        del state["flush_lock"]
-        del state["flush_thread"]
         del state["write_buffer"]
         return state
 
@@ -158,41 +134,54 @@ class BatchedQueue(object):
         if self.task_based:  # Submit a new downstream task
             obj_id = self.destination_actor.apply.remote(
                                 [self.write_buffer], self.channel_id)
+            self.records_sent += len(self.write_buffer)
             self.task_queue.append(obj_id)
         else:  # Flush batch to plasma
-            with ray.profiling.profile("flush_batch"):
-                batch_id = self._batch_id(self.write_batch_offset)
-                ray.worker.global_worker.put_object(
+            # with ray.profiling.profile("flush_batch"):
+            batch_id = self._batch_id(self.write_batch_offset)
+            ray.worker.global_worker.put_object(
                     ray.ObjectID(batch_id), self.write_buffer)
-        logger.debug("[writer] Flush batch {} offset {} size {}".format(
-            self.write_batch_offset, self.write_item_offset,
-            len(self.write_buffer)))
+        # logger.debug("[writer] Flush batch {} offset {} size {}".format(
+        #              self.write_batch_offset, self.write_item_offset,
+        #              len(self.write_buffer)))
         self.write_buffer = []
         self.write_batch_offset += 1
         # Check for backpressure
-        with ray.profiling.profile("wait_for_reader"):
-            if self.task_based:
-                self._wait_for_task_reader()
-            else:
-                self._wait_for_reader()
+        # with ray.profiling.profile("wait_for_reader"):
+        if self.task_based:
+            self._wait_for_task_reader()
+        else:
+            self._wait_for_reader()
         self.last_flush_time = time.time()
 
+    # Currently, the 'queue' size in both task- and queue-based execution is
+    # estimated based on the number of unprocessed records
+    # However, backpressure in both execution modes could be simulated
+    # based on the number of pending batches. This approach should behave
+    # similarly when batches are small, e.g. in the order of 1K records but
+    # could result in overestimation of the 'queue' size in case batches are
+    # partially filled
     def _wait_for_task_reader(self):
         """Checks for backpressure by the downstream task-based reader."""
-        if len(self.task_queue) <= self.max_size:
+        if len(self.task_queue) <= self.max_size_batches:
             return
         # Check pending downstream tasks
-        _, self.task_queue = ray.wait(
+        finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
                 num_returns=len(self.task_queue),
                 timeout=0)
-        while len(self.task_queue) > self.max_size:
-            logger.debug("Waiting for ({},{}) to catch up".format(
-                                self.dst_operator_id, self.dst_instance_id))
-            _, self.task_queue = ray.wait(
+        for records in ray.get(finished_tasks):
+            self.records_sent -= records
+        #while len(self.task_queue) > self.max_size_batches:
+        while self.records_sent > self.max_size:
+            # logger.debug("Waiting for ({},{}) to catch up".format(
+            #              self.dst_operator_id, self.dst_instance_id))
+            finished_tasks, self.task_queue = ray.wait(
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
+            for records in ray.get(finished_tasks):
+                self.records_sent -= records
 
     def _wait_for_reader(self):
         """Checks for backpressure by the downstream reader."""
@@ -202,16 +191,17 @@ class BatchedQueue(object):
             return  # Hasn't reached max size
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
-            logger.debug("[writer] Waiting for reader to start...")
+            # logger.debug("[writer] Waiting for reader to start...")
             while remote_offset is None:
                 time.sleep(0.01)
                 remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
+        # logger.debug("Remote offset: {}".format(int(remote_offset)))
         remote_offset = int(remote_offset)
         if self.write_item_offset - remote_offset > self.max_size:
-            logger.debug(
-                "Waiting for ({},{}) to catch up {} to {} - {}".format(
-                    self.dst_operator_id, self.dst_instance_id,
-                    remote_offset, self.write_item_offset, self.max_size))
+            # logger.debug(
+            #     "Waiting for ({},{}) to catch up {} to {} - {}".format(
+            #         self.dst_operator_id, self.dst_instance_id,
+            #         remote_offset, self.write_item_offset, self.max_size))
             while self.write_item_offset - remote_offset > self.max_size:
                 time.sleep(0.01)
                 remote_offset = int(
@@ -225,9 +215,9 @@ class BatchedQueue(object):
             self.prefetch_batch_offset += 1
         self.read_buffer = plasma_get(self._batch_id(self.read_batch_offset))
         self.read_batch_offset += 1
-        logger.debug("[reader] Fetched batch {} offset {} size {}".format(
-            self.read_batch_offset, self.read_item_offset,
-            len(self.read_buffer)))
+        # logger.debug("[reader] Fetched batch {} offset {} size {}".format(
+        #              self.read_batch_offset, self.read_item_offset,
+        #              len(self.read_buffer)))
         self._ack_reads(self.read_item_offset + len(self.read_buffer))
 
     # Reader acks the key it reads so that writer knows reader's offset.
@@ -243,20 +233,17 @@ class BatchedQueue(object):
     def enable_writes(self):
         """Restores the state of the batched queue for writing."""
         self.write_buffer = []
-        self.flush_lock = threading.RLock()
-        self.flush_thread = FlushThread(self.max_batch_time,
-                                        self._flush_writes)
 
     # Registers source actor handle
     def register_source_actor(self, actor_handle):
         logger.debug("Registered source {} at channel {}".format(
-                                            actor_handle, self.channel_id))
+                     actor_handle, self.channel_id))
         self.source_actor = actor_handle
 
     # Registers destination actor handle
     def register_destination_actor(self, actor_handle):
         logger.debug("Registered destination {} at channel {}".format(
-                                            actor_handle, self.channel_id))
+                     actor_handle, self.channel_id))
         self.destination_actor = actor_handle
 
     def put_next(self, item):
@@ -265,16 +252,16 @@ class BatchedQueue(object):
         if not self.last_flush_time:
             self.last_flush_time = time.time()
         delay = time.time() - self.last_flush_time
-        if (len(self.write_buffer) > self.max_batch_size
-                or delay > self.max_batch_time):
+        if (len(self.write_buffer) >= self.max_batch_size
+            or delay >= self.max_batch_time):
             self._flush_writes()
 
     def read_next(self):
         # Actors never pull in task-based execution
         assert self.task_based is False
         if not self.read_buffer:
-            with ray.profiling.profile("read_batch"):
-                self._read_next_batch()
+            # with ray.profiling.profile("read_batch"):
+            self._read_next_batch()
             assert self.read_buffer
         self.read_item_offset += 1
         return self.read_buffer.pop(0)

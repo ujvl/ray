@@ -35,11 +35,11 @@ parser.add_argument("--record-type", default="int",
                     choices = ["int","string"],
                     help="the number of instances per operator")
 parser.add_argument("--latency-file", default="latencies",
-                    help="the file to log per-record latencies")
+                    help="a prefix for the latency log files")
 parser.add_argument("--throughput-file", default="throughputs",
-                    help="the file to log actors throughput")
-parser.add_argument("--dump-file", default=None,
-                    help="the file to dump chrome timeline")
+                    help="a prefix for the rate log files")
+parser.add_argument("--dump-file", default="",
+                    help="a prefix for the chrome dump file")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
 parser.add_argument("--record-size", default=10,
@@ -47,11 +47,11 @@ parser.add_argument("--record-size", default=10,
 parser.add_argument("--partitioning", default = "round_robin",
                     choices = ["shuffle","round_robin","broadcast"],
                     help="whether to shuffle or balance after each stage")
-parser.add_argument("--queue-size", default=10000,
+parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
-parser.add_argument("--flush-timeout", default=0.001,
+parser.add_argument("--flush-timeout", default=0.01,
                     help="the timeout to flush a batch")
 parser.add_argument("--prefetch-depth", default=10,
                     help="the number of batches to prefetch from plasma")
@@ -105,6 +105,9 @@ class Source(object):
             return (-1,record)
 
 # A custom sink used to collect per-record latencies
+# Latencies are kept in memory and they are retrieved
+# by the driver script after the job is finished
+# TODO (john): Custom sinks should inherit from a CustomSink class
 class Sink(object):
     def __init__(self):
         self.state = []
@@ -134,6 +137,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based):
+    assert num_stages >= 0, (num_stages)
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
@@ -173,7 +177,6 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     )
     write_log_files(all_parameters, latency_filename,
                     throughput_filename, dump_filename, dataflow)
-
     logger.info("Elapsed time: {}".format(time.time()-start))
 
 # Collects sampled latencies and throughputs from

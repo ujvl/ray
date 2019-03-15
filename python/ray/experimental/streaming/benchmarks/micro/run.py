@@ -15,19 +15,19 @@ _dump_filename = "results/api/dump"
 sample_period = 100
 record_type = "int"
 record_size = None
-max_queue_size = [10,100]                   # in number of batches
-max_batch_size = [100]                      # in number of records
-batch_timeout = [0.01,0.1]
+max_queue_size = [10,100,1000]      # in number of batches
+max_batch_size = [1000,10000]       # in number of records
+batch_timeout = [0.01,0.1,0.001]
 prefetch_depth = 10
 background_flush = False
-num_stages = [2,5,10,15,20]
+num_stages = [1,2,5,10,15,20]
 max_reads_per_second = float("inf")
 partitioning = "round_robin"                # "shuffle", "broadcast"
 dataflow_parallelism = [1]
 fan_in = [2,4,8,16]
 fan_out = [2,4,8,16]
 
-# Batched queue micro-benchmark
+# Task- and queue-based execution micro-benchmark
 times = "--rounds " + str(rounds) + " "
 period = "--sample-period " + str(sample_period) + " "
 lf = "--latency-file " + latency_filename + " "

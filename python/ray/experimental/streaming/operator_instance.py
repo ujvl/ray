@@ -251,14 +251,18 @@ class Map(OperatorInstance):
 
     # Task-based map execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self.output._push(self.map_fn(record))
+            records += len(batch)
+        return records
 
 
 # Flatmap actor
@@ -293,15 +297,18 @@ class FlatMap(OperatorInstance):
 
     # Task-based flatmap execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self.output._push_all(self.flatmap_fn(record))
-
+            records += len(batch)
+        return records
 
 # Filter actor
 @ray.remote
@@ -336,16 +343,19 @@ class Filter(OperatorInstance):
 
     # Task-based filter execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 if self.filter_fn(record):
                     self.output._push(record)
-
+            records += len(batch)
+        return records
 
 # Union actor
 @ray.remote
@@ -369,15 +379,18 @@ class Union(OperatorInstance):
 
     # Task-based union execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self.output._push(record)
-
+            records += len(batch)
+        return records
 
 # Inspect actor
 @ray.remote
@@ -411,15 +424,19 @@ class Inspect(OperatorInstance):
 
     # Task-based inspect execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self.inspect_fn(record)
                 self.output._push(record)
+            records += len(batch)
+        return records
 
 # Reduce actor
 @ray.remote
@@ -487,13 +504,15 @@ class Reduce(OperatorInstance):
 
     # Task-based reduce execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 key, rest = record
                 new_value = self.attribute_selector(rest)
                 # TODO (john): Is there a way to update state with
@@ -505,6 +524,8 @@ class Reduce(OperatorInstance):
                 except KeyError:  # Key does not exist in state
                     self.state.setdefault(key, new_value)
                 self.output._push((key, new_value))
+            records += len(batch)
+        return records
 
 
 @ray.remote
@@ -545,16 +566,19 @@ class KeyBy(OperatorInstance):
 
     # Task-based keyby execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.output._flush(close=True)
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 key = self.key_selector(record)
                 self.output._push((key,record))
-
+            records += len(batch)
+        return records
 
 # A custom source actor
 @ray.remote
@@ -599,14 +623,18 @@ class Sink(OperatorInstance):
 
     # Task-based sink execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         self.sink.close()
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self.sink.evict(record)
+            records += len(batch)
+        return records
 
     # Returns the sink's state
     def state(self):
@@ -651,20 +679,19 @@ class WriteTextFile(OperatorInstance):
                 return
             self._put_next(record)
 
-    # Returns the logged rates
-    def logs(self):
-        return (self.instance_id, [], [])
-
     # Task-based sink execution on a set of batches
     def apply(self, batches, channel_id):
+        records = 0
         for batch in batches:
             for record in batch:
                 if record is None:
                     if self.input._close_channel(channel_id):
                         signal.send(ActorExit(self.instance_id))
-                    return
+                        records += len(batch)
+                    return records
                 self._put_next(record)
-
+            records += len(batch)
+        return records
 
 # TODO (john): Time window actor (uses system time)
 @ray.remote
