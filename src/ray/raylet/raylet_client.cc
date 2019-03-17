@@ -223,7 +223,7 @@ RayletClient::RayletClient(const std::string &raylet_socket, const UniqueID &cli
 }
 
 ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_dependencies,
-                                     const ray::raylet::TaskSpecification &task_spec) {
+                                     const TaskSpecification &task_spec) {
   flatbuffers::FlatBufferBuilder fbb;
   auto execution_dependencies_message = to_flatbuf(fbb, execution_dependencies);
   auto message = ray::protocol::CreateSubmitTaskRequest(
@@ -232,16 +232,16 @@ ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_depe
   return conn_->WriteMessage(MessageType::SubmitTask, &fbb);
 }
 
-ray::Status RayletClient::GetTask(
-    std::unique_ptr<ray::raylet::TaskSpecification> *task_spec) {
+ray::Status RayletClient::GetTasks(std::vector<std::unique_ptr<TaskSpecification>>
+                                   *task_specs) {
   std::unique_ptr<uint8_t[]> reply;
   // Receive a task from the raylet. This will block until the local
   // scheduler gives this client a task.
   auto status =
-      conn_->AtomicRequestReply(MessageType::GetTask, MessageType::ExecuteTask, reply);
+      conn_->AtomicRequestReply(MessageType::GetTasks, MessageType::ExecuteTasks, reply);
   if (!status.ok()) return status;
   // Parse the flatbuffer object.
-  auto reply_message = flatbuffers::GetRoot<ray::protocol::GetTaskReply>(reply.get());
+  auto reply_message = flatbuffers::GetRoot<ray::protocol::GetTasksReply>(reply.get());
   // Set the resource IDs for this task.
   resource_ids_.clear();
   for (size_t i = 0; i < reply_message->fractional_resource_ids()->size(); ++i) {
@@ -265,9 +265,14 @@ ray::Status RayletClient::GetTask(
     }
   }
 
-  // Return the copy of the task spec and pass ownership to the caller.
-  task_spec->reset(new ray::raylet::TaskSpecification(
-      string_from_flatbuf(*reply_message->task_spec())));
+  // Return the copy of the task specs.
+  for (size_t i = 0; i < reply_message->task_specs()->size(); ++i) {
+    const auto &task_spec = reply_message->task_specs()->Get(i);
+    auto spec_ptr = std::unique_ptr<TaskSpecification>(
+        new TaskSpecification(string_from_flatbuf(*task_spec))
+    );
+    task_specs->push_back(std::move(spec_ptr));
+  }
   return ray::Status::OK();
 }
 

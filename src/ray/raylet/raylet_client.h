@@ -16,6 +16,7 @@ using ray::ObjectID;
 using ray::TaskID;
 using ray::UniqueID;
 using ray::ClientID;
+using ray::raylet::TaskSpecification;
 
 using MessageType = ray::protocol::MessageType;
 using ResourceMappingType =
@@ -79,15 +80,15 @@ class RayletClient {
   /// \param The task specification.
   /// \return ray::Status.
   ray::Status SubmitTask(const std::vector<ObjectID> &execution_dependencies,
-                         const ray::raylet::TaskSpecification &task_spec);
+                         const TaskSpecification &task_spec);
 
-  /// Get next task for this client. This will block until the scheduler assigns
-  /// a task to this worker. The caller takes ownership of the returned task
-  /// specification and must free it.
+  /// Get next tasks for this client. This will block until the scheduler assigns
+  /// task(s) to this worker. The caller takes ownership of the returned task
+  /// specifications and must free it.
   ///
-  /// \param task_spec The assigned task.
+  /// \param task_specs The assigned tasks.
   /// \return ray::Status.
-  ray::Status GetTask(std::unique_ptr<ray::raylet::TaskSpecification> *task_spec);
+  ray::Status GetTasks(std::vector<std::unique_ptr<TaskSpecification>> *task_specs);
 
   /// Tell the raylet that the client has finished executing a task.
   ///

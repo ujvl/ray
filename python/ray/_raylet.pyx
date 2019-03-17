@@ -236,13 +236,17 @@ cdef class RayletClient:
             task_spec.execution_dependencies.get()[0],
             task_spec.task_spec.get()[0]))
 
-    def get_task(self):
+    def get_tasks(self):
         cdef:
-            unique_ptr[CTaskSpecification] task_spec
+            c_vector[unique_ptr[CTaskSpecification]] task_specs
 
         with nogil:
-            check_status(self.client.get().GetTask(&task_spec))
-        return Task.make(task_spec)
+            check_status(self.client.get().GetTasks(&task_specs))
+
+        tasks = []
+        for i in range(task_specs.size()):
+            tasks.append(Task.make(task_specs[i]))
+        return tasks
 
     def task_done(self):
         check_status(self.client.get().TaskDone())
