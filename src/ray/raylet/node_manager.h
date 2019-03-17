@@ -180,11 +180,21 @@ class NodeManager {
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
   bool AssignTask(const Task &task);
+  /// Assign an actor task batch. The tasks are assumed to not be queued in local_queues_.
+  /// All tasks in the batch are assumed to have the same resource shape and actor ID.
+  ///
+  /// \param actor_id The actor ID of the actor (or nil) these tasks belong to.
+  /// \param resource_set The resource set common to the tasks in the batch.
+  /// \param task The task in question.
+  /// \return true, if the tasks were assigned to a worker, false otherwise.
+  bool AssignActorTaskBatch(const ActorID &actor_id,
+                            const ResourceSet &resource_set,
+                            const std::vector<Task> &task);
   /// Handle a worker finishing its assigned task.
   ///
   /// \param worker The worker that finished the task.
   /// \return Void.
-  void FinishAssignedTask(Worker &worker);
+  void FinishAssignedTasks(Worker &worker);
   /// Helper function to produce actor table data for a newly created actor.
   ///
   /// \param task The actor creation task that created the actor.
@@ -344,11 +354,11 @@ class NodeManager {
   void ProcessRegisterClientRequestMessage(
       const std::shared_ptr<LocalClientConnection> &client, const uint8_t *message_data);
 
-  /// Process client message of GetTask
+  /// Process client message of GetTasks
   ///
   /// \param client The client that sent the message.
   /// \return Void.
-  void ProcessGetTaskMessage(const std::shared_ptr<LocalClientConnection> &client);
+  void ProcessGetTasksMessage(const std::shared_ptr<LocalClientConnection> &client);
 
   /// Handle a client that has disconnected. This can be called multiple times
   /// on the same client because this is triggered both when a client

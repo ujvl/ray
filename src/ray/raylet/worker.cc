@@ -32,9 +32,25 @@ pid_t Worker::Pid() const { return pid_; }
 
 Language Worker::GetLanguage() const { return language_; }
 
-void Worker::AssignTaskId(const TaskID &task_id) { assigned_task_id_ = task_id; }
+// TODO(ujvl) remove this
+void Worker::AssignTaskId(const TaskID &task_id) {
+  assigned_task_ids_.clear();
+  assigned_task_ids_.push_back(task_id);
+}
 
-const TaskID &Worker::GetAssignedTaskId() const { return assigned_task_id_; }
+void Worker::AssignTaskIds(const std::vector<TaskID> &task_ids) {
+  assigned_task_ids_ = task_ids;
+}
+
+// TODO(ujvl) remove this
+const TaskID &Worker::GetAssignedTaskId() const {
+  RAY_CHECK(assigned_task_ids_.size() == 1);
+  return assigned_task_ids_[0];
+}
+
+const std::vector<TaskID> &Worker::GetAssignedTaskIds() const {
+  return assigned_task_ids_;
+}
 
 bool Worker::AddBlockedTaskId(const TaskID &task_id) {
   auto inserted = blocked_task_ids_.insert(task_id);
