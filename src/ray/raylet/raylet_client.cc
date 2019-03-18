@@ -232,8 +232,8 @@ ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_depe
   return conn_->WriteMessage(MessageType::SubmitTask, &fbb);
 }
 
-ray::Status RayletClient::GetTasks(std::vector<std::unique_ptr<TaskSpecification>>
-                                   *task_specs) {
+ray::Status RayletClient::GetTasks(
+    std::vector<std::unique_ptr<TaskSpecification>> *task_specs) {
   std::unique_ptr<uint8_t[]> reply;
   // Receive a task from the raylet. This will block until the local
   // scheduler gives this client a task.

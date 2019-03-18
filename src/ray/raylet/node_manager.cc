@@ -746,7 +746,8 @@ void NodeManager::ProcessRegisterClientRequestMessage(
     // real driver ID, which can associate all the tasks/actors for a given driver,
     // which is set to the worker ID.
     const JobID driver_task_id = from_flatbuf(*message->driver_id());
-    worker->AssignTaskId(driver_task_id);
+    RAY_LOG(INFO) << "Assigning " << driver_task_id;
+    worker->AssignTaskIds({driver_task_id});
     worker->AssignDriverId(from_flatbuf(*message->client_id()));
     worker_pool_.RegisterDriver(std::move(worker));
     local_queues_.AddDriverTaskId(driver_task_id);
@@ -802,7 +803,7 @@ void NodeManager::ProcessGetTasksMessage(
   std::shared_ptr<Worker> worker = worker_pool_.GetRegisteredWorker(client);
   RAY_CHECK(worker);
   // If the worker was assigned a task, mark it as finished.
-  if (!worker->GetAssignedTaskId().is_nil()) {
+  if (!worker->GetAssignedTaskIds().empty()) {
     FinishAssignedTasks(*worker);
   }
   // Return the worker to the idle pool.
@@ -866,14 +867,16 @@ void NodeManager::ProcessDisconnectClientMessage(
       HandleDisconnectedActor(actor_id, true, intentional_disconnect);
     }
 
-    const TaskID &task_id = worker->GetAssignedTaskId();
+    const auto &task_ids = worker->GetAssignedTaskIds();
     // If the worker was running a task, clean up the task and push an error to
     // the driver, unless the worker is already dead.
-    if (!task_id.is_nil() && !worker->IsDead()) {
+    if (!task_ids.empty() && !worker->IsDead()) {
       // If the worker was an actor, the task was already cleaned up in
       // `HandleDisconnectedActor`.
       if (actor_id.is_nil()) {
-        const Task &task = local_queues_.RemoveTask(task_id);
+        // Normal tasks aren't batched so there should only be 1.
+        RAY_CHECK(task_ids.size() == 1);
+        const Task &task = local_queues_.RemoveTask(task_ids.front());
         TreatTaskAsFailed(task, ErrorType::WORKER_DIED);
       }
 
@@ -883,8 +886,11 @@ void NodeManager::ProcessDisconnectClientMessage(
         // TODO(rkn): Define this constant somewhere else.
         std::string type = "worker_died";
         std::ostringstream error_message;
-        error_message << "A worker died or was killed while executing task " << task_id
-                      << ".";
+        error_message << "A worker died or was killed while executing task(s) ";
+        for (auto task_id : task_ids) {
+          error_message << task_id << ",";
+        }
+        error_message  << ".";
         RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
             job_id, type, error_message.str(), current_time_ms()));
       }
@@ -915,6 +921,7 @@ void NodeManager::ProcessDisconnectClientMessage(
     // The client is a driver.
     RAY_CHECK_OK(gcs_client_->driver_table().AppendDriverData(client->GetClientId(),
                                                               /*is_dead=*/true));
+    RAY_LOG(INFO) << "here";
     auto driver_id = worker->GetAssignedTaskId();
     RAY_CHECK(!driver_id.is_nil());
     local_queues_.RemoveDriverTaskId(driver_id);
@@ -1048,8 +1055,8 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
   RAY_CHECK(worker && worker->GetActorId() == actor_id);
 
   // Find the task that is running on this actor.
-  const auto task_id = worker->GetAssignedTaskId();
-  const Task &task = local_queues_.GetTaskOfState(task_id, TaskState::RUNNING);
+  const auto &task_ids = worker->GetAssignedTaskIds();
+  const Task &task = local_queues_.GetTaskOfState(task_ids.front(), TaskState::RUNNING);
   // Generate checkpoint id and data.
   ActorCheckpointID checkpoint_id = UniqueID::from_random();
   auto checkpoint_data =
@@ -1454,7 +1461,7 @@ void NodeManager::HandleTaskBlocked(const std::shared_ptr<LocalClientConnection>
     // blocked task matches the one assigned to the worker, then mark the
     // worker as blocked. This temporarily releases any resources that the
     // worker holds while it is blocked.
-    if (!worker->IsBlocked() && current_task_id == worker->GetAssignedTaskId()) {
+    if (!worker->IsBlocked() && worker->IsAssignedTaskId(current_task_id)) {
       const auto task = local_queues_.RemoveTask(current_task_id);
       local_queues_.QueueTasks({task}, TaskState::RUNNING);
       // Get the CPU resources required by the running task.
@@ -1505,7 +1512,7 @@ void NodeManager::HandleTaskUnblocked(
     // unblocked task matches the one assigned to the worker, then mark the
     // worker as unblocked. This returns the temporarily released resources to
     // the worker.
-    if (worker->IsBlocked() && current_task_id == worker->GetAssignedTaskId()) {
+    if (worker->IsBlocked() && worker->IsAssignedTaskId(current_task_id)) {
       // (See design_docs/task_states.rst for the state transition diagram.)
       const auto task = local_queues_.RemoveTask(current_task_id);
       local_queues_.QueueTasks({task}, TaskState::RUNNING);
@@ -1579,32 +1586,18 @@ void NodeManager::EnqueuePlaceableTask(const Task &task) {
 bool NodeManager::AssignTask(const Task &task) {
   const TaskSpecification &spec = task.GetTaskSpecification();
 
-  // If this is an actor task, check that the new task has the correct counter.
-  if (spec.IsActorTask()) {
-    // An actor task should only be ready to be assigned if it matches the
-    // expected task counter.
-    int64_t expected_task_counter =
-        GetExpectedTaskCounter(actor_registry_, spec.ActorId(), spec.ActorHandleId());
-    RAY_CHECK(spec.ActorCounter() == expected_task_counter)
-    << "Expected actor counter: " << expected_task_counter << ", task "
-    << spec.TaskId() << " has: " << spec.ActorCounter();
-  }
-
   // Try to get an idle worker that can execute this task.
   std::shared_ptr<Worker> worker = worker_pool_.PopWorker(spec);
   if (worker == nullptr) {
-    // There are no workers that can execute this task.
-    if (!spec.IsActorTask()) {
-      // There are no more non-actor workers available to execute this task.
-      // Start a new worker.
-      worker_pool_.StartWorkerProcess(spec.GetLanguage());
-      // Push an error message to the user if the worker pool tells us that it is
-      // getting too big.
-      const std::string warning_message = worker_pool_.WarningAboutSize();
-      if (warning_message != "") {
-        RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
-            JobID::nil(), "worker_pool_large", warning_message, current_time_ms()));
-      }
+    // There are no more non-actor workers available to execute this task.
+    // Start a new worker.
+    worker_pool_.StartWorkerProcess(spec.GetLanguage());
+    // Push an error message to the user if the worker pool tells us that it is
+    // getting too big.
+    const std::string warning_message = worker_pool_.WarningAboutSize();
+    if (warning_message != "") {
+      RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
+          JobID::nil(), "worker_pool_large", warning_message, current_time_ms()));
     }
     // We couldn't assign this task, as no worker available.
     return false;
@@ -1628,81 +1621,37 @@ bool NodeManager::AssignTask(const Task &task) {
     worker->SetTaskResourceIds(acquired_resources);
   }
 
-  auto tasks_flatbuf = std::vector<flatbuffers::Offset<flatbuffers::String>>{
+  const auto &task_flatbuf = std::vector<flatbuffers::Offset<flatbuffers::String>>{
     spec.ToFlatbuffer(fbb)
   };
   ResourceIdSet resource_id_set =
       worker->GetTaskResourceIds().Plus(worker->GetLifetimeResourceIds());
   auto resource_id_set_flatbuf = resource_id_set.ToFlatbuf(fbb);
-  auto message = protocol::CreateGetTasksReply(fbb,
-                                               fbb.CreateVector(tasks_flatbuf),
-                                               fbb.CreateVector(resource_id_set_flatbuf));
+  auto message = protocol::CreateGetTasksReply(
+      fbb,
+      fbb.CreateVector(task_flatbuf),
+      fbb.CreateVector(resource_id_set_flatbuf)
+  );
   fbb.Finish(message);
+
   // Give the callback a copy of the task so it can modify it.
-  Task assigned_task(task);
   worker->Connection()->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ExecuteTasks), fbb.GetSize(),
-      fbb.GetBufferPointer(), [&](ray::Status status) mutable {
+      fbb.GetBufferPointer(), [=](ray::Status status) mutable {
         if (status.ok()) {
-          auto spec = assigned_task.GetTaskSpecification();
           // We successfully assigned the task to the worker.
-          worker->AssignTaskId(spec.TaskId());
+          worker->AssignTaskIds({spec.TaskId()});
           worker->AssignDriverId(spec.DriverId());
-          // Actor tasks require extra accounting to track the actor's state.
-          if (spec.IsActorTask()) {
-            auto actor_entry = actor_registry_.find(spec.ActorId());
-            RAY_CHECK(actor_entry != actor_registry_.end());
-            // Process any new actor handles that were created since the
-            // previous task on this handle was executed. The first task
-            // submitted on a new actor handle will depend on the dummy object
-            // returned by the previous task, so the dependency will not be
-            // released until this first task is submitted.
-            for (auto &new_handle_id : spec.NewActorHandles()) {
-              // Get the execution dependency for the first task submitted on the new
-              // actor handle. Since the new actor handle was created after this task
-              // began and before this task finished, it must have the same execution
-              // dependency.
-              const auto &execution_dependencies =
-                  assigned_task.GetTaskExecutionSpec().ExecutionDependencies();
-              // TODO(swang): We expect this task to have exactly 1 execution dependency,
-              // the dummy object returned by the previous actor task. However, this
-              // leaks information about the TaskExecutionSpecification implementation.
-              RAY_CHECK(execution_dependencies.size() == 1);
-              const ObjectID &execution_dependency = execution_dependencies.front();
-              // Add the new handle and give it a reference to the finished task's
-              // execution dependency.
-              actor_entry->second.AddHandle(new_handle_id, execution_dependency);
-            }
-
-            // If the task was an actor task, then record this execution to
-            // guarantee consistency in the case of reconstruction.
-            auto execution_dependency = actor_entry->second.GetExecutionDependency();
-            // The execution dependency is initialized to the actor creation task's
-            // return value, and is subsequently updated to the assigned tasks'
-            // return values, so it should never be nil.
-            RAY_CHECK(!execution_dependency.is_nil());
-            // Update the task's execution dependencies to reflect the actual
-            // execution order, to support deterministic reconstruction.
-            // NOTE(swang): The update of an actor task's execution dependencies is
-            // performed asynchronously. This means that if this node manager dies,
-            // we may lose updates that are in flight to the task table. We only
-            // guarantee deterministic reconstruction ordering for tasks whose
-            // updates are reflected in the task table.
-            // (SetExecutionDependencies takes a non-const so copy task in a
-            //  on-const variable.)
-            assigned_task.SetExecutionDependencies({execution_dependency});
-          } else {
-            RAY_CHECK(spec.NewActorHandles().empty());
-          }
+          RAY_CHECK(spec.NewActorHandles().empty());
 
           // We started running the task, so the task is ready to write to GCS.
-          if (!lineage_cache_.AddReadyTask(assigned_task)) {
+          if (!lineage_cache_.AddReadyTask(task)) {
             RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
                              << " This is most likely due to reconstruction.";
           }
           // Mark the task as running.
           // (See design_docs/task_states.rst for the state transition diagram.)
-          local_queues_.QueueTasks({assigned_task}, TaskState::RUNNING);
+          local_queues_.QueueTasks({task}, TaskState::RUNNING);
           // Notify the task dependency manager that we no longer need this task's
           // object dependencies.
           RAY_CHECK(task_dependency_manager_.UnsubscribeDependencies(spec.TaskId()));
@@ -1714,23 +1663,21 @@ bool NodeManager::AssignTask(const Task &task) {
           // DispatchTasks() removed it from the ready queue. The task will be
           // assigned to a worker once one becomes available.
           // (See design_docs/task_states.rst for the state transition diagram.)
-          local_queues_.QueueTasks({assigned_task}, TaskState::READY);
-          DispatchTasks(MakeTasksWithResources({assigned_task}));
+          local_queues_.QueueTasks({task}, TaskState::READY);
+          DispatchTasks(MakeTasksWithResources({task}));
         }
       });
-
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
   return true;
 }
+
 bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
                                        const ResourceSet &resource_set,
                                        const std::vector<Task> &tasks) {
   RAY_CHECK(tasks.size() > 0);
   RAY_CHECK(!actor_id.is_nil());
-  // TODO(ujvl) possibly handle creation actor IDs in this func
-  // to remove duplicate Actor code in AssignTask
   const TaskSpecification &first_spec = tasks.front().GetTaskSpecification();
   // Check that the new tasks have the correct counters. Actor tasks should
   // only be ready to be assigned if they match the expected task counters.
@@ -1753,8 +1700,9 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
   }
 
   for (const auto &task : tasks) {
-     RAY_LOG(DEBUG) << "Assigning task batch" << task.GetTaskSpecification().TaskId()
-                    << " to worker with pid " << worker->Pid();
+     RAY_LOG(DEBUG) << "Assigning task " << task.GetTaskSpecification().TaskId()
+                    << " to worker with pid " << worker->Pid()
+                    << " in a batch of size " << tasks.size();
   }
 
   // Resource accounting: acquire resources only once for the assigned task batch.
@@ -1785,9 +1733,7 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
   std::vector<Task> assigned_task_batch(tasks);
   worker->Connection()->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ExecuteTasks),
-      fbb.GetSize(),
-      fbb.GetBufferPointer(),
-      [&](ray::Status status) mutable {
+      fbb.GetSize(), fbb.GetBufferPointer(), [=](ray::Status status) mutable {
         if (status.ok()) {
           // We successfully assigned the task batch to the worker.
           worker->AssignTaskIds(task_ids);
@@ -1803,9 +1749,9 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
           // return values, so it should never be nil.
           RAY_CHECK(!execution_dependency.is_nil());
 
-          for (auto &assigned_task : assigned_task_batch) {
-            const auto &spec = assigned_task.GetTaskSpecification();
-            const auto &execution_spec = assigned_task.GetTaskExecutionSpec();
+          for (auto &task: assigned_task_batch) {
+            const auto &spec = task.GetTaskSpecification();
+            const auto &execution_spec = task.GetTaskExecutionSpec();
             // Process any new actor handles that were created since the
             // previous task on this handle was executed. The first task
             // submitted on a new actor handle will depend on the dummy object
@@ -1835,15 +1781,15 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
             // updates are reflected in the task table.
             // (SetExecutionDependencies takes a non-const so copy task in a
             //  non-const variable.)
-            assigned_task.SetExecutionDependencies({execution_dependency});
+            task.SetExecutionDependencies({execution_dependency});
             execution_dependency = spec.ActorDummyObject();
           }
 
           // We started running the tasks, so the tasks are ready to write to GCS.
           // TODO(ujvl): we can potentially batch here too
-          for (const auto &assigned_task : assigned_task_batch) {
-            const auto &spec = assigned_task.GetTaskSpecification();
-            if (!lineage_cache_.AddReadyTask(assigned_task)) {
+          for (const auto &task : assigned_task_batch) {
+            const auto &spec = task.GetTaskSpecification();
+            if (!lineage_cache_.AddReadyTask(task)) {
               RAY_LOG(WARNING) << "Task " << spec.TaskId()
                                << " already in lineage cache."
                                << " This is most likely due to reconstruction.";
@@ -1877,28 +1823,22 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
 void NodeManager::FinishAssignedTasks(Worker &worker) {
   auto &task_ids = worker.GetAssignedTaskIds();
   auto &first_task = local_queues_.GetTaskOfState(task_ids.front(), TaskState::RUNNING);
+  // Only actor tasks are batched currently; all tasks belong to the same actor.
+  bool is_actor_batch = first_task.GetTaskSpecification().IsActorTask();
+  // Actor creation tasks are not batched with any other tasks.
+  bool is_actor_creation_task = first_task.GetTaskSpecification().IsActorCreationTask();
+  RAY_CHECK(is_actor_creation_task && task_ids.size() == 1 || !is_actor_creation_task);
+
   for (auto &task_id : task_ids) {
     RAY_LOG(DEBUG) << "Finished task " << task_id;
-
     // (See design_docs/task_states.rst for the state transition diagram.)
     auto task = local_queues_.RemoveTask(task_id);
-
     // If this was an actor or actor creation task, handle the actor's new state.
-    if (task.GetTaskSpecification().IsActorCreationTask() ||
-        task.GetTaskSpecification().IsActorTask()) {
+    if (is_actor_batch || is_actor_creation_task) {
       FinishAssignedActorTask(worker, task);
     }
-
     // Notify the task dependency manager that this task has finished execution.
     task_dependency_manager_.TaskCanceled(task_id);
-  }
-  // Unset the worker's assigned task.
-  worker.AssignTaskId(TaskID::nil());
-  // Unset the worker's assigned driver Id if this is not an actor. We can check this by
-  // looking at the first task since all tasks belong to an actor or none of them do.
-  if (!first_task.GetTaskSpecification().IsActorCreationTask() &&
-      !first_task.GetTaskSpecification().IsActorTask()) {
-    worker.AssignDriverId(DriverID::nil());
   }
   // Release task's resources. The worker's lifetime resources are still held.
   auto const &task_resources = worker.GetTaskResourceIds();
@@ -1906,6 +1846,13 @@ void NodeManager::FinishAssignedTasks(Worker &worker) {
   RAY_CHECK(cluster_resource_map_[gcs_client_->client_table().GetLocalClientId()].Release(
       task_resources.ToResourceSet()));
   worker.ResetTaskResourceIds();
+
+  // Unset the worker's assigned tasks.
+  worker.ClearTaskIds();
+  // Unset the worker's assigned driver Id if this is not an actor.
+  if (!is_actor_batch && !is_actor_creation_task) {
+    worker.AssignDriverId(DriverID::nil());
+  }
 }
 
 ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &task) {

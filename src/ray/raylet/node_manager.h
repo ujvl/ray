@@ -177,7 +177,7 @@ class NodeManager {
                   bool forwarded = false);
   /// Assign a task. The task is assumed to not be queued in local_queues_.
   ///
-  /// \param task The task in question.
+  /// \param task A non-actor or actor-creation task.
   /// \return true, if tasks was assigned to a worker, false otherwise.
   bool AssignTask(const Task &task);
   /// Assign an actor task batch. The tasks are assumed to not be queued in local_queues_.
@@ -185,11 +185,11 @@ class NodeManager {
   ///
   /// \param actor_id The actor ID of the actor (or nil) these tasks belong to.
   /// \param resource_set The resource set common to the tasks in the batch.
-  /// \param task The task in question.
+  /// \param tasks A batch of actor tasks.
   /// \return true, if the tasks were assigned to a worker, false otherwise.
   bool AssignActorTaskBatch(const ActorID &actor_id,
                             const ResourceSet &resource_set,
-                            const std::vector<Task> &task);
+                            const std::vector<Task> &tasks);
   /// Handle a worker finishing its assigned task.
   ///
   /// \param worker The worker that finished the task.

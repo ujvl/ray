@@ -29,8 +29,9 @@ class Worker {
   /// Return the worker's PID.
   pid_t Pid() const;
   Language GetLanguage() const;
-  void AssignTaskId(const TaskID &task_id);
+  void ClearTaskIds();
   void AssignTaskIds(const std::vector<TaskID> &task_id);
+  bool IsAssignedTaskId(const TaskID &task_id);
   const TaskID &GetAssignedTaskId() const;
   const std::vector<TaskID> &GetAssignedTaskIds() const;
   bool AddBlockedTaskId(const TaskID &task_id);

@@ -32,20 +32,27 @@ pid_t Worker::Pid() const { return pid_; }
 
 Language Worker::GetLanguage() const { return language_; }
 
-// TODO(ujvl) remove this
-void Worker::AssignTaskId(const TaskID &task_id) {
+void Worker::ClearTaskIds() {
   assigned_task_ids_.clear();
-  assigned_task_ids_.push_back(task_id);
 }
 
 void Worker::AssignTaskIds(const std::vector<TaskID> &task_ids) {
   assigned_task_ids_ = task_ids;
 }
 
+bool Worker::IsAssignedTaskId(const TaskID &task_id) {
+  for (const auto &cur_task_id : assigned_task_ids_) {
+    if (task_id == cur_task_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // TODO(ujvl) remove this
 const TaskID &Worker::GetAssignedTaskId() const {
   RAY_CHECK(assigned_task_ids_.size() == 1);
-  return assigned_task_ids_[0];
+  return assigned_task_ids_.front();
 }
 
 const std::vector<TaskID> &Worker::GetAssignedTaskIds() const {
