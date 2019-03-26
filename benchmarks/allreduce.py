@@ -114,6 +114,8 @@ class RingAllReduceWorker(object):
         self.reset(buffer_size=buffer_size)
         self.num_iterations = 0
         self.in_place = in_place
+        self.log = []
+        self.cache = []
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -240,6 +242,12 @@ class RingAllReduceWorker(object):
             # The sent or received chunk was fully reduced, so remember it.
             self.out_oids[index] = batch_id
             self.weight_partition.commit_partition(index)
+        else:
+            if batch_id is not None:
+                # Try to evict old messages to leave space for the allreduce output.
+                self.cache.append(ray.pyarrow.plasma.ObjectID(batch_id.binary()))
+                if len(self.cache) > self.num_workers:
+                    ray.worker.global_worker.plasma_client.delete([self.cache.pop(0)])
 
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(
@@ -250,15 +258,21 @@ class RingAllReduceWorker(object):
             # self_handle = self.workers[self.worker_index]
             # self_handle.finish.remote(*self.out_oids)
 
-            self.finish()
+            self.finish(self.out_oids, self.final_oid, self.done_oid)
+            if self.checkpoint_interval > 0:
+                self.log.append((self.out_oids, self.final_oid, self.done_oid))
+            else:
+                self.log = [(self.out_oids, self.final_oid, self.done_oid)]
 
-    def finish(self):
+
+    def finish(self, out_oids, final_oid, done_oid):
+        final_oid = None
         debug("FINISH", self.num_iterations, ": worker", self.worker_index)
         # Store the concatenated data in the final output ObjectID, if one was
         # provided.
-        if self.final_oid is not None:
+        if final_oid is not None:
             with ray.profiling.profile("concatenate_out"):
-                final_oid = ray.ObjectID(self.final_oid)
+                final_oid = ray.ObjectID(final_oid)
                 final_output = self.weight_partition.get_weights()
                 with ray.profiling.profile("store_out"):
                     ray.worker.global_worker.put_object(
@@ -266,29 +280,30 @@ class RingAllReduceWorker(object):
 
         # Store pointers to the shards to notify any callers that we've
         # received.
-        if self.done_oid is not None:
+        if done_oid is not None:
             with ray.profiling.profile("store_done"):
-                done_oid = ray.ObjectID(self.done_oid)
+                done_oid = ray.ObjectID(done_oid)
                 # Add this task's output so that callers can schedule tasks
                 # after this task.
-                ray.worker.global_worker.put_object(done_oid, self.out_oids)
+                ray.worker.global_worker.put_object(done_oid, out_oids)
 
 
 class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
                                         ray.actor.Checkpointable):
     def __init__(self, worker_index, num_workers, buffer_size, in_place,
-            checkpoint_dir):
+            checkpoint_dir, checkpoint_interval):
         super(CheckpointableRingAllReduceWorker, self).__init__(
             worker_index, num_workers, buffer_size, in_place)
 
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_interval = checkpoint_interval
         self.checkpoint_attrs = [
             "checkpoint_dir",
             "worker_index",
             "num_workers",
             "workers",
             "final_oid",
-            "out_oids",
+            "log",
             "done_oid",
             "num_iterations",
             "in_place",
@@ -296,14 +311,12 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         self._should_checkpoint = False
 
         # Create the checkpoint directory.
-        checkpoint_dir = os.path.join(
-            CHECKPOINT_DIR, ray.worker.global_worker.task_driver_id.hex())
         try:
             os.mkdir(CHECKPOINT_DIR)
         except FileExistsError:
             pass
         try:
-            os.mkdir(checkpoint_dir)
+            os.mkdir(self.checkpoint_dir)
         except FileExistsError:
             pass
 
@@ -333,28 +346,34 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             debug("pickle took", end - start, "checkpoint bytes", size, "checkpoint size", len(checkpoint))
 
             start = time.time()
-            checkpoint_dir = os.path.join(self.checkpoint_dir, checkpoint_id.hex())
-            os.mkdir(checkpoint_dir)
-            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint")
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_id.hex())
             with open(checkpoint_path, 'wb+') as f:
                 f.write(checkpoint)
             end = time.time()
             debug("write took", end - start)
 
-            # Reset our state once the checkpoint completes.
-            self.reset()
-            self.num_iterations += 1
+        with ray.profiling.profile("save_physical_checkpoint"):
+            debug("Length of log is", len(self.log), self.checkpoint_interval, len(self.log) == self.checkpoint_interval)
+            if len(self.log) == self.checkpoint_interval:
+                checkpoint = self.weight_partition.get_weights()
+                checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(ray.worker.global_worker.actor_id.hex(), self.num_iterations))
+                np.save(checkpoint_path, checkpoint)
+                self.log.clear()
+
+        # Reset our state once the checkpoint completes.
+        self.reset()
+        self.num_iterations += 1
 
     def restore(self, checkpoint_id):
         debug("Trying to restore", checkpoint_id)
         checkpoint_path = os.path.join(self.checkpoint_dir,
-                                       checkpoint_id.hex(), "checkpoint")
+                                       checkpoint_id.hex())
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
 
         # Check whether all of the output ObjectIDs are available. If not, then
         # we cannot restore from this checkpoint.
-        out_oids = checkpoint["out_oids"]
+        out_oids, final_oid, done_oid = checkpoint["log"][-1]
         _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0,
                            request_once=False)
         if lost:
@@ -365,14 +384,18 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             setattr(self, attr, checkpoint[attr])
         for handle in self.workers.values():
             handle.reset_handle_id()
-        outputs = ray.get(out_oids)
-        # Restore the all-reduced data.
-        for i, output in enumerate(outputs):
-            self.weight_partition.set_partition(i, output)
-            self.weight_partition.commit_partition(i)
-        # Restore the final object IDs indicating that this all-reduce has
-        # finished.
-        self.finish()
+
+        for out_oids, final_oid, done_oid in self.log:
+            with ray.profiling.profile("restore_log"):
+                debug("RESTORE", out_oids)
+                outputs = ray.get(out_oids)
+                # Restore the all-reduced data.
+                for i, output in enumerate(outputs):
+                    self.weight_partition.set_partition(i, output)
+                    self.weight_partition.commit_partition(i)
+                # Restore the final object IDs indicating that this all-reduce has
+                # finished.
+                self.finish(out_oids, final_oid, done_oid)
         self.reset()
         self.num_iterations += 1
         self._should_checkpoint = False
@@ -402,7 +425,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # task that we submitted.
 
 
-def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
+def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, checkpoint_interval):
     # Get the initial weights on each of the workers so we can check the
     # results.
     weight_ids = [
@@ -420,7 +443,10 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
     for i, worker in enumerate(workers):
         done_oid = np.random.bytes(20)
         done_oids.append(done_oid)
-        out_oid = np.random.bytes(20)
+        if checkpoint_interval > 0:
+            out_oid = None
+        else:
+            out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
         executed.append(
             worker.execute.remote(weight_ids[i], done_oid, out_oid))
@@ -471,7 +497,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed):
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms, latency_file):
+         gcs_delay_ms, latency_file, checkpoint_interval):
     if record_latency and latency_file is None:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
                 data_size * 4 // 1e6,
@@ -544,7 +570,8 @@ def main(redis_address, test_single_node, num_workers, data_size,
             resources=actor_resources,
             max_reconstructions=100)(CheckpointableRingAllReduceWorker)
         workers.append(
-            cls.remote(worker_index, num_workers, data_size, in_place, checkpoint_dir))
+            cls.remote(worker_index, num_workers, data_size, in_place,
+                       checkpoint_dir, checkpoint_interval))
 
     # Exchange actor handles.
     for i in range(num_workers):
@@ -586,6 +613,10 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     ]
             subprocess.Popen(command)
 
+    # Don't check the results if the checkpoint to disk interval is set.
+    if checkpoint_interval > 0:
+        check_results = False
+
     num_failed = 0
     latencies = []
     for i in range(num_iterations):
@@ -596,7 +627,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             fail_iteration = True
         elif (not test_local and i == num_iterations // 4 and test_failure):
             fail_iteration = True
-        latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed)
+        latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed, checkpoint_interval)
         latencies.append(latency)
         time.sleep(1)
 
@@ -667,9 +698,14 @@ if __name__ == "__main__":
         '--gcs-delay-ms',
         default=-1,
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
+    parser.add_argument(
+        '--checkpoint-interval',
+        default=-1,
+        type=int,
+        help='Number of iterations before checkpointing to disk')
     args = parser.parse_args()
 
     main(args.redis_address, args.test_single_node, args.num_workers,
          args.size, args.num_iterations, args.check_results, args.dump,
          args.test_failure, args.record_latency, args.gcs_delay_ms,
-         args.latency_file)
+         args.latency_file, args.checkpoint_interval)
