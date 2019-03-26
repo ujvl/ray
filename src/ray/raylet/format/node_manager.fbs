@@ -166,6 +166,7 @@ table ForwardTaskRequest {
   // The tasks in the uncommitted lineage of the forwarded task. This
   // should include task_id.
   uncommitted_tasks: [TaskLineageEntry];
+  push: bool;
 }
 
 table FetchOrReconstruct {

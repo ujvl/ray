@@ -1128,7 +1128,7 @@ void NodeManager::ProcessNodeManagerMessage(TcpClientConnection &node_manager_cl
     RAY_LOG(DEBUG) << "Received forwarded task " << task.GetTaskSpecification().TaskId()
                    << " on node " << gcs_client_->client_table().GetLocalClientId()
                    << " spillback=" << task.GetTaskExecutionSpec().NumForwards();
-    SubmitTask(task, uncommitted_lineage, /* forwarded = */ true);
+    SubmitTask(task, uncommitted_lineage, /* forwarded = */ true, /*push=*/message->push());
   } break;
   case protocol::MessageType::DisconnectClient: {
     // TODO(rkn): We need to do some cleanup here.
@@ -1185,7 +1185,7 @@ void NodeManager::ScheduleTasks(
   if (local_task_ids.size() > 0) {
     std::vector<Task> tasks = local_queues_.RemoveTasks(local_task_ids);
     for (const auto &t : tasks) {
-      EnqueuePlaceableTask(t);
+      EnqueuePlaceableTask(t, false);
     }
   }
 
@@ -1329,7 +1329,7 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 }
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
-                             bool forwarded) {
+                             bool forwarded, bool push) {
   const TaskSpecification &spec = task.GetTaskSpecification();
   const TaskExecutionSpecification &exec_spec = task.GetTaskExecutionSpec();
   const TaskID &task_id = spec.TaskId();
@@ -1401,7 +1401,7 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
           } else {
             // The task has not yet been executed. Queue the task for local
             // execution, bypassing placement.
-            EnqueuePlaceableTask(task);
+            EnqueuePlaceableTask(task, push);
           }
         } else {
           // The actor is remote. Forward the task to the node manager that owns
@@ -1458,7 +1458,7 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
     // if the task was forwarded.
     if (forwarded) {
       // Check for local dependencies and enqueue as waiting or ready for dispatch.
-      EnqueuePlaceableTask(task);
+      EnqueuePlaceableTask(task, push);
     } else {
       // (See design_docs/task_states.rst for the state transition diagram.)
       local_queues_.QueueTasks({task}, TaskState::PLACEABLE);
@@ -1582,18 +1582,14 @@ void NodeManager::HandleTaskUnblocked(
   local_queues_.RemoveBlockedTaskId(current_task_id);
 }
 
-void NodeManager::EnqueuePlaceableTask(const Task &task) {
+void NodeManager::EnqueuePlaceableTask(const Task &task, bool push) {
   // TODO(atumanov): add task lookup hashmap and change EnqueuePlaceableTask to take
   // a vector of TaskIDs. Trigger MoveTask internally.
   // Subscribe to the task's dependencies.
-  bool delay_pull = true;
-  if (task.GetTaskExecutionSpec().NumResubmissions() > 0) {
-    delay_pull = false;
-  }
   static_cast<void>(task_dependency_manager_.SubscribeDependencies(
       task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies(),
       /*ray_get=*/true,
-      /*delay_pull=*/delay_pull));
+      /*delay_pull=*/push));
   // Assuming execution dependencies are only set for actor tasks, it is safe
   // to request fast reconstruction. This is because actor tasks are only
   // allowed to execute on the node where the actor lives.
@@ -2212,7 +2208,7 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
   lineage_cache_entry_task.IncrementNumForwards();
 
   flatbuffers::FlatBufferBuilder fbb;
-  auto request = uncommitted_lineage.ToFlatbuffer(fbb, task_id);
+  auto request = uncommitted_lineage.ToFlatbuffer(fbb, task_id, push);
   fbb.Finish(request);
 
   RAY_LOG(DEBUG) << "Forwarding task " << task_id << " from "

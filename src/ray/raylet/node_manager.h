@@ -146,7 +146,7 @@ class NodeManager {
   ///
   /// \param task The task in question.
   /// \return Void.
-  void EnqueuePlaceableTask(const Task &task);
+  void EnqueuePlaceableTask(const Task &task, bool push);
   /// This will treat a task removed from the local queue as if it had been
   /// executed and failed. This is done by looping over the task return IDs and
   /// for each ID storing an object that represents a failure in the object
@@ -175,7 +175,8 @@ class NodeManager {
   /// node manager and false if it was submitted by a local worker.
   /// \return Void.
   void SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
-                  bool forwarded = false);
+                  bool forwarded = false,
+                  bool push = false);
   /// Assign a task. The task is assumed to not be queued in local_queues_.
   ///
   /// \param task The task in question.

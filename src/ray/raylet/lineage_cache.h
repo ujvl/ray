@@ -181,7 +181,7 @@ class Lineage {
   /// \return An offset to the serialized lineage. The serialization includes
   /// all task and object entries in the lineage.
   flatbuffers::Offset<protocol::ForwardTaskRequest> ToFlatbuffer(
-      flatbuffers::FlatBufferBuilder &fbb, const TaskID &entry_id) const;
+      flatbuffers::FlatBufferBuilder &fbb, const TaskID &entry_id, bool push) const;
 
   /// Return the IDs of tasks in the lineage that are dependent on the given
   /// task.
