@@ -36,6 +36,10 @@ void LineageEntry::MarkExplicitlyForwarded(const ClientID &node_id) {
   forwarded_to_.insert(node_id);
 }
 
+void LineageEntry::RemoveForwardedClient(const ClientID &node_id) {
+  size_t erased = forwarded_to_.erase(node_id);
+}
+
 const std::unordered_set<ClientID> &LineageEntry::ForwardedTo() const {
   return forwarded_to_;
 }
@@ -97,6 +101,12 @@ boost::optional<LineageEntry &> Lineage::GetEntryMutable(const TaskID &task_id) 
     return entry->second;
   } else {
     return boost::optional<LineageEntry &>();
+  }
+}
+
+void Lineage::HandleClientRemoved(const ClientID &client_id) {
+  for (auto &entry : entries_) {
+    entry.second.RemoveForwardedClient(client_id);
   }
 }
 
@@ -353,6 +363,10 @@ void LineageCache::MarkTaskAsForwarded(const TaskID &task_id, const ClientID &no
   if (entry) {
     entry->MarkExplicitlyForwarded(node_id);
   }
+}
+
+void LineageCache::HandleClientRemoved(const ClientID &client_id) {
+  lineage_.HandleClientRemoved(client_id);
 }
 
 /// A helper function to get the uncommitted lineage of a task.

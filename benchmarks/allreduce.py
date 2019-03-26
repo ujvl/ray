@@ -485,6 +485,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": gcs_delay_ms,
+        "lineage_stash_max_failures": 1,
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.

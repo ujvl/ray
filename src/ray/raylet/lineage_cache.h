@@ -72,6 +72,7 @@ class LineageEntry {
   ///
   /// \param node_id The ID of the remote node manager.
   void MarkExplicitlyForwarded(const ClientID &node_id);
+  void RemoveForwardedClient(const ClientID &node_id);
 
   const std::unordered_set<ClientID> &ForwardedTo() const;
 
@@ -161,6 +162,7 @@ class Lineage {
   /// \return Whether the entry was set.
   bool SetEntry(const Task &task, GcsStatus status);
   bool SetEntry(const Task &task, GcsStatus status, const std::unordered_set<ClientID> &forwarded_to);
+  void HandleClientRemoved(const ClientID &node_id);
 
   /// Delete and return an entry from the lineage.
   ///
@@ -226,6 +228,8 @@ class LineageCache {
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
                int64_t max_failures);
+
+  void HandleClientRemoved(const ClientID &node_id);
 
   /// Add a task that is waiting for execution and its uncommitted lineage.
   /// These entries will not be written to the GCS until set to ready.
