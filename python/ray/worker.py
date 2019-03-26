@@ -833,7 +833,8 @@ class Worker(object):
         """
         assert self.current_task_id.is_nil()
         assert self.task_context.task_index == 0
-        assert self.task_context.put_index == 1
+        if self.actor_id.is_nil():
+            assert self.task_context.put_index == 1
         assert self.task_context.arguments == []
         assert self.task_context.returns == []
         if task.actor_id().is_nil():
@@ -980,6 +981,7 @@ class Worker(object):
                     title = "ray_worker:{}()".format(function_name)
                     next_title = "ray_worker"
                 else:
+                    self.task_context.creation_task_id = task.task_id()
                     actor = self.actors[task.actor_creation_id()]
                     title = "ray_{}:{}()".format(actor.__class__.__name__,
                                                  function_name)
@@ -995,7 +997,6 @@ class Worker(object):
                 # Reset the state fields so the next task can run.
                 self.task_context.current_task_id = TaskID.nil()
                 self.task_context.task_index = 0
-                self.task_context.put_index = 1
                 self.task_context.arguments.clear()
                 self.task_context.returns.clear()
                 if self.actor_id.is_nil():
@@ -1003,6 +1004,7 @@ class Worker(object):
                     # actor. Because the following tasks should all have the
                     # same driver id.
                     self.task_driver_id = DriverID.nil()
+                    self.task_context.put_index = 1
 
         # Increase the task execution counter.
         self.function_actor_manager.increase_task_counter(
@@ -2333,8 +2335,11 @@ def put(value):
             # In LOCAL_MODE, ray.put is the identity operation.
             return value
 
+        task_id = worker.current_task_id
+        if not worker.actor_id.is_nil():
+            task_id = worker.task_context.creation_task_id
         object_id = ray._raylet.compute_put_id(
-            worker.current_task_id,
+            task_id,
             worker.task_context.put_index,
         )
         worker.put_object(object_id, value)

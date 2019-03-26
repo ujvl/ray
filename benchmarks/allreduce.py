@@ -176,17 +176,16 @@ class RingAllReduceWorker(object):
         # Resend any buffered data that was received before the allreduce
         # started.
         while self.receives:
-            index, aggregate, batch_buffer = self.receives.pop(0)
-            self.receive(index, aggregate, batch_buffer)
+            index, aggregate, batch_buffer, batch_id = self.receives.pop(0)
+            self.receive(index, aggregate, batch_buffer, batch_id)
 
-    def send(self, index, aggregate):
+    def send(self, index, aggregate, batch_id=None):
         debug("SEND", self.num_iterations, ": worker", self.worker_index,
               "batch", index, aggregate)
         batch_buffer = self.weight_partition.get_partition(index)
         receiver = self.get_receiver()
         # Check if the data was received by someone else. Then, we can forward
         # it.
-        batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
         if batch_id is None:
             # The data was not received by someone else, so we cannot forward
             # it. Put the object in the local object store first.
@@ -194,14 +193,16 @@ class RingAllReduceWorker(object):
         receiver.receive.remote(index, aggregate, batch_id)
         return batch_id
 
-    def receive(self, index, aggregate, batch_buffer):
+    def receive(self, index, aggregate, batch_buffer, batch_id=None):
+        if batch_id is None:
+            batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
         debug("RECEIVE", self.num_iterations, ": worker", self.worker_index,
               "batch", index, aggregate)
         if not self.execute_received:
             # If we haven't received the allreduce start message yet, buffer
             # the received data. It will be resent once we get the first
             # `execute` task.
-            self.receives.append((index, aggregate, batch_buffer))
+            self.receives.append((index, aggregate, batch_buffer, batch_id))
             return
 
         # Process the received data.
@@ -227,8 +228,7 @@ class RingAllReduceWorker(object):
             # Only forward the chunk to the next worker if they haven't already
             # seen it.
             if index != (self.worker_index + 2) % self.num_workers:
-                self.send(index, aggregate)
-            batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
+                self.send(index, aggregate, batch_id=batch_id)
 
         if DEBUG:
             debug(self.worker_index, index, self.aggregate_received,
@@ -326,6 +326,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             for attr in self.checkpoint_attrs:
                 checkpoint[attr] = getattr(self, attr)
             checkpoint["checkpoint_id"] = checkpoint_id
+            checkpoint["put_index"] = ray.worker.global_worker.task_context.put_index
             size = sys.getsizeof(checkpoint)
             checkpoint = pickle.dumps(checkpoint)
             end = time.time()
@@ -359,6 +360,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         if lost:
             return False
 
+        ray.worker.global_worker.task_context.put_index = checkpoint.pop("put_index")
         for attr in self.checkpoint_attrs:
             setattr(self, attr, checkpoint[attr])
         for handle in self.workers.values():
