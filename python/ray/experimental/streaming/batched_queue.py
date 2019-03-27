@@ -56,7 +56,7 @@ class BatchedQueue(object):
          write_buffer (list): The write buffer, i.e. an in-memory batch.
          last_flush_time (float): The time the last flushing to plasma took
          place.
-         cached_remote_offset (int): The number of the last read batch as
+         cached_remote_offset (int): The number of the last read record as
          recorded by the writer after the previous flush.
          flush_lock (RLock): A python lock used for flushing batches to plasma.
          flush_thread (Threading): The python thread used for flushing batches
@@ -80,7 +80,7 @@ class BatchedQueue(object):
         self.channel_id = channel_id
         self.max_size_batches = max_size
         self.max_batch_size = max_batch_size
-        self.max_size = max_size * max_batch_size
+        self.max_size = max_size * max_batch_size  # In number of records
         self.max_batch_time = max_batch_time
         self.prefetch_depth = prefetch_depth
         self.background_flush = False # background_flush
@@ -111,6 +111,7 @@ class BatchedQueue(object):
 
         # Used to simulate backpressure in task-based execution
         self.records_sent = 0
+        self.records_per_task = {}
 
     def __getstate__(self):
         state = dict(self.__dict__)
@@ -134,7 +135,9 @@ class BatchedQueue(object):
         if self.task_based:  # Submit a new downstream task
             obj_id = self.destination_actor.apply.remote(
                                 [self.write_buffer], self.channel_id)
-            self.records_sent += len(self.write_buffer)
+            num_records = len(self.write_buffer)
+            self.records_sent += num_records
+            self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
         else:  # Flush batch to plasma
             # with ray.profiling.profile("flush_batch"):
@@ -170,9 +173,8 @@ class BatchedQueue(object):
                 self.task_queue,
                 num_returns=len(self.task_queue),
                 timeout=0)
-        for records in ray.get(finished_tasks):
-            self.records_sent -= records
-        #while len(self.task_queue) > self.max_size_batches:
+        for task_id in finished_tasks:
+            self.records_sent -= self.records_per_task.pop(task_id)
         while self.records_sent > self.max_size:
             # logger.debug("Waiting for ({},{}) to catch up".format(
             #              self.dst_operator_id, self.dst_instance_id))
@@ -180,8 +182,8 @@ class BatchedQueue(object):
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
-            for records in ray.get(finished_tasks):
-                self.records_sent -= records
+            for task_id in finished_tasks:
+                self.records_sent -= self.records_per_task.pop(task_id)
 
     def _wait_for_reader(self):
         """Checks for backpressure by the downstream reader."""

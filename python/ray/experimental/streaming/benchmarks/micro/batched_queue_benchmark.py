@@ -194,6 +194,7 @@ def benchmark_queue(rounds, latency_filename,
                            max_reads_per_second,log_latency)
         nodes.append(node)
         previous_queue = out_queue
+
     # Wait for all of the node actors to come up.
     ray.get([node.ping.remote() for node in nodes])
 

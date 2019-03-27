@@ -10,7 +10,7 @@ import numpy as np
 import sys
 import uuid
 
-from statistics import mean, stdev
+from statistics import mean, median, stdev
 from statsmodels.distributions.empirical_distribution import ECDF
 
 
@@ -35,8 +35,8 @@ _index_of = {"rounds":0,"sample_period":1,
 # Default file prefixes
 latency_plot_file_prefix = "latency_plot_"
 throughput_plot_file_prefix = "throughput_plot_"
-latency_file_prefix = "latencies.txt"
-throughput_file_prefix = "throughputs.txt"
+latency_file_prefix = "latencies"
+throughput_file_prefix = "throughputs"
 dump_file_prefix = "dump_"
 
 # Parameters space
@@ -66,6 +66,7 @@ class LoadFromFile(argparse.Action):
 
 parser = argparse.ArgumentParser()
 
+# Plot-related parameteres
 parser.add_argument("--plot-type", default="latency",
                     choices = ["api_overhead", "latency",
                                "throughput", "latency_vs_throughput"],
@@ -77,7 +78,6 @@ parser.add_argument("--plot-repo", default="./",
                     help="the folder to store plots")
 parser.add_argument("--plot-file", default=latency_plot_file_prefix,
                     help="the plot file prefix")
-
 # File-related parameteres
 parser.add_argument("--file-repo", default="./",
                     help="the folder containing the log files")
@@ -107,9 +107,9 @@ parser.add_argument("--record-size", default=None,
 parser.add_argument("--sample-period", default=100,
                     help="every how many input records latency was measured.")
 # Queue-related parameters
-parser.add_argument("--queue-size", default=1000,
+parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
-parser.add_argument("--batch-size", default=100,
+parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
 parser.add_argument("--batch-timeout", default=0.01,
                     help="the timeout to flush a batch")
@@ -224,7 +224,7 @@ def collect_latencies(file_repo, latency_file_prefix,
         elif tag in queue_only_parameters:
             continue
         index = _index_of[tag]
-        print("Tag: {} Index: {}".format(tag,index))
+        # print("Tag: {} Index: {}".format(tag,index))
         all_parameters[index] = values
         if max_index < index:
             max_index = index
@@ -232,7 +232,7 @@ def collect_latencies(file_repo, latency_file_prefix,
     while max_index < size - 1:  # Resize
         all_parameters.pop()
         max_index += 1
-    print("Parameters: {}".format(all_parameters))
+    # print("Parameters: {}".format(all_parameters))
     # Get all parameter combinations
     all_combinations = list(product(*all_parameters))
     # Read all necessary latency files
@@ -244,7 +244,7 @@ def collect_latencies(file_repo, latency_file_prefix,
         filename = filename_prefix
         for parameter_value in parameters_combination:
             filename += "-" + str(parameter_value)
-        print("Filename: {}".format(filename))
+        print("Reading file: {}".format(filename))
         try:  # Read latencies
             with open(filename,"r") as lf:
                 for latency in lf:
@@ -272,7 +272,7 @@ def collect_rates(file_repo, throughput_file_prefix,
         elif tag in queue_only_parameters:
             continue
         index = _index_of[tag]
-        print("Tag: {} Index: {}".format(tag,index))
+        # print("Tag: {} Index: {}".format(tag,index))
         all_parameters[index] = values
         if max_index < index:
             max_index = index
@@ -280,7 +280,7 @@ def collect_rates(file_repo, throughput_file_prefix,
     while max_index < size - 1:  # Resize
         all_parameters.pop()
         max_index += 1
-    print("Parameters: {}".format(all_parameters))
+    # print("Parameters: {}".format(all_parameters))
     # Get all parameter combinations
     all_combinations = list(product(*all_parameters))
     # Read all necessary latency files
@@ -295,7 +295,7 @@ def collect_rates(file_repo, throughput_file_prefix,
         filename = filename_prefix
         for parameter_value in parameters_combination:
             filename += "-" + str(parameter_value)
-        print("Filename: {}".format(filename))
+        print("Reading file: {}".format(filename))
         try:  # Read rates
             with open(filename,"r") as lf:
                 for rate_log in lf:
@@ -311,14 +311,14 @@ def collect_rates(file_repo, throughput_file_prefix,
                 # Compute mean rates and variance for each actor
                 for actor_id, (in_rate, out_rate) in raw_rates.items():
                     if len(in_rate) > 1:
-                        in_mean = mean(in_rate)
-                        in_stdev = stdev(in_rate,in_mean)
+                        in_mean = median(in_rate)
+                        in_stdev = 0.0 #stdev(in_rate,in_mean)
                     else:
                         in_mean = float(in_rate[0])
                         in_stdev = 0.0
                     if len(out_rate) > 1:
-                        out_mean = mean(out_rate)
-                        out_stdev = stdev(out_rate,out_mean)
+                        out_mean = median(out_rate)
+                        out_stdev = 0.0 #stdev(out_rate,out_mean)
                     else:
                         out_mean = float(out_rate[0])
                         out_stdev = 0.0
@@ -330,30 +330,34 @@ def collect_rates(file_repo, throughput_file_prefix,
     return all_rates
 
 # Generates a line plot
-def generate_line_plot(latencies, x_label, y_label, labels,
-                       plot_repo, plot_file_name, cdf=False):
+def generate_line_plot(x_data, y_data, x_label, y_label, line_labels,
+                       plot_repo, plot_file_name,
+                       cdf=False, point_labels=None):
     # Create a figure instance
-    latencies_plot = plt.figure(1, figsize=(9, 6))
+    line_plot = plt.figure(1, figsize=(9, 6))
     # Create an axes instance
-    ax = latencies_plot.add_subplot(111)
+    ax = line_plot.add_subplot(111)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
     i = 0
-    for parameters, data in latencies:
-        label = labels[i]
-        i += 1
-        if cdf:
-            cdf = ECDF(data)
+    if cdf:  # Generate CDF
+        for data_x in x_data:
+            label = line_labels[i]
+            cdf = ECDF(data_x)
             ax.plot(cdf.x, cdf.y, label=label,
-                    linestyle=next(linestyles),
+                    linestyle=next(linestyles), alpha=0.5,
                     linewidth=1, c=next(colors).to_rgba(1))
-        else:
-            samples = [s for s in range(0,len(data))]
-            ax.plot(samples, data, label=label,
-                    linestyle=next(linestyles),
+            i += 1
+    else:  # Generate line plot
+        for data_x in x_data:
+            label = line_labels[i]
+            data_y = y_data[i]
+            ax.plot(data_x, data_y, label=label,
+                    linestyle=next(linestyles), alpha=0.5,
                     linewidth=1, c=next(colors).to_rgba(1))
+            i += 1
     ax.legend(fontsize=8)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
@@ -362,29 +366,33 @@ def generate_line_plot(latencies, x_label, y_label, labels,
     for item in ([ax.title, ax.xaxis.label,
         ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(16)
+    if point_labels is not None:  # Annotate data points
+        assert not cdf  # Cannot annotate CDF points
+        for data_x, data_y in zip(x_data, y_data):
+            for x,y,label in zip(data_x,data_y,point_labels):
+                ax.annotate(label,xy=(x,y))
     # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
-    latencies_plot.savefig(
+    line_plot.savefig(
         plot_repo + "/" + plot_file_name,
         bbox_inches='tight')
-    latencies_plot.clf()
+    line_plot.clf()
 
 # Generates a boxplot
-def generate_box_plot(latencies, x_label, y_label,
+def generate_box_plot(data, x_label, y_label,
                       labels, plot_repo, plot_file_name):
     # Create a figure instance
-    latencies_plot = plt.figure(1, figsize=(9, 6))
+    box_plot = plt.figure(1, figsize=(9, 6))
     # Create an axes instance
-    ax = latencies_plot.add_subplot(111)
+    ax = box_plot.add_subplot(111)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
-    data = [data for _, data in latencies]
     ax.boxplot(data)
     ax.set_yscale('log')
-    ax.set_xticklabels(labels, rotation=45)
+    ax.set_xticklabels(labels)
     # Set font sizes
     for item in ([ax.title, ax.xaxis.label, ax.yaxis.label]):
         item.set_fontsize(14)
@@ -393,71 +401,45 @@ def generate_box_plot(latencies, x_label, y_label,
     # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
-    latencies_plot.savefig(
+    box_plot.savefig(
         plot_repo + "/" + plot_file_name,
         bbox_inches='tight')
-    latencies_plot.clf()
+    box_plot.clf()
 
 # Generates a barchart
-def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
+def generate_barchart_plot(data, x_label, y_label, bar_metadata, exp_labels,
                            plot_repo, plot_file_name):
-    # TODO (john): Add actor ids at the bottom of each bar or add a legend
-    num_exps = len(rates)  # Total number of experiments included in the plot
-    ind = np.arange(num_exps)  # The x-axis locations for the groups
-    throughput_plot, ax = plt.subplots()
-    bar_width = 1
-    num_actors = len(rates[0][1])
-    num_actors_ignore = 0
-    # TODO (john): This assumes that all experiments
-    # have the same number of actors
-    for actor_id, _, _, _, _ in rates[0][1]:
-        actor_name = actor_id.split(",")[1].strip()
-        if actor_name == "flatmap" or actor_name == "sink":
-            num_actors_ignore += 1
-    # We need 'num_exps * num_actors * 2' bars in total
-    # because each actor has an input and an output rate
-    bars = []
-    actor_ids = []
+    # TODO (john): Add option to use actor ids at the bottom of each bar
+    num_exps = len(data)        # Total number of histograms in the plot
+    ind = np.arange(num_exps)   # The x-axis locations of the histograms
+    bar_width = 1               # The width of each bar in a histogram
+    bar_plot, ax = plt.subplots()
     pos = 0
-    step = 2 * bar_width
-    legend_set = False
-    for exp, all_rates in rates:
-        for actor_id, in_rate, in_var, out_rate, out_var in all_rates:
-            actor_name = actor_id.split(",")[1].strip()
-            if actor_name == "source" or "map_" in actor_name:
-                bar_1 = ax.bar(pos, in_rate, bar_width,
-                               color=next(colors).to_rgba(1),
-                               yerr=0)
-                actor_ids.append(actor_id)
-                bars.append(bar_1)
-                if not legend_set and actor_name == "source":
-                    label = "Source"
-                    bar_2 = ax.bar(pos + bar_width, out_rate,
-                                   label=label, color="rosybrown",
-                                   width=bar_width, yerr=0)
-                    bar_2[0].set_hatch("/")
-                    legend_set = True
-                elif actor_name == "source":
-                    bar_2 = ax.bar(pos + bar_width, out_rate,
-                                   color="rosybrown", yerr=0)
-                    bar_2[0].set_hatch("/")
-                else:
-                    bar_2 = ax.bar(pos + bar_width, out_rate,
-                                   color=next(colors).to_rgba(1),
-                                   width=bar_width, yerr=0)
-                actor_ids.append(actor_id)
-                bars.append(bar_2)
-                pos += step
-        pos += step
+    step = bar_width
+    for histogram, histogram_metadata in zip(data, bar_metadata):
+        for value, value_metadata in zip(histogram, histogram_metadata):
+            label = value_metadata[0] if value_metadata[3] else ""
+            color = value_metadata[1] if value_metadata[1] else next(
+                                                            colors).to_rgba(1)
+            bar = ax.bar(pos + bar_width,
+                           value,
+                           label=label,
+                           color=color,
+                           alpha=0.5,
+                           width=bar_width,
+                           yerr=0)
+            if value_metadata[2]:  # Hatch bar
+                bar[0].set_hatch("/")
+            pos += step
+        pos += step  # Separate histograms by one bar length
     ax.set_ylabel(x_label)
     ax.set_ylabel(y_label)
     ax.legend(fontsize=12)
     x_ticks_positions = []
     offset = 0
-    num_actors -= num_actors_ignore
-    group_width = bar_width * num_actors * 2
-    for i in range(num_exps):
-        point = (group_width - bar_width) / 2
+    for histogram in data:
+        group_width = len(histogram) * bar_width
+        point = group_width / 2 + bar_width / 2
         pos = offset + point
         offset += group_width + step
         x_ticks_positions.append(pos)
@@ -466,13 +448,13 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
     short_xticks = ["Exp"+str(i) for i in range(len(exp_labels))]
     ax.set_xticklabels(tuple(short_xticks))
     # Move actual x-axis tick labels outside the plot
-    new_labels = ""
+    labels = ""
     i = 0
     for label in exp_labels:
-        new_labels += "Exp" + str(i) + ": " + label + "\n"
+        labels += "Exp" + str(i) + " - " + label + "\n"
         i += 1
-    ax.text(1.05, 0.95, new_labels, transform=ax.transAxes, fontsize=10,
-        verticalalignment='top')
+    ax.text(1.05, 0.95, labels, transform=ax.transAxes, fontsize=10,
+                                verticalalignment='top')
     # Set font size for x-axis tick labels
     for item in ax.get_xticklabels():
         item.set_fontsize(10)
@@ -480,14 +462,30 @@ def generate_barchart_plot(rates, x_label, y_label, bar_labels, exp_labels,
     # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
-    throughput_plot.savefig(
+    bar_plot.savefig(
         plot_repo + "/" + plot_file_name,
         bbox_inches='tight')
-    throughput_plot.clf()
+    bar_plot.clf()
 
-# TODO (john): Latency vs throughput plot
-def latency_vs_throughput():
-    pass
+# Generates a latency vs throughput plot for a single varying parameter
+def latency_vs_throughput(latencies, rates, plot_repo, varying_parameters,
+                          plot_file_prefix, plot_type="line"):
+    assert len(latencies) > 0
+    assert len(rates) > 0
+    # TODO (john): Support multiple varying parameters
+    assert len(varying_parameters) == 1
+    if plot_type == "line":
+        labels = []
+        tag, values = varying_parameters[0]
+        labels.append(str(tag) + ": " + str(values))
+        x_axis_label = "Latency [ms]"
+        y_axis_label = "Throughput [records/s]"
+        plot_filename = plot_file_prefix + "-latency-vs-throughput.png"
+        generate_line_plot([latencies], [rates], x_axis_label, y_axis_label,
+                           labels, plot_repo, plot_filename,
+                           plot_type=="cdf", values)
+    else:
+        sys.exit("Unrecognized or unsupported plot type.")
 
 # Generates boxplots showing the overhead of
 # using the Streaming API over batch queues
@@ -510,13 +508,15 @@ def api_overhead(latencies, plot_repo, varying_parameters,
         x_axis_label = ""
         y_axis_label = "End-to-end record latency [s]"
         plot_filename = plot_file_prefix + "-api-overhead.png"
-        generate_box_plot(latencies, x_axis_label, y_axis_label,
+        data = [data for _, data in latencies]
+        generate_box_plot(data, x_axis_label, y_axis_label,
                           labels, plot_repo, plot_filename)
     elif plot_type == "cdf":
         x_axis_label = "End-to-end record latency [s]"
         y_axis_label = "Percentage [%]"
         plot_filename = plot_file_prefix + "-api-overhead-cdf.png"
-        generate_line_plot(latencies, x_axis_label, y_axis_label,
+        x_data = [data for _, data in latencies]
+        generate_line_plot(x_data, [], x_axis_label, y_axis_label,
                           labels, plot_repo, plot_filename, True)
     else:
         sys.exit("Unrecognized or unsupported plot type.")
@@ -530,18 +530,43 @@ def actor_rates(rates, plot_repo, varying_parameters,
         exp_labels = _generate_labels(tag, values)
     except TypeError:  # All parameteres are fixed
         exp_labels = []
-    # TODO (john): If only one exp, then use legend instead of bar labels
-    # Use actor id as a label for each bar
-    bar_labels = []
-    for _, actor_rates in rates:
-        for actor_id,_,_,_,_  in actor_rates:
-            bar_labels.append(actor_id)
     if plot_type == "barchart":
         x_axis_label = ""
-        y_axis_label = "Actor rate [records/s]"
+        y_axis_label = "Actor processing rate [records/s]"
         plot_filename = plot_file_prefix + "-actor-rates.png"
-        generate_barchart_plot(rates, x_axis_label, y_axis_label,
-                               bar_labels, exp_labels, plot_repo,
+        # Prepare data for barchart
+        data = []
+        bar_metadata = []
+        i = 0
+        label_is_set = False  # Add one plot label to indicate the source bars
+        for _, actor_rates in rates:
+            data.append([])
+            bar_metadata.append([])
+            for actor_id, in_rate, _, out_rate, _ in actor_rates:
+                hatch = False
+                add_label = False
+                color = ""
+                actor_name = actor_id.split(",")[1].strip()
+                if actor_name == "flatmap" or actor_name == "sink":
+                    continue
+                elif actor_name == "source":
+                    data[i].append(out_rate)
+                    hatch = True
+                    color = "rosybrown"
+                    if not label_is_set:
+                        add_label = True
+                        label_is_set = True
+                else:
+                    assert "map_" in actor_name
+                    # 'in_rate' must be equal to 'out_rate' for identity maps
+                    # We use 'out_rate' because the current logging for task-
+                    # based execution does not log 'in_rate'. In queue-based
+                    # execution both 'in_rate' and 'out_rate' are logged
+                    data[i].append(out_rate)
+                bar_metadata[i].append((actor_name,color,hatch,add_label))
+            i += 1
+        generate_barchart_plot(data, x_axis_label, y_axis_label,
+                               bar_metadata, exp_labels, plot_repo,
                                plot_filename)
     else:
         sys.exit("Unrecognized or unsupported plot type.")
@@ -552,6 +577,7 @@ def latency_vs_queue_size(latencies, plot_repo, parameter_values,
                           plot_file_prefix, plot_type):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Queue size")
+    samples = []
     if plot_type == "line":
         x_axis_label = "Samples"
         y_axis_label = "End-to-end record latency [s]"
@@ -562,7 +588,12 @@ def latency_vs_queue_size(latencies, plot_repo, parameter_values,
         plot_filename = plot_file_prefix + "-queue-sizes-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
                        plot_type=="cdf")
 
@@ -582,7 +613,12 @@ def latency_vs_batch_size(latencies, plot_repo, parameter_values,
         plot_filename = plot_file_prefix + "-batch-sizes-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
                        plot_type=="cdf")
 
@@ -602,7 +638,12 @@ def latency_vs_timeout(latencies, plot_repo, parameter_values,
         plot_filename = plot_file_prefix + "-timeouts-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
                        plot_type=="cdf")
 
@@ -622,7 +663,12 @@ def latency_task_vs_queue(latencies, plot_repo, parameter_values,
         plot_filename = plot_file_prefix + "-task-vs-queue-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
                        plot_type=="cdf")
 
@@ -642,7 +688,12 @@ def latency_vs_chain_length(latencies, plot_repo, parameter_values,
         plot_filename = plot_file_prefix + "-chain-length-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                            labels, plot_repo, plot_filename,
                            plot_type=="cdf")
 
@@ -664,7 +715,12 @@ def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
         plot_filename = plot_file_prefix + "-" + combined_names + "-cdf.png"
     else:
         sys.exit("Unrecognized or unsupported plot type.")
-    generate_line_plot(latencies, x_axis_label, y_axis_label,
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                            labels, plot_repo, plot_filename,
                            plot_type=="cdf")
 
@@ -735,10 +791,39 @@ if __name__ == "__main__":
     plot_id = str(_generate_uuid())
     plot_file_prefix += plot_id
 
+    # Sort experiment arguments on the order they appear in the log file name
+    # This ensures that labels in plots are aligned with data read with
+    # collect_latencies() and collect_rates() methods
+    exp_args = sorted(exp_args, key=lambda element: _index_of[element[0]])
     # All parameters for which a collection of values is given
     varying_parameters = _varying_parameters(exp_args)
 
-    if plot_type == "throughput":  # It is a throughput plot
+    # It is a latency vs throughput plot
+    if plot_type == "latency_vs_throughput":
+        if cdf:
+            sys.exit("CDF are not supported for throughput plots.")
+        if len(varying_parameters) == 0:
+            sys.exit("No varying parameter found (at least one is needed).")
+        plot_type = "line"
+        # Collect latencies from log files
+        latencies = collect_latencies(file_repo, latency_file_prefix,
+                                      exp_args)
+        median_latencies = []
+        for tag, exp_latencies in latencies:
+            median_latencies.append(median(exp_latencies))
+        # Collect source rates from log files
+        rates = collect_rates(file_repo, throughput_file_prefix, exp_args)
+        median_rates = []
+        source_rates = []
+        for tag, actor_rates in rates:
+            for _, in_rate, _, out_rate, _  in actor_rates:
+                if in_rate == 0:  # It should be the source
+                    source_rates.append(out_rate)
+            median_rates.append(median(source_rates))
+        latency_vs_throughput(median_latencies, median_rates,
+                              plot_repo, varying_parameters, plot_file_prefix,
+                              plot_type)
+    elif plot_type == "throughput":  # It is a throughput plot
         if cdf:
             sys.exit("CDF are not supported for throughput plots.")
         plot_type = "barchart"
@@ -800,13 +885,15 @@ if __name__ == "__main__":
                                             plot_file_prefix, plot_type)
                 else:
                     sys.exit("Unrecognized or unsupported option.")
-        else:
-            # All parameters are fixed
+        else:  # All parameters are fixed
             x_label = "Samples"
             y_label = "End-to-end record latency [s]"
             labels = [""]
-            generate_line_plot(latencies, x_label, y_label, labels,
-                               plot_repo, plot_file_prefix,
-                               plot_type==cdf)
+            x_data = [data for _, data in latencies] if cdf else [
+                                      [s for s in range(len(data[1]))]
+                                      for data in latencies]
+            y_data = [] if cdf else [data for _, data in latencies]
+            generate_line_plot(x_data, y_data, x_label, y_label, labels,
+                               plot_repo, plot_file_prefix, cdf)
     # Store plot metadata
     write_plot_metadata(plot_repo, plot_file_prefix, plot_id, exp_args)
