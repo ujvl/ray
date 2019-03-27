@@ -148,11 +148,9 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     stream = env.source(Source(rounds, record_type,
                                 record_size, sample_period),
                                 name="source")
+    if partitioning == "shuffle":
+        stream = stream.shuffle()
     for stage in range(num_stages):
-        if partitioning == "shuffle":
-            stream = stream.shuffle()
-        elif partitioning == "broadcast":
-            stream = stream.broadcast()
         if stage < num_stages - 1:
             stream = stream.map(lambda record: record, name="map_"+str(stage))
         else: # Last stage actors should compute the per-record latencies
