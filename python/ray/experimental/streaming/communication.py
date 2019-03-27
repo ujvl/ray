@@ -370,6 +370,11 @@ class DataOutput(object):
             #     channel))
             channel.queue.put_next(record)
             index += 1
+        # if self.round_robin_channels:
+        #     flushed = self.round_robin_channels[self.channel_index].queue.put_next(record)
+        #     if flushed:
+        #         self.channel_index += 1
+        #         self.channel_index %= len(self.round_robin_channels)
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
             key, _ = record

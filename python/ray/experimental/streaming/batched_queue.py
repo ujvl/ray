@@ -257,6 +257,8 @@ class BatchedQueue(object):
         if (len(self.write_buffer) >= self.max_batch_size
             or delay >= self.max_batch_time):
             self._flush_writes()
+            return True
+        return False
 
     def read_next(self):
         # Actors never pull in task-based execution
