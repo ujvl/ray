@@ -210,6 +210,7 @@ class DataOutput(object):
     """
 
     def __init__(self, channels, partitioning_schemes):
+        self.channel_index = 0
         self.key_selector = None
         self.partitioning_schemes = partitioning_schemes
 
