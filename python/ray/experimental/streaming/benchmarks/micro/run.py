@@ -9,8 +9,8 @@ import ray
 
 # Parameters
 rounds = 5
-latency_filename = "results/api/latencies"
-throughput_filename = "results/api/throughputs"
+latency_filename = "results/latencies"
+throughput_filename = "results/throughputs"
 _dump_filename = "results/api/dump"
 sample_period = 100
 record_type = "int"
@@ -46,14 +46,16 @@ for num in num_stages:
                 run = cmd_queues + arg1 + arg2 + arg3 + arg4
                 code = subprocess.call(run, shell=True,
                                     stdout=subprocess.PIPE)
-                # Queue-based execution
-                run = cmd + arg1 + arg2 + arg3 + arg4
-                code = subprocess.call(run, shell=True,
-                                    stdout=subprocess.PIPE)
-                # Task-based execution
-                run += "--task-based"
-                code = subprocess.call(run, shell=True,
-                                    stdout=subprocess.PIPE)
+                for lop in dataflow_parallelism:
+                    arg5 = "--dataflow-parallelism " + str(lop) + " "
+                    # Queue-based execution
+                    run = cmd + arg1 + arg2 + arg3 + arg4 + arg5
+                    code = subprocess.call(run, shell=True,
+                                        stdout=subprocess.PIPE)
+                    # Task-based execution
+                    run += "--task-based"
+                    code = subprocess.call(run, shell=True,
+                                        stdout=subprocess.PIPE)
 
 # # Parallelism benchmark
 # times = "--rounds " + str(rounds) + " "
