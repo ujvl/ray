@@ -218,8 +218,8 @@ class DataOutput(object):
         self.forward_channels = []  # Forward and broadcast channels
         slots = sum(1 for scheme in self.partitioning_schemes.values()
                     if scheme.strategy in round_robin_strategies)
-        self.round_robin_channels = [[]] * slots    # RoundRobin channels
-        self.round_robin_indexes = [-1] * slots
+        self.round_robin_channels = [list()] * slots    # RoundRobin channels
+        self.round_robin_indexes = [0] * slots
         slots = sum(1 for scheme in self.partitioning_schemes.values()
                     if scheme.strategy == PStrategy.Shuffle)
         # Flag used to avoid hashing when there is no shuffling
@@ -371,12 +371,14 @@ class DataOutput(object):
         #     #     channel))
         #     channel.queue.put_next(record)
         #     index += 1
-        if self.round_robin_channels:
-            flushed = self.round_robin_channels[self.channel_index].queue.put_next(record)
+        for i, channels in enumerate(self.round_robin_channels):
+            channel_index = self.round_robin_indexes[i]
+            flushed = channels[channel_index].queue.put_next(record)
             if flushed:
-                self.channel_index += 1
-                self.channel_index %= len(self.round_robin_channels)
-                next_queue = self.round_robin_channels[self.channel_index].queue
+                channel_index += 1
+                channel_index %= len(channels)
+                self.round_robin_indexes[i] = channel_index
+                next_queue = channels[channel_index].queue
                 next_queue.last_flush_time = time.time()
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
