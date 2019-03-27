@@ -393,7 +393,8 @@ class DataOutput(object):
                 #     record, channel))
                 channel.queue.put_next(record)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
-            h = _hash(record)
+            _, key = record
+            h = _hash(key)
             for channels in self.shuffle_channels:
                 num_instances = len(channels)  # Downstream instances
                 channel = channels[h % num_instances]
