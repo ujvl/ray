@@ -359,22 +359,24 @@ class DataOutput(object):
             #    channel))
             channel.queue.put_next(record)
         # Forward record
-        index = 0
-        for channels in self.round_robin_channels:
-            self.round_robin_indexes[index] += 1
-            if self.round_robin_indexes[index] == len(channels):
-                self.round_robin_indexes[index] = 0     # Reset index
-            channel = channels[self.round_robin_indexes[index]]
-            # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
-            #     channel.src_operator_id, channel.src_instance_id, record,
-            #     channel))
-            channel.queue.put_next(record)
-            index += 1
-        # if self.round_robin_channels:
-        #     flushed = self.round_robin_channels[self.channel_index].queue.put_next(record)
-        #     if flushed:
-        #         self.channel_index += 1
-        #         self.channel_index %= len(self.round_robin_channels)
+        # index = 0
+        # for channels in self.round_robin_channels:
+        #     self.round_robin_indexes[index] += 1
+        #     if self.round_robin_indexes[index] == len(channels):
+        #         self.round_robin_indexes[index] = 0     # Reset index
+        #     channel = channels[self.round_robin_indexes[index]]
+        #     # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
+        #     #     channel.src_operator_id, channel.src_instance_id, record,
+        #     #     channel))
+        #     channel.queue.put_next(record)
+        #     index += 1
+        if self.round_robin_channels:
+            flushed = self.round_robin_channels[self.channel_index].queue.put_next(record)
+            if flushed:
+                self.channel_index += 1
+                self.channel_index %= len(self.round_robin_channels)
+                next_queue = self.round_robin_channels[self.channel_index].queue
+                next_queue.last_flush_time = time.time()
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
             key, _ = record
