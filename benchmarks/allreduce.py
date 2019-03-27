@@ -33,7 +33,7 @@ def debug(*args):
             flush=True)
 
 
-def compute_batch_indices(total_size, num_batches):
+def compute_batch_indices(shape, num_batches):
     """
     :param total_size: Total number of items to split into batches.
     :param batch_size: Size of each batch.
@@ -41,6 +41,11 @@ def compute_batch_indices(total_size, num_batches):
              Each 2-tuple is a segment of indices corresponding to items of
              size batch_size. The size of the list is total_size / batch_size.
     """
+    if type(shape) != int:
+        total_size = int(shape[0])
+    else:
+        total_size = shape
+
     batch_size = int(np.floor(total_size / num_batches))
     remainder = total_size % num_batches
 
@@ -157,7 +162,7 @@ class RingAllReduceWorker(object):
         These object IDs can be retrieved and concatenated to produce the final
         output.
         """
-        debug("EXECUTE", self.num_iterations, ": worker", self.worker_index)
+        debug("EXECUTE", self.num_iterations, ": worker", self.worker_index, ray.ObjectID(final_oid))
         assert not self.execute_received
 
         # Update our state.
@@ -180,6 +185,11 @@ class RingAllReduceWorker(object):
         while self.receives:
             index, aggregate, batch_buffer, batch_id = self.receives.pop(0)
             self.receive(index, aggregate, batch_buffer, batch_id)
+
+        # We no longer need the input, so delete it.
+        input_id = ray.worker.global_worker.get_argument_id(input_data)
+        input_id = ray.pyarrow.plasma.ObjectID(input_id.binary())
+        ray.worker.global_worker.plasma_client.delete([input_id])
 
     def send(self, index, aggregate, batch_id=None):
         debug("SEND", self.num_iterations, ": worker", self.worker_index,
@@ -266,14 +276,13 @@ class RingAllReduceWorker(object):
 
 
     def finish(self, out_oids, final_oid, done_oid):
-        final_oid = None
-        debug("FINISH", self.num_iterations, ": worker", self.worker_index)
+        debug("FINISH", self.num_iterations, ": worker", self.worker_index, ray.ObjectID(final_oid))
         # Store the concatenated data in the final output ObjectID, if one was
         # provided.
         if final_oid is not None:
             with ray.profiling.profile("concatenate_out"):
                 final_oid = ray.ObjectID(final_oid)
-                final_output = self.weight_partition.get_weights()
+                final_output = self.weight_partition.get_weights() / self.num_workers
                 with ray.profiling.profile("store_out"):
                     ray.worker.global_worker.put_object(
                         final_oid, final_output)
@@ -312,11 +321,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
 
         # Create the checkpoint directory.
         try:
-            os.mkdir(CHECKPOINT_DIR)
-        except FileExistsError:
-            pass
-        try:
-            os.mkdir(self.checkpoint_dir)
+            os.makedirs(self.checkpoint_dir)
         except FileExistsError:
             pass
 
@@ -355,9 +360,9 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         with ray.profiling.profile("save_physical_checkpoint"):
             debug("Length of log is", len(self.log), self.checkpoint_interval, len(self.log) == self.checkpoint_interval)
             if len(self.log) == self.checkpoint_interval:
-                checkpoint = self.weight_partition.get_weights()
-                checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(ray.worker.global_worker.actor_id.hex(), self.num_iterations))
-                np.save(checkpoint_path, checkpoint)
+                #checkpoint = self.weight_partition.get_weights()
+                #checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
+                #np.save(checkpoint_path, checkpoint)
                 self.log.clear()
 
         # Reset our state once the checkpoint completes.
@@ -387,7 +392,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
 
         for out_oids, final_oid, done_oid in self.log:
             with ray.profiling.profile("restore_log"):
-                debug("RESTORE", out_oids)
+                debug("RESTORE", out_oids, final_oid)
                 outputs = ray.get(out_oids)
                 # Restore the all-reduced data.
                 for i, output in enumerate(outputs):
@@ -487,7 +492,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
         ])
 
         # Check that the shards contain the correct values.
-        expected = sum(weights)
+        expected = sum(weights) / len(workers)
         outputs = ray.get([ray.ObjectID(out_oid) for out_oid in out_oids])
         for output in outputs:
             assert np.allclose(expected, output)
