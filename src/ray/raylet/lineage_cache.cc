@@ -37,7 +37,7 @@ void LineageEntry::MarkExplicitlyForwarded(const ClientID &node_id) {
 }
 
 void LineageEntry::RemoveForwardedClient(const ClientID &node_id) {
-  size_t erased = forwarded_to_.erase(node_id);
+  forwarded_to_.erase(node_id);
 }
 
 const std::unordered_set<ClientID> &LineageEntry::ForwardedTo() const {
