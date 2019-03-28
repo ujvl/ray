@@ -150,9 +150,8 @@ class TaskDependencyManager {
 
  private:
   struct RequiredTask {
-    std::unordered_map<ray::ObjectID, std::unordered_set<ray::TaskID>> required_objects;
+    std::unordered_map<ray::ObjectID, std::pair<std::unordered_set<ray::TaskID>, bool>> required_objects;
     bool fast_reconstruction;
-    bool delay_pull;
   };
 
   /// A struct to represent the object dependencies of a task.

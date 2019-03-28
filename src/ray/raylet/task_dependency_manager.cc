@@ -31,7 +31,8 @@ bool TaskDependencyManager::CheckObjectRequired(const ObjectID &object_id,
   if (task_entry == required_tasks_.end()) {
     return false;
   }
-  if (task_entry->second.required_objects.count(object_id) == 0) {
+  auto it = task_entry->second.required_objects.find(object_id);
+  if (it == task_entry->second.required_objects.end()) {
     return false;
   }
   // If the object is already local, then the dependency is fulfilled. Do
@@ -48,7 +49,7 @@ bool TaskDependencyManager::CheckObjectRequired(const ObjectID &object_id,
     *fast_reconstruction = task_entry->second.fast_reconstruction;
   }
   if (delay_pull) {
-    *delay_pull = task_entry->second.delay_pull;
+    *delay_pull = it->second.second;
   }
   return true;
 }
@@ -96,7 +97,7 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectLocal(
     auto &required_objects = creating_task_entry->second.required_objects;
     auto object_entry = required_objects.find(object_id);
     if (object_entry != required_objects.end()) {
-      for (auto &dependent_task_id : object_entry->second) {
+      for (auto &dependent_task_id : object_entry->second.first) {
         auto it = task_dependencies_.find(dependent_task_id);
         RAY_CHECK(it != task_dependencies_.end());
         auto &task_entry = it->second;
@@ -165,7 +166,7 @@ void TaskDependencyManager::HandleTaskResubmitted(
     const auto object_id = required_object_it->first;
     // Find any tasks that are dependent on the newly available object.
     std::vector<TaskID> task_ids_to_remove;
-    for (auto &dependent_task_id : required_object_it->second) {
+    for (auto &dependent_task_id : required_object_it->second.first) {
       auto it = task_dependencies_.find(dependent_task_id);
       RAY_CHECK(it != task_dependencies_.end());
       auto &task_entry = it->second;
@@ -195,10 +196,10 @@ void TaskDependencyManager::HandleTaskResubmitted(
     }
 
     for (const auto &task_id : task_ids_to_remove) {
-      required_object_it->second.erase(task_id);
+      required_object_it->second.first.erase(task_id);
     }
 
-    if (required_object_it->second.empty()) {
+    if (required_object_it->second.first.empty()) {
       required_object_it = required_objects.erase(required_object_it);
     } else {
       required_object_it++;
@@ -224,7 +225,7 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectMissing(
     auto &required_objects = creating_task_entry->second.required_objects;
     auto object_entry = required_objects.find(object_id);
     if (object_entry != required_objects.end()) {
-      for (auto &dependent_task_id : object_entry->second) {
+      for (auto &dependent_task_id : object_entry->second.first) {
         auto &task_entry = task_dependencies_[dependent_task_id];
         // ray.wait dependencies are removed as soon as an object becomes
         // local, so check that the object was a ray.get dependency.
@@ -274,12 +275,12 @@ bool TaskDependencyManager::SubscribeDependencies(
       // Add the subscribed task to the mapping from object ID to list of
       // dependent tasks.
       auto &required_task = required_tasks_[creating_task_id];
-      required_task.required_objects[object_id].insert(task_id);
+      required_task.required_objects[object_id].first.insert(task_id);
+      if (delay_pull) {
+        required_task.required_objects[object_id].second = true;
+      }
       if (fast_reconstruction) {
         required_task.fast_reconstruction = true;
-      }
-      if (delay_pull) {
-        required_task.delay_pull = true;
       }
     }
   }
@@ -302,11 +303,11 @@ void TaskDependencyManager::RemoveTaskDependency(const TaskID &dependent_task_id
   const TaskID creating_task_id = ComputeTaskId(object_id);
   auto creating_task_entry = required_tasks_.find(creating_task_id);
   auto &dependent_tasks = creating_task_entry->second.required_objects[object_id];
-  size_t erased = dependent_tasks.erase(dependent_task_id);
+  size_t erased = dependent_tasks.first.erase(dependent_task_id);
   RAY_CHECK(erased > 0);
   // If the unsubscribed task was the only task dependent on the object, then
   // erase the object entry.
-  if (dependent_tasks.empty()) {
+  if (dependent_tasks.first.empty()) {
     creating_task_entry->second.required_objects.erase(object_id);
     // Remove the task that creates this object if there are no more object
     // dependencies created by the task.
