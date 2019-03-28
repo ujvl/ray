@@ -220,8 +220,12 @@ class Worker(object):
         else:
             return None
 
-    def get_return_ids(self):
-        return self.task_context.returns
+    def skip_returns(self, return_index):
+        returns = self.task_context.returns[return_index:]
+        num_returns = len(self.task_context.returns)
+        for _ in range(return_index, num_returns):
+            self.task_context.returns.pop(-1)
+        return returns
 
     def mark_actor_init_failed(self, error):
         """Called to mark this actor as failed during initialization."""
@@ -856,7 +860,7 @@ class Worker(object):
             task.function_descriptor_list())
         args = task.arguments()
         return_object_ids = task.returns()
-        self.task_context.returns = return_object_ids[:]
+        self.task_context.returns = return_object_ids
         if (not task.actor_id().is_nil()
                 or not task.actor_creation_id().is_nil()):
             dummy_return_id = return_object_ids.pop()
