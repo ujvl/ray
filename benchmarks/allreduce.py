@@ -392,10 +392,15 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         for handle in self.workers.values():
             handle.reset_handle_id()
 
+        all_out_oids = [out_oid for out_oids, _, _ in self.log for out_oid in out_oids]
+        all_outputs = ray.get(all_out_oids)
+
         for out_oids, final_oid, done_oid in self.log:
             with ray.profiling.profile("restore_log"):
                 debug("RESTORE", out_oids, final_oid)
-                outputs = ray.get(out_oids)
+                #outputs = ray.get(out_oids)
+                outputs = all_outputs[:len(out_oids)]
+                all_outputs = all_outputs[len(out_oids):]
                 # Restore the all-reduced data.
                 for i, output in enumerate(outputs):
                     self.weight_partition.set_partition(i, output)
