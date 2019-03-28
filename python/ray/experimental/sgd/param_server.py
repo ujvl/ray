@@ -42,9 +42,10 @@ class ParameterServer(object):
             for p in plasma_ids:
                 if ray.worker.global_worker.plasma_client.contains(p):
                     self.timeline.start("get_buffers")
-                    grads = ray.worker.global_worker.plasma_client.get(p)
-                    self.accumulated += grads
-                    self.acc_counter += 1
+                    with ray.profiling.profile("ps.get_buffers"):
+                        grads = ray.worker.global_worker.plasma_client.get(p)
+                        self.accumulated += grads
+                        self.acc_counter += 1
                     self.timeline.end("get_buffers")
                     plasma_ids.remove(p)
                     break
@@ -64,13 +65,14 @@ class ParameterServer(object):
     def get(self, object_id):
         """Put the accumulated gradients to the given object id."""
         self.timeline.start("get")
-        client = ray.worker.global_worker.plasma_client
-        assert self.acc_counter == self.num_sgd_workers, self.acc_counter
-        oid = ray.pyarrow.plasma.ObjectID(object_id)
-        self.accumulated /= self.acc_counter
-        client.put(self.accumulated.flatten(), object_id=oid)
-        self.accumulated = np.zeros_like(self.accumulated)
-        self.acc_counter = 0
+        with ray.profiling.profile("ps.get"):
+            client = ray.worker.global_worker.plasma_client
+            assert self.acc_counter == self.num_sgd_workers, self.acc_counter
+            oid = ray.pyarrow.plasma.ObjectID(object_id)
+            self.accumulated /= self.acc_counter
+            client.put(self.accumulated.flatten(), object_id=oid)
+            self.accumulated = np.zeros_like(self.accumulated)
+            self.acc_counter = 0
         self.timeline.end("get")
 
     def get_timeline(self):

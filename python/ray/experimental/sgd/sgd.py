@@ -6,12 +6,16 @@ import logging
 import os
 import random
 import time
+import json
 
 import numpy as np
 
 import ray
 from ray.experimental.sgd.sgd_worker import SGDWorker
 from ray.experimental.sgd.param_server import ParameterServer
+from ray.experimental.sgd.allreduce import CheckpointableRingAllReduceWorker
+from ray.experimental.sgd.allreduce import RingAllReduceWorker
+from ray.experimental.sgd.allreduce import CHECKPOINT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +71,18 @@ class DistributedSGD(object):
                  gpu=True,
                  strategy="ps",
                  grad_shard_bytes=10000000,
-                 all_reduce_alg="simple"):
+                 all_reduce_alg="simple",
+                 node_resources=None,
+                 checkpoint_interval=-1):
+        # Create the checkpoint directory.
+        self.checkpoint_dir = os.path.join(
+            CHECKPOINT_DIR, ray.worker.global_worker.task_driver_id.hex())
+        try:
+            os.mkdir(CHECKPOINT_DIR)
+        except FileExistsError:
+            pass
+        os.mkdir(self.checkpoint_dir)
+
 
         if num_workers == 1 and strategy == "ps":
             logger.warning(
@@ -75,7 +90,7 @@ class DistributedSGD(object):
                 "worker operation, falling back to simple mode.")
             strategy = "simple"
 
-        if strategy == "ps":
+        if strategy == "ps" or strategy == "allreduce":
             use_plasma_op = True
         elif strategy == "simple":
             use_plasma_op = False
@@ -90,12 +105,48 @@ class DistributedSGD(object):
         else:
             requests = {"num_cpus": devices_per_worker}
 
-        RemoteSGDWorker = ray.remote(**requests)(SGDWorker)
         self.workers = []
         logger.info(
             "Creating SGD workers ({} total, {} devices per worker)".format(
                 num_workers, devices_per_worker))
+
+        logger.info("Waiting for gradient configuration")
+        RemoteSGDWorker = ray.remote(**requests)(SGDWorker)
+        test_worker = RemoteSGDWorker.remote(
+                    0,
+                    model_creator,
+                    num_devices=devices_per_worker,
+                    plasma_op=use_plasma_op,
+                    gpu=gpu,
+                    max_bytes=grad_shard_bytes,
+                    all_reduce_alg=all_reduce_alg,
+                    checkpoint_dir=self.checkpoint_dir,
+                    checkpoint_interval=checkpoint_interval)
+        shard_shapes = ray.get(test_worker.shard_shapes.remote())
+        del test_worker
+
+        # ps_compute_apply returns the loss, then one return
+        # value per gradient.
+        num_return_vals = len(shard_shapes) + 1
+        class SGDWorkerWithReturnValues(SGDWorker,
+                ray.actor.Checkpointable):
+            @ray.method(num_return_vals=num_return_vals)
+            def ps_compute_apply(self,
+                         agg_grad_shard_oids,
+                         tl_name="ps_compute_apply",
+                         write_timeline=False):
+                return super(SGDWorkerWithReturnValues, self).ps_compute_apply(
+                         agg_grad_shard_oids,
+                         tl_name=tl_name,
+                         write_timeline=write_timeline)
+
         for worker_index in range(num_workers):
+            if node_resources is not None:
+                actor_resources = {node_resources[worker_index]: 1}
+                requests["resources"] = actor_resources
+                # TODO: pass checkpoint into ray.remote.
+            requests["max_reconstructions"] = 100
+            RemoteSGDWorker = ray.remote(**requests)(SGDWorkerWithReturnValues)
             self.workers.append(
                 RemoteSGDWorker.remote(
                     worker_index,
@@ -104,10 +155,9 @@ class DistributedSGD(object):
                     plasma_op=use_plasma_op,
                     gpu=gpu,
                     max_bytes=grad_shard_bytes,
-                    all_reduce_alg=all_reduce_alg))
-
-        logger.info("Waiting for gradient configuration")
-        shard_shapes = ray.get(self.workers[0].shard_shapes.remote())
+                    all_reduce_alg=all_reduce_alg,
+                    checkpoint_dir=self.checkpoint_dir,
+                    checkpoint_interval=checkpoint_interval))
 
         logger.info("Waiting for actors to start")
         ray.get([w.shard_shapes.remote() for w in self.workers])
@@ -124,6 +174,36 @@ class DistributedSGD(object):
                 for ps, s in zip(self.ps_list, shard_shapes)
             ])
             logger.info("Parameter servers started")
+        elif strategy == "allreduce":
+            logger.info("Starting allreduce workers ({} shards)".format(
+                len(shard_shapes)))
+
+            # Create the allreduce workers.
+            self.ps_list = [list() for _ in shard_shapes]
+            in_place = False
+            for worker_index in range(num_workers):
+                for shard_index, s in enumerate(shard_shapes):
+                    actor_resources = {node_resources[worker_index]: 1}
+                    cls = ray.remote(
+                        resources=actor_resources,
+                        max_reconstructions=100)(CheckpointableRingAllReduceWorker)
+                    worker = cls.remote(
+                            worker_index,
+                            num_workers,
+                            s,
+                            in_place,
+                            self.checkpoint_dir,
+                            checkpoint_interval)
+                    self.ps_list[shard_index].append(worker)
+            # Exchange actor handles.
+            for allreduce_workers in self.ps_list:
+                for i in range(num_workers):
+                    receiver_index = (i + 1) % num_workers
+                    allreduce_workers[i].add_remote_worker.remote(
+                            receiver_index, allreduce_workers[receiver_index])
+                logger.info("Waiting for CheckpointableRingAllReduceWorkers to start")
+                ray.get([w.ip.remote() for w in allreduce_workers])
+
         else:
             self.ps_list = []
 
@@ -157,7 +237,7 @@ class DistributedSGD(object):
         """
         return ray.get(self.workers[0].for_model.remote(fn))
 
-    def step(self, fetch_stats=False):
+    def step(self, fetch_stats=False, test_failure=False, kill_node_fn=None, num_failed=None):
         """Run a single SGD step.
 
         Arguments:
@@ -170,6 +250,15 @@ class DistributedSGD(object):
                 self.ps_list,
                 write_timeline=False,
                 fetch_stats=fetch_stats)
+        elif self.strategy == "allreduce":
+            return _distributed_sgd_allreduce_step(
+                self.workers,
+                self.ps_list,
+                write_timeline=False,
+                fetch_stats=fetch_stats,
+                test_failure=test_failure,
+                kill_node_fn=kill_node_fn,
+                num_failed=num_failed)
         else:
             return _simple_sgd_step(self.workers)
 
@@ -219,23 +308,19 @@ def _simple_sgd_step(actors):
 
 
 def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
-    # Preallocate object ids that actors will write gradient shards to
-    grad_shard_oids_list = [[np.random.bytes(20) for _ in ps_list]
-                            for _ in actors]
-    logger.debug("Generated grad oids")
-
     # Preallocate object ids that param servers will write new weights to
     accum_shard_ids = [np.random.bytes(20) for _ in ps_list]
     logger.debug("Generated accum oids")
 
     # Kick off the fused compute grad / update weights tf run for each actor
     losses = []
-    for actor, grad_shard_oids in zip(actors, grad_shard_oids_list):
-        losses.append(
-            actor.ps_compute_apply.remote(
-                grad_shard_oids,
+    grad_shard_oids_list = []
+    for actor in actors:
+        returns = actor.ps_compute_apply.remote(
                 accum_shard_ids,
-                write_timeline=write_timeline))
+                write_timeline=write_timeline)
+        losses.append(returns.pop(0))
+        grad_shard_oids_list.append(returns)
     logger.debug("Launched all ps_compute_applys on all actors")
 
     # Issue prefetch ops
@@ -243,7 +328,7 @@ def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
             enumerate(zip(ps_list, accum_shard_ids)))[::-1]:
         to_fetch = []
         for grad_shard_oids in grad_shard_oids_list:
-            to_fetch.append(grad_shard_oids[j])
+            to_fetch.append(grad_shard_oids[j].binary())
         random.shuffle(to_fetch)
         ps.prefetch.remote(to_fetch)
     logger.debug("Launched all prefetch ops")
@@ -253,7 +338,7 @@ def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
     ps_gets = []
     for j, (ps, weight_shard_oid) in list(
             enumerate(zip(ps_list, accum_shard_ids)))[::-1]:
-        ps.add_spinwait.remote([gs[j] for gs in grad_shard_oids_list])
+        ps.add_spinwait.remote([gs[j].binary() for gs in grad_shard_oids_list])
         ps_gets.append(ps.get.remote(weight_shard_oid))
     logger.debug("Launched all aggregate ops")
 
@@ -272,3 +357,96 @@ def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
         return {"loss": np.mean(ray.get(losses))}
     else:
         return None
+
+
+def _distributed_sgd_allreduce_step(actors, allreduce_workers_by_shard, fetch_stats, write_timeline, test_failure, kill_node_fn, num_failed):
+    # Preallocate object ids that allreduce will write new weights to
+    out_shard_ids_per_actor = [
+        [np.random.bytes(20) for _ in allreduce_workers_by_shard]
+        for _ in actors
+    ]
+    logger.debug("Generated accum oids")
+
+    # Preallocate done oids to mark allreduce end
+    done_ids_per_actor = [
+        [np.random.bytes(20) for _ in allreduce_workers_by_shard]
+        for _ in actors
+    ]
+    print("generated done out oids")
+
+    # Kick off the fused compute grad / update weights tf run for each actor
+    losses = []
+    grad_shard_oids_list = []
+    for i, actor in enumerate(actors):
+        returns = actor.ps_compute_apply.remote(
+                out_shard_ids_per_actor[i],
+                write_timeline=write_timeline)
+        losses.append(returns.pop(0))
+        grad_shard_oids_list.append(returns)
+    print("Losses:", losses)
+    logger.debug("Launched all ps_compute_applys on all actors")
+
+    # Issue allreduce ops
+    for j in range(len(allreduce_workers_by_shard)):
+        for i, a in enumerate(allreduce_workers_by_shard[j]):
+            a.execute.remote(
+                grad_shard_oids_list[i][j],
+                done_ids_per_actor[i][j],
+                out_shard_ids_per_actor[i][j])
+    print("Launched all allreduce ops")
+
+    # If we are testing locally with failures on, kill a worker halfway
+    # through.
+    if test_failure:
+        time_to_sleep = np.random.rand() * 0.3
+        time.sleep(time_to_sleep)
+        kill_node_fn()
+
+    if write_timeline:
+        timelines = [ps.get_timeline.remote() for ps in ps_list]
+        logger.debug("Launched timeline gets")
+        timelines = ray.get(timelines)
+        t0 = timelines[0]
+        for t in timelines[1:]:
+            t0.merge(t)
+        t0.chrome_trace_format("ps_timeline.json")
+    else:
+        # Wait for at least the allreduce ops to finish
+        allreduce_ops = []
+        for done_ids in done_ids_per_actor:
+            for d in done_ids:
+                allreduce_ops.append(ray.ObjectID(d))
+
+        # Suppress reconstruction since these object IDs were generated
+        # out-of-band.
+        timeout_s = 0.1
+        iteration = 0
+        while True:
+            try:
+                all_output_oids = ray.get(
+                    allreduce_ops, suppress_reconstruction=True, timeout=timeout_s)
+                break
+            except ray.exceptions.RayGetTimeoutError:
+                clients = ray.global_state.client_table()
+                failed = len([client for client in clients if not client['IsInsertion']]) > 0
+                if failed > num_failed:
+                    print("Sending heartbeats...")
+                    num_failed = failed
+                    heartbeats = [
+                            a.heartbeat.remote() for allreduce_workers in
+                            allreduce_workers_by_shard for a in
+                            allreduce_workers
+                            ]
+                    ray.get(heartbeats)
+                    print("Done with heartbeats")
+
+                    #worker_cursors = [a._ray_actor_cursor for a in actors]
+                    #ray.wait(worker_cursors, num_returns=len(worker_cursors), timeout=0)
+                    #print("Done with heartbeats")
+
+    returns = {
+            "num_failed": num_failed,
+            }
+    if fetch_stats:
+        returns["loss"] = np.mean(ray.get(losses))
+    return returns
