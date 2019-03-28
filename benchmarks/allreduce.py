@@ -152,6 +152,7 @@ class RingAllReduceWorker(object):
     def get_receiver(self):
         return self.workers[(self.worker_index + 1) % self.num_workers]
 
+    @ray.method(num_return_vals=0)
     def execute(self, input_data, done_oid, final_oid):
         """
         If final_oid is set, then the concatenated final output will be written
@@ -205,6 +206,7 @@ class RingAllReduceWorker(object):
         receiver.receive.remote(index, aggregate, batch_id)
         return batch_id
 
+    @ray.method(num_return_vals=0)
     def receive(self, index, aggregate, batch_buffer, batch_id=None):
         if batch_id is None:
             batch_id = ray.worker.global_worker.get_argument_id(batch_buffer)
@@ -380,7 +382,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         # we cannot restore from this checkpoint.
         out_oids, final_oid, done_oid = checkpoint["log"][-1]
         _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0,
-                           request_once=False)
+                           request_once=True)
         if lost:
             return False
 
@@ -444,7 +446,6 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
     start = time.time()
     done_oids = []
     out_oids = []
-    executed = []
     for i, worker in enumerate(workers):
         done_oid = np.random.bytes(20)
         done_oids.append(done_oid)
@@ -453,8 +454,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
         else:
             out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
-        executed.append(
-            worker.execute.remote(weight_ids[i], done_oid, out_oid))
+        worker.execute.remote(weight_ids[i], done_oid, out_oid)
 
     # If we are testing locally with failures on, kill a worker halfway
     # through.
