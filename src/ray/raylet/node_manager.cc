@@ -1818,7 +1818,11 @@ void NodeManager::FinishAssignedTask(Worker &worker) {
   }
 
   // Notify the task dependency manager that this task has finished execution.
-  task_dependency_manager_.TaskCanceled(task_id);
+  // NOTE: We do not cancel the task pending calls for actor creation tasks
+  // because ray.put object IDs are computed from the actor ID on this branch.
+  if (!task.GetTaskSpecification().IsActorCreationTask()) {
+    task_dependency_manager_.TaskCanceled(task_id);
+  }
 
   // Unset the worker's assigned task.
   worker.AssignTaskId(TaskID::nil());
