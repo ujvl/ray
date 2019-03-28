@@ -51,23 +51,28 @@ parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
-parser.add_argument("--flush-timeout", default=0.01,
+parser.add_argument("--flush-timeout", default=0.1,
                     help="the timeout to flush a batch")
 parser.add_argument("--prefetch-depth", default=10,
                     help="the number of batches to prefetch from plasma")
 parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
-                    help="maximum read throughput (elements/s)")
+                    help="maximum read throughput (records/s)")
+parser.add_argument("--max-source-rate", default="inf",
+                    help="maximum source output rate (records/s)")
 
 # A custom source that periodically assigns timestamps to records
 class Source(object):
     def __init__(self, rounds, record_type="int",
-                 record_size=None, sample_period=1):
+                 record_size=None, sample_period=1,
+                 fixed_rate=float("inf")):
         assert rounds > 0
         self.total_elements = 100000 * rounds
         self.total_count = 0
         self.period = sample_period
+        self.fixed_rate = fixed_rate
+        self.start = time.time()
         self.count = 0
         self.current_round = 0
         self.record_type = record_type
@@ -96,6 +101,9 @@ class Source(object):
             return None
         record = self.__get_next_record()
         self.total_count += 1
+        while (self.total_count / (time.time() - self.start) >
+               self.fixed_rate):
+            time.sleep(0.01)
         self.count += 1
         # print(self.total_count)
         if self.count == self.period:
@@ -136,7 +144,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
-                            dump_filename, task_based):
+                            dump_filename, task_based, source_rate):
     assert num_stages >= 0, (num_stages)
     # Create streaming environment, construct and run dataflow
     env = Environment()
@@ -146,7 +154,7 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     if task_based:
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
-                                record_size, sample_period),
+                                record_size, sample_period, source_rate),
                                 name="source")
     if partitioning == "shuffle":
         stream = stream.shuffle()
@@ -239,6 +247,7 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
+    source_rate = float(args.max_source_rate)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -258,9 +267,11 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
+    logger.info("Source rate: {}".format(source_rate))
 
     # Estimate the ideal throughput
-    source = Source(rounds, record_type, record_size)
+    source = Source(rounds, record_type, record_size,
+                    sample_period, source_rate)
     count = 0
     start = time.time()
     while True:
@@ -279,5 +290,5 @@ if __name__ == "__main__":
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
-                            dump_filename, task_based)
+                            dump_filename, task_based, source_rate)
     ray.shutdown()

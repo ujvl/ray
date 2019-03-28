@@ -36,7 +36,7 @@ parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
-parser.add_argument("--flush-timeout", default=0.01,
+parser.add_argument("--flush-timeout", default=0.1,
                     help="the timeout to flush a batch")
 parser.add_argument("--prefetch-depth", default=10,
                     help="the number of batches to prefetch from plasma")
@@ -44,6 +44,8 @@ parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (elements/s)")
+parser.add_argument("--max-source-rate", default="inf",
+                    help="maximum source output rate (records/s)")
 
 @ray.remote
 class Node(object):
@@ -146,7 +148,8 @@ def benchmark_queue(rounds, latency_filename,
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
-                        num_stages, max_reads_per_second=float("inf")):
+                        num_stages, max_reads_per_second=float("inf"),
+                        source_rate=float("inf")):
     assert num_stages >= 1
 
     first_queue = BatchedQueue(
@@ -168,7 +171,8 @@ def benchmark_queue(rounds, latency_filename,
     source = Node.remote(-1, None, first_queue,
                          RecordGenerator(rounds, record_type=record_type,
                                          record_size=record_size,
-                                         sample_period=sample_period),
+                                         sample_period=sample_period,
+                                         fixed_rate=source_rate),
                          max_reads_per_second,
                          log_latency)
     nodes.append(source)
@@ -237,11 +241,13 @@ def benchmark_queue(rounds, latency_filename,
 
 class RecordGenerator(object):
     def __init__(self, rounds, record_type="int",
-                 record_size=None, sample_period=1):
+                 record_size=None, sample_period=1, fixed_rate=float("inf")):
         assert rounds > 0
         self.total_elements = 100000 * rounds
         self.total_count = 0
         self.period = sample_period
+        self.fixed_rate = fixed_rate
+        self.start = time.time()
         self.count = 0
         self.current_round = 0
         self.record_type = record_type
@@ -269,6 +275,9 @@ class RecordGenerator(object):
             return None
         record = self.__get_next_record()
         self.total_count += 1
+        while (self.total_count / (time.time() - self.start) >
+               self.fixed_rate):
+            time.sleep(0.01)
         self.count += 1
         if self.count == self.period:
             self.count = 0
@@ -296,6 +305,7 @@ if __name__ == "__main__":
     background_flush = bool(args.background_flush)
     num_stages = int(args.num_stages)
     max_reads_per_second = float(args.max_throughput)
+    source_rate = float(args.max_source_rate)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -313,10 +323,11 @@ if __name__ == "__main__":
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
     logger.info("Max read throughput: {}".format(max_reads_per_second))
+    logger.info("Source rate: {}".format(source_rate))
 
     # A record generator
     generator = RecordGenerator(rounds, record_type, record_size,
-                                sample_period)
+                                sample_period, source_rate)
     total = 0
     count = 0
     start = time.time()
@@ -339,6 +350,6 @@ if __name__ == "__main__":
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
-                        num_stages, max_reads_per_second)
+                        num_stages, max_reads_per_second, source_rate)
     logger.info("Elapsed time: {}".format(time.time()-start))
     ray.shutdown()

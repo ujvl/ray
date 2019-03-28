@@ -141,7 +141,7 @@ class DataInput(object):
             channel = self.input_channels[self.channel_index]
             self.channel_index += 1
             self.channel_index %= self.max_index
-            if self.closed[self.channel_index - 1]:
+            if self.closed[self.channel_index -1]:
                 continue  # Channel has been 'closed', check next
             record = channel.queue.read_next()
             # logger.debug("Actor ({},{}) pulled '{}' from channel {}.".format(
