@@ -140,8 +140,7 @@ class DataInput(object):
             # Channel to pull from
             channel = self.input_channels[self.channel_index]
             self.channel_index += 1
-            if self.channel_index == self.max_index:  # Reset channel index
-                self.channel_index = 0
+            self.channel_index %= self.max_index
             if self.closed[self.channel_index - 1]:
                 continue  # Channel has been 'closed', check next
             record = channel.queue.read_next()
@@ -210,6 +209,12 @@ class DataOutput(object):
     """
 
     def __init__(self, channels, partitioning_schemes):
+
+        # All output channels of the instance are flushed using the same timer
+        self.last_flush_time = 0.0
+        self.flush_timeout = channels[
+                        0].queue.max_batch_time if channels else float("inf")
+
         self.channel_index = 0
         self.key_selector = None
         self.partitioning_schemes = partitioning_schemes
@@ -353,22 +358,20 @@ class DataOutput(object):
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
     def _push(self, record):
-        # Forward record
+        # Simple forwarding
         for channel in self.forward_channels:
             # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
             #    channel.src_operator_id, channel.src_instance_id, record,
             #    channel))
             channel.queue.put_next(record)
-        # Forward record in a round-robin fashion
+        # Round-robin forwarding
         for i, channels in enumerate(self.round_robin_channels):
             channel_index = self.round_robin_indexes[i]
             flushed = channels[channel_index].queue.put_next(record)
-            if flushed:
+            if flushed:  # Round-robin batches, not individual records
                 channel_index += 1
                 channel_index %= len(channels)
                 self.round_robin_indexes[i] = channel_index
-                next_queue = channels[channel_index].queue
-                next_queue.last_flush_time = time.time()
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
             key, _ = record
@@ -391,13 +394,18 @@ class DataOutput(object):
                 #     "Actor ({},{}) pushed '{}' to channel {}.".format(
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
-                flushed = channel.queue.put_next(record)
-                if flushed:  # Set the same last flush time for all channels
-                    flush_time = time.time()
-                    for channel in channels:
-                        channel.queue.last_flush_time = flush_time
+                channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
+
+        # Flush channels if timeout expired
+        if not self.last_flush_time:  # Set the timer
+            self.last_flush_time = time.time()
+        if self.flush_timeout >= 0:
+            delay = time.time() - self.last_flush_time
+            if delay >= self.flush_timeout:
+                self._flush()  # Flush all output channels
+                self.last_flush_time = time.time()
 
         if self.logging:  # Log rate
             self.__log(batch_size=1)
@@ -406,7 +414,7 @@ class DataOutput(object):
     # Each individual output queue flushes batches to plasma periodically
     # based on the configured batch size and timeout
     def _push_all(self, records):
-        assert isinstance(records,list)
+        assert isinstance(records, list)
         # Forward records
         for record in records:
             for channel in self.forward_channels:
@@ -415,6 +423,14 @@ class DataOutput(object):
                 #     channel.src_operator_id, channel.src_instance_id,
                 #      record, channel))
                 channel.queue.put_next(record)
+            # Round-robin forwarding
+            for i, channels in enumerate(self.round_robin_channels):
+                channel_index = self.round_robin_indexes[i]
+                flushed = channels[channel_index].queue.put_next(record)
+                if flushed:  # Round-robin batches, not individual records
+                    channel_index += 1
+                    channel_index %= len(channels)
+                    self.round_robin_indexes[i] = channel_index
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
@@ -441,6 +457,14 @@ class DataOutput(object):
                     channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
+
+        # Flush channels if timeout expired
+        if not self.last_flush_time:  # Set the timer
+            self.last_flush_time = time.time()
+        delay = time.time() - self.last_flush_time
+        if delay >= self.flush_timeout:
+            self._flush()  # Flush all output channels
+            self.last_flush_time = time.time()
 
         if self.logging:  # Log rate
             self.__log(batch_size=len(records))

@@ -54,13 +54,8 @@ class BatchedQueue(object):
          write_item_offset (int): The numebr of the last written item inside a
          batch.
          write_buffer (list): The write buffer, i.e. an in-memory batch.
-         last_flush_time (float): The time the last flushing to plasma took
-         place.
          cached_remote_offset (int): The number of the last read record as
          recorded by the writer after the previous flush.
-         flush_lock (RLock): A python lock used for flushing batches to plasma.
-         flush_thread (Threading): The python thread used for flushing batches
-         to plasma.
     """
 
     def __init__(self,
@@ -102,7 +97,6 @@ class BatchedQueue(object):
         self.write_item_offset = 0
         self.write_batch_offset = 0
         self.write_buffer = []
-        self.last_flush_time = 0.0
         self.cached_remote_offset = 0
         self.task_queue = []
 
@@ -155,7 +149,6 @@ class BatchedQueue(object):
             self._wait_for_task_reader()
         else:
             self._wait_for_reader()
-        self.last_flush_time = time.time()
 
     # Currently, the 'queue' size in both task- and queue-based execution is
     # estimated based on the number of unprocessed records
@@ -251,11 +244,7 @@ class BatchedQueue(object):
     def put_next(self, item):
         self.write_buffer.append(item)
         self.write_item_offset += 1
-        if not self.last_flush_time:
-            self.last_flush_time = time.time()
-        delay = time.time() - self.last_flush_time
-        if (len(self.write_buffer) >= self.max_batch_size
-            or delay >= self.max_batch_time):
+        if (len(self.write_buffer) >= self.max_batch_size):
             self._flush_writes()
             return True
         return False
