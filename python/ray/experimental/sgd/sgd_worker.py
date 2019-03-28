@@ -160,12 +160,13 @@ class SGDWorker(object):
             ]
             packed_plasma_grads = []
             for j in range(num_grads):
-                with tf.device(self.plasma_in_grads[j].device):
-                    with tf.control_dependencies([self.plasma_in_grads[j]]):
-                        grad_ph = plasma.tf_plasma_op.plasma_to_tensor(
-                            self.plasma_out_grads_oids[j],
-                            dtype=tf.float32,
-                            plasma_store_socket_name=store_socket)
+                # This control dependency is probably not needed.
+                #with tf.device(self.plasma_in_grads[j].device):
+                #    with tf.control_dependencies([self.plasma_in_grads[j]]):
+                grad_ph = plasma.tf_plasma_op.plasma_to_tensor(
+                    self.plasma_out_grads_oids[j],
+                    dtype=tf.float32,
+                    plasma_store_socket_name=store_socket)
                 grad_ph = tf.reshape(grad_ph,
                                      self.packed_grads_and_vars[0][j][0].shape)
                 logger.debug("Packed tensor {}".format(grad_ph))
@@ -323,27 +324,46 @@ class SGDWorker(object):
                 ray.worker.global_worker.skip_returns(1)
                 ]
         [loss_id] = ray.worker.global_worker.skip_returns(0)
-        print("ps_compute_apply", self.num_iterations, [ray.ObjectID(oid) for oid in out_grad_shard_oids], [ray.ObjectID(oid) for oid in agg_grad_shard_oids])
+        agg_grad_shard_ids = [ray.ObjectID(oid) for oid in agg_grad_shard_oids]
+        print("ps_compute_apply",
+              self.num_iterations,
+              [ray.ObjectID(oid) for oid in out_grad_shard_oids],
+              agg_grad_shard_ids)
 
         feed_dict = self._grad_feed_dict()
         feed_dict.update(
-            dict(zip(self.plasma_in_grads_oids, out_grad_shard_oids)))
-        feed_dict.update(
             dict(zip(self.plasma_out_grads_oids, agg_grad_shard_oids)))
-        fetch(agg_grad_shard_oids)
-        fetches = run_timeline(
-            self.sess, [
-                self.models[0].get_loss(), self.plasma_in_grads, self.apply_op,
-                self.nccl_control_out
-            ],
-            feed_dict=feed_dict,
-            write_timeline=write_timeline)
-        # Store the loss now to avoid blocking on the checkpoint op.
-        ray.worker.global_worker.put_object(
-            loss_id, fetches[0])
+        feed_dict.update(
+            dict(zip(self.plasma_in_grads_oids, out_grad_shard_oids)))
+        loss = None
 
-        self.num_iterations += 1
+        _, lost = ray.wait(agg_grad_shard_ids, num_returns=len(agg_grad_shard_oids), timeout=0,
+                           request_once=True)
+        if lost:
+            fetches = run_timeline(
+                self.sess, [
+                    self.models[0].get_loss(), self.plasma_in_grads, self.apply_op,
+                    self.nccl_control_out
+                ],
+                feed_dict=feed_dict,
+                write_timeline=write_timeline)
+            loss = fetches[0]
+
+        else:
+            for oid in out_grad_shard_oids:
+                oid = ray.ObjectID(oid)
+                ray.worker.global_worker.put_object(oid, None)
+            run_timeline(
+                self.sess, [self.apply_op],
+                feed_dict=feed_dict,
+                write_timeline=write_timeline)
+
+        # Store the loss now to avoid blocking on the checkpoint op.
+        ray.worker.global_worker.put_object(loss_id, loss)
+
+        # Determine whether we should take a checkpoint.
         logger.info("Done with iteration %d", self.num_iterations)
+        self.num_iterations += 1
         if (self.checkpoint_interval > 0 and self.num_iterations %
                 self.checkpoint_interval == 0):
             logger.info("Should checkpoint at %d", self.num_iterations)

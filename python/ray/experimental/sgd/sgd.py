@@ -353,10 +353,13 @@ def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
     else:
         # Wait for at least the ps gets to finish
         ray.get(ps_gets)
+
+    returns = {
+            "num_failed": 0,
+            }
     if fetch_stats:
-        return {"loss": np.mean(ray.get(losses))}
-    else:
-        return None
+        returns["loss"] = np.mean(ray.get(losses))
+    return returns
 
 
 def _distributed_sgd_allreduce_step(actors, allreduce_workers_by_shard, fetch_stats, write_timeline, test_failure, kill_node_fn, num_failed):
