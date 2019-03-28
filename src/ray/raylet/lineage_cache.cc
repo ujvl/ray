@@ -133,6 +133,7 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
   auto task_id = task.GetTaskSpecification().TaskId();
   auto it = entries_.find(task_id);
   bool updated = false;
+  bool set = false;
   std::unordered_set<TaskID> old_parents;
   if (it != entries_.end()) {
     if (it->second.SetStatus(status)) {
@@ -144,11 +145,13 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
         it->second.UpdateTaskData(task, forwarded_to);
         updated = true;
       }
+      set = true;
     }
   } else {
     LineageEntry new_entry(task, status, forwarded_to);
     it = entries_.emplace(std::make_pair(task_id, std::move(new_entry))).first;
     updated = true;
+    set = true;
   }
 
   // If the task data was updated, then record which tasks it depends on. Add
@@ -169,7 +172,7 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
       RemoveChild(old_parent_id, task_id);
     }
   }
-  return updated;
+  return set;
 }
 
 boost::optional<LineageEntry> Lineage::PopEntry(const TaskID &task_id) {
