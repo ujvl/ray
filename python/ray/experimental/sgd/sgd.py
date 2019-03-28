@@ -134,11 +134,13 @@ class DistributedSGD(object):
             def ps_compute_apply(self,
                          agg_grad_shard_oids,
                          tl_name="ps_compute_apply",
-                         write_timeline=False):
+                         write_timeline=False,
+                         fetch_shards=False):
                 return super(SGDWorkerWithReturnValues, self).ps_compute_apply(
                          agg_grad_shard_oids,
                          tl_name=tl_name,
-                         write_timeline=write_timeline)
+                         write_timeline=write_timeline,
+                         fetch_shards=fetch_shards)
 
         for worker_index in range(num_workers):
             if node_resources is not None:
@@ -318,7 +320,8 @@ def _distributed_sgd_step(actors, ps_list, fetch_stats, write_timeline):
     for actor in actors:
         returns = actor.ps_compute_apply.remote(
                 accum_shard_ids,
-                write_timeline=write_timeline)
+                write_timeline=write_timeline,
+                fetch_shards=True)
         losses.append(returns.pop(0))
         grad_shard_oids_list.append(returns)
     logger.debug("Launched all ps_compute_applys on all actors")
@@ -383,7 +386,8 @@ def _distributed_sgd_allreduce_step(actors, allreduce_workers_by_shard, fetch_st
     for i, actor in enumerate(actors):
         returns = actor.ps_compute_apply.remote(
                 out_shard_ids_per_actor[i],
-                write_timeline=write_timeline)
+                write_timeline=write_timeline,
+                fetch_shards=False)
         losses.append(returns.pop(0))
         grad_shard_oids_list.append(returns)
     print("Losses:", losses)

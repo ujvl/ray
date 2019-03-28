@@ -318,7 +318,8 @@ class SGDWorker(object):
     def ps_compute_apply(self,
                          agg_grad_shard_oids,
                          tl_name="ps_compute_apply",
-                         write_timeline=False):
+                         write_timeline=False,
+                         fetch_shards=False):
         out_grad_shard_oids = [
                 object_id.binary() for object_id in
                 ray.worker.global_worker.skip_returns(1)
@@ -340,6 +341,8 @@ class SGDWorker(object):
         _, lost = ray.wait(agg_grad_shard_ids, num_returns=len(agg_grad_shard_oids), timeout=0,
                            request_once=True)
         if lost:
+            if fetch_shards:
+                fetch(agg_grad_shard_oids)
             fetches = run_timeline(
                 self.sess, [
                     self.models[0].get_loss(), self.plasma_in_grads, self.apply_op,
