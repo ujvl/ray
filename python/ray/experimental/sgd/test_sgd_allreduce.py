@@ -7,6 +7,7 @@ from __future__ import print_function
 import argparse
 import time
 import json
+import subprocess
 
 import ray
 from ray.experimental.sgd.tfbench.test_model import TFBenchModel
@@ -126,7 +127,8 @@ if __name__ == "__main__":
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
-                    str(args.gcs_delay_ms),
+                    #str(args.gcs_delay_ms),
+                    str(-1),
                     node_resource,
                     ]
             subprocess.Popen(command)
@@ -137,6 +139,8 @@ if __name__ == "__main__":
         fetch_stats = i % args.stats_interval == 0
         fail_iteration = False
         if (test_local and i == args.num_iters // 2 and args.test_failure):
+            fail_iteration = True
+        elif (not test_local and i == args.num_iters // 4 and args.test_failure):
             fail_iteration = True
         print("== Step {} ==".format(i))
         stats = sgd.step(

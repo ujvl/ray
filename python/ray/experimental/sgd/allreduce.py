@@ -1,1 +1,1 @@
-/home/stephanie/ray-fork/benchmarks/allreduce.py
+../../../../benchmarks/allreduce.py

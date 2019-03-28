@@ -378,7 +378,6 @@ def _distributed_sgd_allreduce_step(actors, allreduce_workers_by_shard, fetch_st
         [np.random.bytes(20) for _ in allreduce_workers_by_shard]
         for _ in actors
     ]
-    print("generated done out oids")
 
     # Kick off the fused compute grad / update weights tf run for each actor
     losses = []
@@ -390,7 +389,6 @@ def _distributed_sgd_allreduce_step(actors, allreduce_workers_by_shard, fetch_st
                 fetch_shards=False)
         losses.append(returns.pop(0))
         grad_shard_oids_list.append(returns)
-    print("Losses:", losses)
     logger.debug("Launched all ps_compute_applys on all actors")
 
     # Issue allreduce ops
