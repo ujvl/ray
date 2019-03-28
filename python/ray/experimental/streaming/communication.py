@@ -359,18 +359,7 @@ class DataOutput(object):
             #    channel.src_operator_id, channel.src_instance_id, record,
             #    channel))
             channel.queue.put_next(record)
-        # Forward record
-        # index = 0
-        # for channels in self.round_robin_channels:
-        #     self.round_robin_indexes[index] += 1
-        #     if self.round_robin_indexes[index] == len(channels):
-        #         self.round_robin_indexes[index] = 0     # Reset index
-        #     channel = channels[self.round_robin_indexes[index]]
-        #     # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
-        #     #     channel.src_operator_id, channel.src_instance_id, record,
-        #     #     channel))
-        #     channel.queue.put_next(record)
-        #     index += 1
+        # Forward record in a round-robin fashion
         for i, channels in enumerate(self.round_robin_channels):
             channel_index = self.round_robin_indexes[i]
             flushed = channels[channel_index].queue.put_next(record)
@@ -402,7 +391,11 @@ class DataOutput(object):
                 #     "Actor ({},{}) pushed '{}' to channel {}.".format(
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
-                channel.queue.put_next(record)
+                flushed = channel.queue.put_next(record)
+                if flushed:  # Set the same last flush time for all channels
+                    flush_time = time.time()
+                    for channel in channels:
+                        channel.queue.last_flush_time = flush_time
         else:  # TODO (john): Add support for custom partitioning
             pass
 
