@@ -182,7 +182,7 @@ class BatchedQueue(object):
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
-            print("W", time.time() - current_time)
+            print("B", time.time() - current_time)
             for task_id in finished_tasks:
                 self.records_sent -= self.records_per_task.pop(task_id)
 
@@ -211,7 +211,7 @@ class BatchedQueue(object):
             #         remote_offset, self.write_item_offset, self.max_size))
             while self.write_item_offset - remote_offset > self.max_size:
                 time.sleep(0.01)
-                print(time.time() - current_time)
+                current_time = time.time()
                 remote_offset = int(
                     internal_kv._internal_kv_get(self.read_ack_key))
                 print("B", time.time() - current_time)
