@@ -162,19 +162,23 @@ class BatchedQueue(object):
         if len(self.task_queue) <= self.max_size_batches:
             return
         # Check pending downstream tasks
+        current_time = time.time()
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
                 num_returns=len(self.task_queue),
                 timeout=0)
+        print(time.time() - current_time)
         for task_id in finished_tasks:
             self.records_sent -= self.records_per_task.pop(task_id)
         while self.records_sent > self.max_size:
             # logger.debug("Waiting for ({},{}) to catch up".format(
             #              self.dst_operator_id, self.dst_instance_id))
+            current_time = time.time()
             finished_tasks, self.task_queue = ray.wait(
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
+            print(time.time() - current_time)
             for task_id in finished_tasks:
                 self.records_sent -= self.records_per_task.pop(task_id)
 
@@ -184,12 +188,16 @@ class BatchedQueue(object):
             return
         if self.write_item_offset - self.cached_remote_offset <= self.max_size:
             return  # Hasn't reached max size
+        current_time = time.time()
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
+        print(time.time() - current_time)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
             while remote_offset is None:
                 time.sleep(0.01)
+                current_time = time.time()
                 remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
+                print(time.time() - current_time)
         # logger.debug("Remote offset: {}".format(int(remote_offset)))
         remote_offset = int(remote_offset)
         if self.write_item_offset - remote_offset > self.max_size:
@@ -199,8 +207,10 @@ class BatchedQueue(object):
             #         remote_offset, self.write_item_offset, self.max_size))
             while self.write_item_offset - remote_offset > self.max_size:
                 time.sleep(0.01)
+                print(time.time() - current_time)
                 remote_offset = int(
                     internal_kv._internal_kv_get(self.read_ack_key))
+                print(time.time() - current_time)
         self.cached_remote_offset = remote_offset
 
     def _read_next_batch(self):
