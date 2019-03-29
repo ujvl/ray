@@ -194,7 +194,7 @@ class BatchedQueue(object):
             return  # Hasn't reached max size
         current_time = time.time()
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
-        print(time.time() - current_time)
+        print("C", time.time() - current_time)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
             while remote_offset is None:
