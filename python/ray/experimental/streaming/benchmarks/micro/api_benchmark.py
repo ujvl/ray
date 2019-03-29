@@ -72,6 +72,7 @@ class Source(object):
         self.total_count = 0
         self.period = sample_period
         self.fixed_rate = fixed_rate
+        self.rate_count = 0
         self.start = time.time()
         self.count = 0
         self.current_round = 0
@@ -101,7 +102,13 @@ class Source(object):
             return None
         record = self.__get_next_record()
         self.total_count += 1
-        while (self.total_count / (time.time() - self.start) >
+        self.rate_count += 1
+        # Measure source rate per round
+        if self.rate_count == 100000:
+            self.rate_count = 0
+            self.start = time.time()
+            time.sleep(0.001)
+        while (self.rate_count / (time.time() - self.start) >
                self.fixed_rate):
             time.sleep(0.01)
         self.count += 1
