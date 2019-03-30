@@ -20,7 +20,6 @@ def plasma_prefetch(object_id):
     ray_obj_id = ray.ObjectID(object_id)
     local_sched_client.fetch_or_reconstruct([ray_obj_id], True)
 
-
 def plasma_get(object_id):
     """Get an object directly from plasma without going through object table.
 

@@ -124,7 +124,7 @@ class DataInput(object):
         self.logging = False    # Default
         self.records = 0        # Counter
         self.rates = []         # Input rates
-        self.start = None       # Start timestamp
+        self.start = 0.0        # Start timestamp
         self.period = 100000    # Measure input rate every 100K records
 
     # Fetches records from input channels in a round-robin fashion
@@ -175,11 +175,13 @@ class DataInput(object):
     # Enables throughput logging on output channels
     def enable_logging(self):
         self.logging = True
-        self.start = time.time()
 
     # Logs input rate
     def __log(self, batch_size=0, force=False):
         # Log throughput every N records
+        if not self.start:
+            self.start = time.time()
+            time.sleep(0.001)
         self.records += batch_size
         if self.records >= self.period or (
            force is True and self.records > 0):
@@ -288,13 +290,12 @@ class DataOutput(object):
         self.logging = False    # Default
         self.records = 0        # Counter
         self.rates = []         # Output rates
-        self.start = None       # Start timestamp
+        self.start = 0.0        # Start timestamp
         self.period = 100000    # Compute output rate every 100K records
 
     # Enables rate logging on output channels
     def enable_logging(self):
         self.logging = True
-        self.start = time.time()
 
     # Flushes any remaining records in the output channels
     # 'close' indicates whether we should also 'close' the channel (True)
@@ -401,6 +402,7 @@ class DataOutput(object):
         # Flush channels if timeout expired
         if not self.last_flush_time:  # Set the timer
             self.last_flush_time = time.time()
+            time.sleep(0.001)
         if self.flush_timeout >= 0:
             delay = time.time() - self.last_flush_time
             if delay >= self.flush_timeout:
@@ -472,6 +474,9 @@ class DataOutput(object):
     # Logs output rate
     def __log(self, batch_size=0, force=False):
         # Log throughput every N records
+        if not self.start:
+            self.start = time.time()
+            time.sleep(0.001)
         self.records += batch_size
         if self.records >= self.period or (
            force is True and self.records > 0):
