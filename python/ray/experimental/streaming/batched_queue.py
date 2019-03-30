@@ -145,12 +145,12 @@ class BatchedQueue(object):
         self.write_batch_offset += 1
         # Check for backpressure
         # with ray.profiling.profile("wait_for_reader"):
-        current_time = time.time()
+        #current_time = time.time()
         if self.task_based:
             self._wait_for_task_reader()
         else:
             self._wait_for_reader()
-        print("B", time.time() - current_time)
+        #print("B", time.time() - current_time)
 
     # Currently, the 'queue' size in both task- and queue-based execution is
     # estimated based on the number of unprocessed records
@@ -178,6 +178,7 @@ class BatchedQueue(object):
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
+            print("Backpressured")
             for task_id in finished_tasks:
                 self.records_sent -= self.records_per_task.pop(task_id)
 
@@ -204,6 +205,7 @@ class BatchedQueue(object):
                 time.sleep(0.01)
                 remote_offset = int(
                     internal_kv._internal_kv_get(self.read_ack_key))
+                print("Backpressured")
         self.cached_remote_offset = remote_offset
 
     def _read_next_batch(self):
