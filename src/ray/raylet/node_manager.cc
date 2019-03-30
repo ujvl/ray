@@ -75,7 +75,11 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client_->raylet_task_table(), gcs_client_->raylet_task_table(),
                      config.max_lineage_size, RayConfig::instance().lineage_stash_max_failures(),
-                     [](){}),
+                     [this](){
+                       io_service_.post([this]() {
+                         HandleFlushAllCompleted();
+                       });
+                     }),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_() {
@@ -423,6 +427,7 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
   // For any live actors that were on the dead node, broadcast a notification
   // about the actor's death
   // TODO(swang): This could be very slow if there are many actors.
+  bool actors_to_flush = false;
   for (const auto &actor_entry : actor_registry_) {
     if (actor_entry.second.GetNodeManagerId() == client_id &&
         actor_entry.second.GetState() == ActorState::ALIVE) {
@@ -434,12 +439,25 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
       // Try to reconstruct the actor immediately.
       reconstruction_policy_.ListenAndMaybeReconstruct(
           actor_entry.second.GetActorCreationDependency(), false);
+
+      // Record the dead actor's version at the time of the lineage_cache_.FlushAll call.
+      pending_actors_flushed_[actor_entry.first] = actor_entry.second.GetActorVersion();
+      actors_to_flush = true;
     }
   }
   lineage_cache_.HandleClientRemoved(client_id);
   // Notify the object directory that the client has been removed so that it
   // can remove it from any cached locations.
   object_directory_->HandleClientRemoved(client_id);
+
+  if (actors_to_flush) {
+    lineage_cache_.FlushAll();
+  }
+}
+
+void NodeManager::HandleFlushAllCompleted() {
+  RAY_LOG(DEBUG) << "FlushAllCompleted";
+  pending_actors_flushed_.clear();
 }
 
 void NodeManager::HeartbeatAdded(const ClientID &client_id,

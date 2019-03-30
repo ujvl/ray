@@ -117,6 +117,8 @@ class NodeManager {
   /// \return Void.
   void ClientRemoved(const ClientTableDataT &client_data);
 
+  void HandleFlushAllCompleted();
+
   /// Send heartbeats to the GCS.
   void Heartbeat();
 
@@ -492,6 +494,8 @@ class NodeManager {
   /// This map stores actor ID to the ID of the checkpoint that will be used to
   /// restore the actor.
   std::unordered_map<ActorID, ActorCheckpointID> checkpoint_id_to_restore_;
+
+  std::unordered_map<ActorID, int64_t> pending_actors_flushed_;
 };
 
 }  // namespace raylet
