@@ -5,6 +5,7 @@ from __future__ import print_function
 import logging
 import math
 import sys
+import time
 import uuid
 
 import networkx as nx
@@ -475,7 +476,7 @@ class Environment(object):
             if not self.config.task_based:
                 for actor_handle in actor_handles:
                     _ = actor_handle.start.remote()  # Start spinning actors
-        time.sleep(1)
+        time.sleep(1)  # Just wait a bit for the actors to start
         # Start sources
         for source_handle in source_handles:
             _ = source_handle.start.remote()
