@@ -227,13 +227,24 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size, int64_t max_failures)
+                           uint64_t max_lineage_size, int64_t max_failures,
+                           boost::asio::io_service *io_service,
+                           int gcs_delay_ms)
     : disabled_(max_failures == 0),
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
       max_lineage_size_(max_lineage_size),
-      max_failures_(max_failures) {}
+      max_failures_(max_failures),
+      io_service_(io_service),
+      gcs_delay_ms_(gcs_delay_ms) {
+  if (gcs_delay_ms_ > 0) {
+    // If a delay for the GCS was specified, then make sure that either the
+    // lineage stash is disabled, or an event loop to instantiate deadline
+    // timers was provided.
+    RAY_CHECK(disabled_ || io_service_ != nullptr);
+  }
+}
 
 /// A helper function to add some uncommitted lineage to the local cache.
 void LineageCache::AddUncommittedLineage(const TaskID &task_id,
@@ -432,11 +443,6 @@ void LineageCache::FlushTask(const TaskID &task_id) {
   RAY_CHECK(entry);
   RAY_CHECK(entry->GetStatus() == GcsStatus::UNCOMMITTED_READY);
 
-  gcs::raylet::TaskTable::WriteCallback task_callback = [this](
-      ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-    int version = data.task_execution_spec->version;
-    HandleEntryCommitted(id, version);
-  };
   auto task = lineage_.GetEntry(task_id);
   // TODO(swang): Make this better...
   flatbuffers::FlatBufferBuilder fbb;
@@ -445,8 +451,29 @@ void LineageCache::FlushTask(const TaskID &task_id) {
   auto task_data = std::make_shared<protocol::TaskT>();
   auto root = flatbuffers::GetRoot<protocol::Task>(fbb.GetBufferPointer());
   root->UnPackTo(task_data.get());
-  RAY_CHECK_OK(task_storage_.Add(task->TaskData().GetTaskSpecification().DriverId(),
-                                 task_id, task_data, task_callback));
+
+  if (io_service_ == nullptr) {
+    gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+      int version = data.task_execution_spec->version;
+      HandleEntryCommitted(id, version);
+    };
+    RAY_CHECK_OK(task_storage_.Add(task->TaskData().GetTaskSpecification().DriverId(),
+                                   task_id, task_data, task_callback));
+  } else {
+    RAY_LOG(DEBUG) << "XXX timer for " << gcs_delay_ms_ << "ms";
+    auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
+    auto timer = std::make_shared<boost::asio::deadline_timer>(*io_service_, gcs_delay);
+    const auto driver_id = task->TaskData().GetTaskSpecification().DriverId();
+    timer->async_wait([this, timer, driver_id, task_id, task_data](const boost::system::error_code &error) mutable {
+        gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+            ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+          int version = data.task_execution_spec->version;
+          HandleEntryCommitted(id, version);
+      };
+      RAY_CHECK_OK(task_storage_.Add(driver_id, task_id, task_data, task_callback));
+    });
+  }
 
   // We successfully wrote the task, so mark it as committing.
   // TODO(swang): Use a batched interface and write with all object entries.

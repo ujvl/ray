@@ -507,7 +507,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms, latency_file, checkpoint_interval):
+         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval):
     if record_latency and latency_file is None:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
                 data_size * 4 // 1e6,
@@ -521,6 +521,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": gcs_delay_ms,
+        "use_gcs_only": int(use_gcs_only),
         "lineage_stash_max_failures": 1,
     })
     plasma_store_memory_gb = 5
@@ -709,6 +710,9 @@ if __name__ == "__main__":
         default=-1,
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
     parser.add_argument(
+        '--gcs-only',
+        action='store_true')
+    parser.add_argument(
         '--checkpoint-interval',
         default=-1,
         type=int,
@@ -718,4 +722,5 @@ if __name__ == "__main__":
     main(args.redis_address, args.test_single_node, args.num_workers,
          args.size, args.num_iterations, args.check_results, args.dump,
          args.test_failure, args.record_latency, args.gcs_delay_ms,
+         args.gcs_only,
          args.latency_file, args.checkpoint_interval)

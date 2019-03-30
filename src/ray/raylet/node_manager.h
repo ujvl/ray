@@ -49,6 +49,7 @@ struct NodeManagerConfig {
   /// The path to the ray temp dir.
   std::string temp_dir;
   int gcs_delay_ms;
+  bool use_gcs_only;
 };
 
 class NodeManager {
@@ -177,6 +178,8 @@ class NodeManager {
   void SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                   bool forwarded = false,
                   bool push = false);
+  void _SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
+                             bool forwarded, bool push);
   /// Assign a task. The task is assumed to not be queued in local_queues_.
   ///
   /// \param task The task in question.
@@ -457,6 +460,7 @@ class NodeManager {
   /// The path to the ray temp dir.
   std::string temp_dir_;
   int gcs_delay_ms_;
+  bool use_gcs_only_;
   /// The timer used to get profiling information from the object manager and
   /// push it to the GCS.
   boost::asio::steady_timer object_manager_profile_timer_;

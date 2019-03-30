@@ -77,6 +77,7 @@ int main(int argc, char *argv[]) {
       RayConfig::instance().num_workers_per_process();
   node_manager_config.maximum_startup_concurrency = maximum_startup_concurrency;
   node_manager_config.gcs_delay_ms = RayConfig::instance().gcs_delay_ms();
+  node_manager_config.use_gcs_only = RayConfig::instance().use_gcs_only() > 0;
 
   if (!python_worker_command.empty()) {
     node_manager_config.worker_commands.emplace(
