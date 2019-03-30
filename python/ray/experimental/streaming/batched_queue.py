@@ -127,21 +127,17 @@ class BatchedQueue(object):
         if not self.write_buffer:
             return
         if self.task_based:  # Submit a new downstream task
-            current_time = time.time()
             obj_id = self.destination_actor.apply.remote(
                                 [self.write_buffer], self.channel_id)
             num_records = len(self.write_buffer)
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
-            print("P", time.time() - current_time)
         else:  # Flush batch to plasma
             # with ray.profiling.profile("flush_batch"):
-            current_time = time.time()
             batch_id = self._batch_id(self.write_batch_offset)
             ray.worker.global_worker.put_object(
                     ray.ObjectID(batch_id), self.write_buffer)
-            print("P", time.time() - current_time)
         # logger.debug("[writer] Flush batch {} offset {} size {}".format(
         #              self.write_batch_offset, self.write_item_offset,
         #              len(self.write_buffer)))
@@ -149,10 +145,12 @@ class BatchedQueue(object):
         self.write_batch_offset += 1
         # Check for backpressure
         # with ray.profiling.profile("wait_for_reader"):
+        current_time = time.time()
         if self.task_based:
             self._wait_for_task_reader()
         else:
             self._wait_for_reader()
+        print("B", time.time() - current_time)
 
     # Currently, the 'queue' size in both task- and queue-based execution is
     # estimated based on the number of unprocessed records
@@ -166,12 +164,10 @@ class BatchedQueue(object):
         if len(self.task_queue) <= self.max_size_batches:
             return
         # Check pending downstream tasks
-        current_time = time.time()
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
                 num_returns=len(self.task_queue),
                 timeout=0)
-        print("C", time.time() - current_time)
         for task_id in finished_tasks:
             self.records_sent -= self.records_per_task.pop(task_id)
         while self.records_sent > self.max_size:
@@ -182,7 +178,6 @@ class BatchedQueue(object):
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
-            print("B", time.time() - current_time)
             for task_id in finished_tasks:
                 self.records_sent -= self.records_per_task.pop(task_id)
 
@@ -192,16 +187,12 @@ class BatchedQueue(object):
             return
         if self.write_item_offset - self.cached_remote_offset <= self.max_size:
             return  # Hasn't reached max size
-        current_time = time.time()
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
-        print("C", time.time() - current_time)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
             while remote_offset is None:
                 time.sleep(0.01)
-                current_time = time.time()
                 remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
-                print("W", time.time() - current_time)
         # logger.debug("Remote offset: {}".format(int(remote_offset)))
         remote_offset = int(remote_offset)
         if self.write_item_offset - remote_offset > self.max_size:
@@ -211,10 +202,8 @@ class BatchedQueue(object):
             #         remote_offset, self.write_item_offset, self.max_size))
             while self.write_item_offset - remote_offset > self.max_size:
                 time.sleep(0.01)
-                current_time = time.time()
                 remote_offset = int(
                     internal_kv._internal_kv_get(self.read_ack_key))
-                print("B", time.time() - current_time)
         self.cached_remote_offset = remote_offset
 
     def _read_next_batch(self):
@@ -233,10 +222,8 @@ class BatchedQueue(object):
     # This is to cap queue size and simulate backpressure
     def _ack_reads(self, offset):
         if self.max_size > 0:
-            current_time = time.time()
             internal_kv._internal_kv_put(
                 self.read_ack_key, offset, overwrite=True)
-            print("A", time.time() - current_time)
 
     # This is to enable writing functionality in
     # case the queue is not created by the writer
