@@ -227,7 +227,8 @@ class LineageCache {
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
-               int64_t max_failures);
+               int64_t max_failures,
+               const std::function<void()> &flush_all_callback);
 
   void HandleClientRemoved(const ClientID &node_id);
 
@@ -305,6 +306,8 @@ class LineageCache {
   /// \return A const reference to the lineage.
   const Lineage &GetLineage() const;
 
+  void FlushAll();
+
   /// Returns debug string for class.
   ///
   /// \return string.
@@ -353,6 +356,10 @@ class LineageCache {
 
   std::unordered_set<TaskID> evicted_pool_;
   std::deque<TaskID> evicted_queue_;
+
+  std::unordered_map<TaskID, int64_t> flushed_task_versions_;
+  const std::function<void()> flush_all_callback_;
+
 };
 
 }  // namespace raylet

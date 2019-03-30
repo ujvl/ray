@@ -91,7 +91,10 @@ class LineageCacheTest : public ::testing::Test {
   LineageCacheTest()
       : max_lineage_size_(10),
         mock_gcs_(),
-        lineage_cache_(ClientID::from_random(), mock_gcs_, mock_gcs_, max_lineage_size_, -1) {
+        lineage_cache_(ClientID::from_random(), mock_gcs_, mock_gcs_, max_lineage_size_, -1, [this]() {
+            HandleFlushAllComplete();
+            }),
+        num_flush_alls_(0) {
     mock_gcs_.Subscribe([this](ray::gcs::AsyncGcsClient *client, const TaskID &task_id,
                                const ray::protocol::TaskT &data) {
       int version = data.task_execution_spec->version;
@@ -99,10 +102,15 @@ class LineageCacheTest : public ::testing::Test {
     });
   }
 
+  void HandleFlushAllComplete() {
+    num_flush_alls_++;
+  }
+
  protected:
   uint64_t max_lineage_size_;
   MockGcs mock_gcs_;
   LineageCache lineage_cache_;
+  int num_flush_alls_;
 };
 
 static inline Task ExampleTask(const std::vector<ObjectID> &arguments,
@@ -258,6 +266,95 @@ TEST_F(LineageCacheTest, TestWritebackOrder) {
   }
 
   ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+}
+
+TEST_F(LineageCacheTest, TestFlushAll) {
+  // Insert a chain of dependent tasks.
+  std::vector<Task> tasks;
+  InsertTaskChain(lineage_cache_, tasks, 3, std::vector<ObjectID>(), 1);
+  size_t num_tasks_flushed = tasks.size();
+  int64_t num_flush_alls = 0;
+
+  // Mark all tasks as ready. All tasks should be flushed.
+  for (const auto &task : tasks) {
+    ASSERT_TRUE(lineage_cache_.AddReadyTask(task));
+  }
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+
+  lineage_cache_.FlushAll();
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+
+  mock_gcs_.Flush();
+  num_flush_alls++;
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+  ASSERT_EQ(lineage_cache_.GetLineage().GetEntries().size(), 0);
+
+  // Test again, but with all tasks in UNCOMMITTED_WAITING.
+  tasks.clear();
+  InsertTaskChain(lineage_cache_, tasks, 3, std::vector<ObjectID>(), 1);
+  num_tasks_flushed = num_tasks_flushed + tasks.size();
+
+  lineage_cache_.FlushAll();
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+
+  mock_gcs_.Flush();
+  num_flush_alls++;
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+  ASSERT_EQ(lineage_cache_.GetLineage().GetEntries().size(), 0);
+
+  // Test again, but with a task whose version changes after the FlushAll call.
+  tasks.clear();
+  InsertTaskChain(lineage_cache_, tasks, 3, std::vector<ObjectID>(), 1);
+  num_tasks_flushed = num_tasks_flushed + tasks.size();
+
+  lineage_cache_.FlushAll();
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+
+  Task task(tasks[1]);
+  task.IncrementNumExecutions();
+  ASSERT_TRUE(lineage_cache_.AddWaitingTask(task, Lineage()));
+
+  mock_gcs_.Flush();
+  num_flush_alls++;
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+  ASSERT_EQ(lineage_cache_.GetLineage().GetEntries().size(), 2);
+  auto &uncommitted_task = lineage_cache_.GetTaskOrDie(task.GetTaskSpecification().TaskId());
+  ASSERT_EQ(uncommitted_task.GetTaskExecutionSpec().Version(), task.GetTaskExecutionSpec().Version());
+
+  ASSERT_TRUE(lineage_cache_.AddReadyTask(task));
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+  mock_gcs_.Flush();
+  ASSERT_EQ(lineage_cache_.GetLineage().GetEntries().size(), 0);
+
+  // Test again, but with a task whose version changes after the FlushAll call,
+  // followed by another FlushAll call. Because the FlushAll calls overlap, we
+  // should end up with 0 tasks at the end and only one call to the callback.
+  tasks.clear();
+  InsertTaskChain(lineage_cache_, tasks, 3, std::vector<ObjectID>(), 1);
+  num_tasks_flushed = num_tasks_flushed + tasks.size();
+
+  lineage_cache_.FlushAll();
+  ASSERT_EQ(mock_gcs_.TaskTable().size(), num_tasks_flushed);
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+
+  task = tasks[1];
+  task.IncrementNumExecutions();
+  ASSERT_TRUE(lineage_cache_.AddWaitingTask(task, Lineage()));
+  lineage_cache_.FlushAll();
+
+  mock_gcs_.Flush();
+  num_flush_alls++;
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
+  ASSERT_EQ(lineage_cache_.GetLineage().GetEntries().size(), 0);
+
+  // Test the empty case. When there are no tasks in the lineage cache, we
+  // should get the FlushAll callback immediately.
+  lineage_cache_.FlushAll();
+  num_flush_alls++;
+  ASSERT_EQ(num_flush_alls_, num_flush_alls);
 }
 
 TEST_F(LineageCacheTest, TestEvictChain) {

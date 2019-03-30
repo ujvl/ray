@@ -136,15 +136,18 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
   bool set = false;
   std::unordered_set<TaskID> old_parents;
   if (it != entries_.end()) {
-    if (it->second.SetStatus(status)) {
-      if (task.GetTaskExecutionSpec().Version() > it->second.TaskData().GetTaskExecutionSpec().Version()) {
-        // The task's spec version is greater, so record its old dependencies.
-        old_parents = it->second.GetParentTaskIds();
-        // SetStatus() would check if the new status is greater,
-        // if it succeeds, go ahead to update the task field.
-        it->second.UpdateTaskData(task, forwarded_to);
-        updated = true;
+    if (task.GetTaskExecutionSpec().Version() > it->second.TaskData().GetTaskExecutionSpec().Version()) {
+      // The task's spec version is greater, so record its old dependencies.
+      old_parents = it->second.GetParentTaskIds();
+      // The task version is newer, so update the task field.
+      it->second.UpdateTaskData(task, forwarded_to);
+      updated = true;
+      // Reset the task's status.
+      if (!it->second.SetStatus(status)) {
+        it->second.ResetStatus(status);
       }
+      set = true;
+    } else if (it->second.SetStatus(status)) {
       set = true;
     }
   } else {
@@ -227,13 +230,15 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size, int64_t max_failures)
+                           uint64_t max_lineage_size, int64_t max_failures,
+                           const std::function<void()> &flush_all_callback)
     : disabled_(max_failures == 0),
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
       max_lineage_size_(max_lineage_size),
-      max_failures_(max_failures) {}
+      max_failures_(max_failures),
+      flush_all_callback_(flush_all_callback) {}
 
 /// A helper function to add some uncommitted lineage to the local cache.
 void LineageCache::AddUncommittedLineage(const TaskID &task_id,
@@ -430,7 +435,7 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
 void LineageCache::FlushTask(const TaskID &task_id) {
   auto entry = lineage_.GetEntryMutable(task_id);
   RAY_CHECK(entry);
-  RAY_CHECK(entry->GetStatus() == GcsStatus::UNCOMMITTED_READY);
+  RAY_CHECK(entry->GetStatus() <= GcsStatus::UNCOMMITTED_READY);
 
   gcs::raylet::TaskTable::WriteCallback task_callback = [this](
       ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
@@ -519,7 +524,6 @@ void LineageCache::EvictTask(const TaskID &task_id) {
   for (const auto &child_id : children) {
     EvictTask(child_id);
   }
-
   return;
 }
 
@@ -530,6 +534,21 @@ void LineageCache::HandleEntryCommitted(const TaskID &task_id, int version) {
     // The task has already been evicted due to a previous commit notification.
     return;
   }
+
+  // If this task was part of a FlushAll call, then it is now safe to erase it
+  // since the task has been committed.
+  auto it = flushed_task_versions_.find(task_id);
+  if (it != flushed_task_versions_.end() && it->second <= version) {
+    // A task version greater than or equal to the version that we flushed
+    // during FlushAll has been committed.
+    flushed_task_versions_.erase(it);
+    if (flushed_task_versions_.empty()) {
+      // This was the last task we were waiting for after a call to FlushAll.
+      // Call the registered callback.
+      flush_all_callback_();
+    }
+  }
+
   // The committed task has a lower version than ours, so wait for more
   // notifications.
   if (version < entry->TaskData().GetTaskExecutionSpec().Version()) {
@@ -565,6 +584,38 @@ bool LineageCache::ContainsTask(const TaskID &task_id) const {
 const Lineage &LineageCache::GetLineage() const { return lineage_; }
 
 bool LineageCache::Disabled() const { return disabled_; }
+
+void LineageCache::FlushAll() {
+  size_t num_flushed = 0;
+  size_t num_listening_for = 0;
+  for (const auto &entry : lineage_.GetEntries()) {
+    // Flush all tasks that have state < COMMITTING.
+    if (entry.second.GetStatus() <= GcsStatus::UNCOMMITTED_READY) {
+      FlushTask(entry.first);
+      num_flushed++;
+    }
+
+    if (entry.second.GetStatus() <= GcsStatus::COMMITTING) {
+      // Add all tasks that we have not received a commit for yet to the set of
+      // flushed tasks. Once this set is empty, then we will call the
+      // registered flush_all_callback.
+      // NOTE: This might be inefficient if FlushAll is called many times and the
+      // flushed_task_versions_ set is never allowed to become empty.  This is because
+      // flushed_task_versions_ is an overestimate of the tasks that were flushed by
+      // previous calls to FlushAll.
+      flushed_task_versions_.insert({entry.first, entry.second.TaskData().GetTaskExecutionSpec().Version()});
+      num_listening_for++;
+    }
+  }
+
+  RAY_LOG(DEBUG) << "FlushAll flushed " << num_flushed << " tasks, listening for " << num_listening_for;
+
+  // There were no additional tasks to flush, so we can call the FlushAll
+  // callback immediately.
+  if (flushed_task_versions_.empty()) {
+    flush_all_callback_();
+  }
+}
 
 std::string LineageCache::DebugString() const {
   std::stringstream result;
