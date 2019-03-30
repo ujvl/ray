@@ -145,12 +145,10 @@ class BatchedQueue(object):
         self.write_batch_offset += 1
         # Check for backpressure
         # with ray.profiling.profile("wait_for_reader"):
-        #current_time = time.time()
         if self.task_based:
             self._wait_for_task_reader()
         else:
             self._wait_for_reader()
-        #print("B", time.time() - current_time)
 
     # Currently, the 'queue' size in both task- and queue-based execution is
     # estimated based on the number of unprocessed records
@@ -161,8 +159,11 @@ class BatchedQueue(object):
     # partially filled
     def _wait_for_task_reader(self):
         """Checks for backpressure by the downstream task-based reader."""
+        if self.max_size <= 0:  # Unlimited queue
+            return
         if len(self.task_queue) <= self.max_size_batches:
             return
+        # print("Queue size: ", sum(records for records in self.records_per_task.values()))
         # Check pending downstream tasks
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
@@ -188,6 +189,7 @@ class BatchedQueue(object):
             return
         if self.write_item_offset - self.cached_remote_offset <= self.max_size:
             return  # Hasn't reached max size
+        # print("Queue size: ", self.write_item_offset - self.cached_remote_offset)
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
