@@ -113,7 +113,7 @@ class PhysicalDataflow(object):
         if slots_to_add > 0:
             for _ in range(slots_to_add):
                 entry.append(None)
-        # local ids of operator instances are in 0..number_of_instances
+        # Local ids of operator instances are in 0..number_of_instances
         entry[instance_id] = handle
 
     # Adds operator metadata to the dictionary
@@ -463,14 +463,21 @@ class Environment(object):
         monitoring_actor = operator_instance.ProgressMonitor.remote(all_handles)
         self.physical_dataflow.monitoring_actor = monitoring_actor
         # Start spinning actors
+        source_handles = []
         for entry in self.physical_dataflow.actor_handles.items():
             operator_id, actor_handles = entry
             operator = self.physical_dataflow.operator_metadata[operator_id]
             operator_type = operator.type
             # In task-based execution only source actors are spinning
-            if (not self.config.task_based) or operator_type in source_types:
+            if operator_type in source_types:
+                source_handles.extend(actor_handles)
+                continue
+            if not self.config.task_based:
                 for actor_handle in actor_handles:
-                    _ = actor_handle.start.remote()  # Start spinning
+                    _ = actor_handle.start.remote()  # Start spinning actors
+        # Start sources
+        for source_handle in source_handles:
+            _ = source_handle.start.remote()
         # Update dictionary so that the user can lookup operators
         # using either an id or a name
         id_entries = self.physical_dataflow.actor_handles.items()

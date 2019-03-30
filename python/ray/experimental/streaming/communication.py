@@ -402,7 +402,6 @@ class DataOutput(object):
         # Flush channels if timeout expired
         if not self.last_flush_time:  # Set the timer
             self.last_flush_time = time.time()
-            time.sleep(0.001)
         if self.flush_timeout >= 0:
             delay = time.time() - self.last_flush_time
             if delay >= self.flush_timeout:
