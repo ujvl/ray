@@ -53,6 +53,7 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
       debug_dump_period_(config.debug_dump_period_ms),
       temp_dir_(config.temp_dir),
       gcs_delay_ms_(config.gcs_delay_ms),
+      use_gcs_only_(config.use_gcs_only),
       object_manager_profile_timer_(io_service),
       initial_config_(config),
       local_available_resources_(config.resource_config),
@@ -74,12 +75,14 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           gcs_client_->task_lease_table()),
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client_->raylet_task_table(), gcs_client_->raylet_task_table(),
-                     config.max_lineage_size, RayConfig::instance().lineage_stash_max_failures(),
+                     config.max_lineage_size, use_gcs_only_ ? 0 : RayConfig::instance().lineage_stash_max_failures(),
                      [this](){
                        io_service_.post([this]() {
                          HandleFlushAllCompleted();
                        });
-                     }),
+                     },
+                     &io_service_,
+                     gcs_delay_ms_),
       remote_clients_(),
       remote_server_connections_(),
       actor_registry_() {
@@ -1350,6 +1353,27 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded, bool push) {
+  if (!forwarded && use_gcs_only_) {
+    gcs::raylet::TaskTable::WriteCallback task_callback = [this, task, forwarded, push](
+        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+      _SubmitTask(task, Lineage(), forwarded, push);
+    };
+    if (gcs_delay_ms_ == 0) {
+      FlushTask(task, task_callback);
+    } else {
+      auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
+      auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
+      gcs_timer->async_wait([this, gcs_timer, task, task_callback](const boost::system::error_code &error) {
+        FlushTask(task, task_callback);
+      });
+    }
+  } else {
+    _SubmitTask(task, uncommitted_lineage, forwarded, push);
+  }
+}
+
+void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
+                             bool forwarded, bool push) {
   const TaskSpecification &spec = task.GetTaskSpecification();
   const TaskExecutionSpecification &exec_spec = task.GetTaskExecutionSpec();
   const TaskID &task_id = spec.TaskId();
@@ -1792,23 +1816,7 @@ bool NodeManager::AssignTask(const Task &task) {
     worker->SetTaskResourceIds(acquired_resources);
   }
 
-  if (gcs_delay_ms_ >= 0) {
-    gcs::raylet::TaskTable::WriteCallback task_callback = [this, worker, task](
-        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-      AssignTaskToWorker(task, worker);
-    };
-    if (gcs_delay_ms_ == 0) {
-      FlushTask(task, task_callback);
-    } else {
-      auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
-      auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
-      gcs_timer->async_wait([this, gcs_timer, task, task_callback](const boost::system::error_code &error) {
-        FlushTask(task, task_callback);
-      });
-    }
-  } else {
-    AssignTaskToWorker(task, worker);
-  }
+  AssignTaskToWorker(task, worker);
 
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment

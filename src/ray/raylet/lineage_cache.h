@@ -4,6 +4,8 @@
 #include <gtest/gtest_prod.h>
 #include <boost/optional.hpp>
 #include <deque>
+#include <boost/asio.hpp>
+#include <boost/asio/error.hpp>
 
 // clang-format off
 #include "ray/common/common_protocol.h"
@@ -228,7 +230,9 @@ class LineageCache {
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
                int64_t max_failures,
-               const std::function<void()> &flush_all_callback);
+               const std::function<void()> &flush_all_callback,
+               boost::asio::io_service *io_service,
+               int gcs_delay_ms);
 
   void HandleClientRemoved(const ClientID &node_id);
 
@@ -359,7 +363,8 @@ class LineageCache {
 
   std::unordered_map<TaskID, int64_t> flushed_task_versions_;
   const std::function<void()> flush_all_callback_;
-
+  boost::asio::io_service *io_service_;
+  int gcs_delay_ms_;
 };
 
 }  // namespace raylet

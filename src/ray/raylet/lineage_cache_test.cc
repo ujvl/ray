@@ -93,7 +93,9 @@ class LineageCacheTest : public ::testing::Test {
         mock_gcs_(),
         lineage_cache_(ClientID::from_random(), mock_gcs_, mock_gcs_, max_lineage_size_, -1, [this]() {
             HandleFlushAllComplete();
-            }),
+            },
+            /*io_service=*/nullptr,
+            0),
         num_flush_alls_(0) {
     mock_gcs_.Subscribe([this](ray::gcs::AsyncGcsClient *client, const TaskID &task_id,
                                const ray::protocol::TaskT &data) {
