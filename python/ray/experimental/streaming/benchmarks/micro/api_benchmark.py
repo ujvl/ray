@@ -124,8 +124,8 @@ class Source(object):
         # Do a first round to warm up
         if self.warm_up and self.total_count <= 100000:
             if self.total_count == 100000:
+                logger.info("Finished warmup.")
                 time.sleep(2)  # Wait a bit for the queues to drain
-            logger.info("Finished warmup.")
             return (-1,record)
         self.count += 1
         if self.count == self.period:
