@@ -133,6 +133,7 @@ class BatchedQueue(object):
             self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
         else:  # Flush batch to plasma
+            print("Flush batch: ",self.write_batch_offset)
             # with ray.profiling.profile("flush_batch"):
             batch_id = self._batch_id(self.write_batch_offset)
             ray.worker.global_worker.put_object(
@@ -162,7 +163,6 @@ class BatchedQueue(object):
             return
         if len(self.task_queue) <= self.max_size_batches:
             return
-        # print("Queue size: ", sum(records for records in self.records_per_task.values()))
         # Check pending downstream tasks
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
@@ -173,7 +173,6 @@ class BatchedQueue(object):
         while self.records_sent > self.max_size:
             # logger.debug("Waiting for ({},{}) to catch up".format(
             #              self.dst_operator_id, self.dst_instance_id))
-            current_time = time.time()
             finished_tasks, self.task_queue = ray.wait(
                     self.task_queue,
                     num_returns=len(self.task_queue),
@@ -188,7 +187,7 @@ class BatchedQueue(object):
             return
         if self.write_item_offset - self.cached_remote_offset <= self.max_size:
             return  # Hasn't reached max size
-        # print("Queue size: ", self.write_item_offset - self.cached_remote_offset)
+        print("Queue filled: ", time.time())
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")

@@ -145,7 +145,7 @@ class OperatorInstance(object):
     def logs(self):
         return (self.instance_id, self.input.rates,
                 self.output.rates)
-
+                
     # Starts the spinning actor (implemented by the subclasses)
     def start(self):  # Used in queue-based execution
         pass
