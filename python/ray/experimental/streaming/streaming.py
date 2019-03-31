@@ -464,19 +464,24 @@ class Environment(object):
         self.physical_dataflow.monitoring_actor = monitoring_actor
         # Start spinning actors
         source_handles = []
+        spinning_actor_handles = []
         for entry in self.physical_dataflow.actor_handles.items():
             operator_id, actor_handles = entry
             operator = self.physical_dataflow.operator_metadata[operator_id]
             operator_type = operator.type
-            # In task-based execution only source actors are spinning
+            # Keep source handles for now to start sources in the end
             if operator_type in source_types:
                 source_handles.extend(actor_handles)
                 continue
+            # In queue-based execution all actors are spinning
             if not self.config.task_based:
                 for actor_handle in actor_handles:
-                    _ = actor_handle.start.remote()  # Start spinning actors
-        time.sleep(1)  # Give a bit of time to the actors and...
-        #  ...start sources
+                    _ = actor_handle.start.remote()  # Start spinning actor
+                    spinning_actor_handles.append(actor_handle)
+        if not self.config.task_based:  # Wait until everybody spins
+            ray.get(monitoring_actor.start_signals.remote(
+                                                    spinning_actor_handles))
+        #  Start sources
         for source_handle in source_handles:
             _ = source_handle.start.remote()
         # Update dictionary so that the user can lookup operators

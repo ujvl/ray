@@ -149,7 +149,7 @@ def benchmark_queue(rounds, latency_filename,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
                         num_stages, max_reads_per_second=float("inf"),
-                        source_rate=float("inf")):
+                        source_rate=float("inf"), warm_up=False):
     assert num_stages >= 1
 
     first_queue = BatchedQueue(
@@ -172,7 +172,8 @@ def benchmark_queue(rounds, latency_filename,
                          RecordGenerator(rounds, record_type=record_type,
                                          record_size=record_size,
                                          sample_period=sample_period,
-                                         fixed_rate=source_rate),
+                                         fixed_rate=source_rate,
+                                         warm_up=warm_up),
                          max_reads_per_second,
                          log_latency)
     nodes.append(source)
@@ -241,8 +242,12 @@ def benchmark_queue(rounds, latency_filename,
 
 class RecordGenerator(object):
     def __init__(self, rounds, record_type="int",
-                 record_size=None, sample_period=1, fixed_rate=float("inf")):
+                 record_size=None, sample_period=1, fixed_rate=float("inf"),
+                 warm_up=False):
         assert rounds > 0
+        self.warm_up = warm_up
+        if self.warm_up:
+            rounds += 1
         self.total_elements = 100000 * rounds
         self.total_count = 0
         self.period = sample_period
@@ -285,6 +290,11 @@ class RecordGenerator(object):
         while (self.rate_count / (time.time() - self.start) >
                self.fixed_rate):
             time.sleep(0.01)
+        # Do a first round to warm up
+        if self.warm_up and self.total_count <= 100000:
+            if self.total_count == 100000:
+                logger.info("Finished warmup.")
+            return (-1,record)
         self.count += 1
         if self.count == self.period:
             self.count = 0
@@ -313,6 +323,7 @@ if __name__ == "__main__":
     num_stages = int(args.num_stages)
     max_reads_per_second = float(args.max_throughput)
     source_rate = float(args.max_source_rate)
+    warm_up = bool(args.warm_up)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -331,6 +342,7 @@ if __name__ == "__main__":
     logger.info("Background flush: {}".format(background_flush))
     logger.info("Max read throughput: {}".format(max_reads_per_second))
     logger.info("Source rate: {}".format(source_rate))
+    logger.info("Warm_up: {}".format(warm_up))
 
     # A record generator
     generator = RecordGenerator(rounds, record_type, record_size,
@@ -357,6 +369,7 @@ if __name__ == "__main__":
                         sample_period, max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush,
-                        num_stages, max_reads_per_second, source_rate)
+                        num_stages, max_reads_per_second, source_rate,
+                        warm_up)
     logger.info("Elapsed time: {}".format(time.time()-start))
     ray.shutdown()

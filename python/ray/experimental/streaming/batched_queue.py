@@ -176,7 +176,6 @@ class BatchedQueue(object):
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
-            print("Backpressured")
             for task_id in finished_tasks:
                 self.records_sent -= self.records_per_task.pop(task_id)
 

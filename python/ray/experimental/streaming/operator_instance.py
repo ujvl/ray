@@ -29,6 +29,10 @@ class ActorExit(signal.Signal):
     def __init__(self, value=None):
         self.value = value
 
+# Signal denoting that a streaming actor started spinning
+class ActorStart(signal.Signal):
+    def __init__(self, value=None):
+        self.value = value
 
 class OperatorInstance(object):
     """A streaming operator instance.
@@ -145,7 +149,7 @@ class OperatorInstance(object):
     def logs(self):
         return (self.instance_id, self.input.rates,
                 self.output.rates)
-                
+
     # Starts the spinning actor (implemented by the subclasses)
     def start(self):  # Used in queue-based execution
         pass
@@ -167,11 +171,12 @@ class ProgressMonitor(object):
     """
 
     def __init__(self,running_actors):
-        self.running_actors = running_actors
+        self.running_actors = running_actors  # Actor handles
+        self.start_signals = []
         self.exit_signals = []
         logger.debug("Running actors: {}".format(self.running_actors))
 
-    # Returns all ActorExit signals when the dataflow execution is over
+    # Returns when the dataflow execution is over
     def all_exit_signals(self):
         while True:
             # Block until the ActorExit signal has been
@@ -182,6 +187,16 @@ class ProgressMonitor(object):
             if len(self.exit_signals) == len(self.running_actors):
                 return
 
+    # Returns after receiving all ActorStart signals for a list of actors
+    def start_signals(self, actor_handles):
+        while True:
+            # Block until the ActorStart signal has been
+            # received from each actor in the given list
+            signals = signal.receive(actor_handles)
+            if len(signals) > 0:
+                self.start_signals.extend(signals)
+            if len(self.start_signals) == len(actor_handles):
+                return
 
 # A source actor that reads a text file line by line
 @ray.remote
@@ -241,6 +256,7 @@ class Map(OperatorInstance):
     # Applies the map to each record of the input stream(s)
     # and pushes resulting records to the output stream(s)
     def start(self):
+        signal.send(ActorStart(self.instance_id))
         while True:
             record = self.input._pull()
             if record is None:
@@ -287,6 +303,7 @@ class FlatMap(OperatorInstance):
     # Applies the splitter to the records of the input stream(s)
     # and pushes resulting records to the output stream(s)
     def start(self):
+        signal.send(ActorStart(self.instance_id))
         while True:
             record = self.input._pull()
             if record is None:
@@ -592,6 +609,7 @@ class Source(OperatorInstance):
 
     # Starts the source by calling get_next() repeatedly
     def start(self):
+        signal.send(ActorStart(self.instance_id))
         while True:
             record = self.source.get_next()
             if record is None:
@@ -613,6 +631,7 @@ class Sink(OperatorInstance):
 
     # Starts the sink by calling process() repeatedly
     def start(self):
+        signal.send(ActorStart(self.instance_id))
         while True:
             record = self.input._pull()
             if record is None:
