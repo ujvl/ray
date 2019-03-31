@@ -430,7 +430,6 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
   // For any live actors that were on the dead node, broadcast a notification
   // about the actor's death
   // TODO(swang): This could be very slow if there are many actors.
-  bool actors_to_flush = false;
   for (const auto &actor_entry : actor_registry_) {
     if (actor_entry.second.GetNodeManagerId() == client_id &&
         actor_entry.second.GetState() == ActorState::ALIVE) {
@@ -442,25 +441,35 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
       // Try to reconstruct the actor immediately.
       reconstruction_policy_.ListenAndMaybeReconstruct(
           actor_entry.second.GetActorCreationDependency(), false);
-
-      // Record the dead actor's version at the time of the lineage_cache_.FlushAll call.
-      pending_actors_flushed_[actor_entry.first] = actor_entry.second.GetActorVersion();
-      actors_to_flush = true;
     }
   }
   lineage_cache_.HandleClientRemoved(client_id);
   // Notify the object directory that the client has been removed so that it
   // can remove it from any cached locations.
   object_directory_->HandleClientRemoved(client_id);
-
-  if (actors_to_flush) {
-    lineage_cache_.FlushAll();
-  }
 }
 
 void NodeManager::HandleFlushAllCompleted() {
-  RAY_LOG(DEBUG) << "FlushAllCompleted";
-  pending_actors_flushed_.clear();
+  for (const auto &flush_request : pending_flush_requests_) {
+    RAY_LOG(INFO) << "XXX Sending FlushLineageReply for upstream actor " << flush_request.upstream_actor_id << " downstream actor " << flush_request.downstream_actor_id << " to node " << flush_request.upstream_node_id;
+    // Send the upstream actor's node a FlushLineageReply.
+    flatbuffers::FlatBufferBuilder fbb;
+    auto message = protocol::CreateFlushLineageRequest(fbb,
+        to_flatbuf(fbb, flush_request.upstream_actor_id),
+        0,
+        to_flatbuf(fbb, flush_request.downstream_actor_id),
+        to_flatbuf(fbb, client_id_));
+    fbb.Finish(message);
+
+    const auto it = remote_server_connections_.find(flush_request.upstream_node_id);
+    RAY_CHECK(it != remote_server_connections_.end());
+    it->second->WriteMessageAsync(
+        static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
+        fbb.GetBufferPointer(),
+        [this](ray::Status status) {
+          RAY_CHECK_OK(status);
+        });
+  }
 }
 
 void NodeManager::HeartbeatAdded(const ClientID &client_id,
@@ -2001,20 +2010,12 @@ void NodeManager::ProcessFlushLineageRequest(
     int64_t upstream_actor_version,
     const ActorID &downstream_actor_id,
     const ClientID &upstream_node_id) {
-  RAY_LOG(INFO) << "XXX Sending FlushLineageReply";
-  // Send the upstream actor's node a FlushLineageReply.
-  flatbuffers::FlatBufferBuilder fbb;
-  auto message = protocol::CreateFlushLineageRequest(fbb, to_flatbuf(fbb, upstream_actor_id), upstream_actor_version, to_flatbuf(fbb, downstream_actor_id), to_flatbuf(fbb, client_id_));
-  fbb.Finish(message);
+  auto downstream_actor = actor_registry_.find(downstream_actor_id);
+  RAY_CHECK(downstream_actor != actor_registry_.end());
+  RAY_CHECK(downstream_actor->second.GetDownstreamActorIds().empty()) << "TODO: Implement multiple simultaneous failures in a chain";
 
-  const auto it = remote_server_connections_.find(upstream_node_id);
-  RAY_CHECK(it != remote_server_connections_.end());
-  it->second->WriteMessageAsync(
-      static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
-      fbb.GetBufferPointer(),
-      [this](ray::Status status) {
-        RAY_CHECK_OK(status);
-      });
+  lineage_cache_.FlushAll();
+  pending_flush_requests_.push_back(PendingFlushAllRequest(upstream_actor_id, downstream_actor_id, upstream_node_id));
 }
 
 void NodeManager::ProcessFlushLineageReply(

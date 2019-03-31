@@ -515,7 +515,22 @@ class NodeManager {
   /// restore the actor.
   std::unordered_map<ActorID, ActorCheckpointID> checkpoint_id_to_restore_;
 
-  std::unordered_map<ActorID, int64_t> pending_actors_flushed_;
+  struct PendingFlushAllRequest {
+    PendingFlushAllRequest(
+    const ActorID &upstream_actor,
+    const ActorID &downstream_actor,
+    const ClientID &upstream_node)
+      : upstream_actor_id(upstream_actor),
+        downstream_actor_id(downstream_actor),
+        upstream_node_id(upstream_node) {}
+    const ActorID upstream_actor_id;
+    const ActorID downstream_actor_id;
+    const ClientID upstream_node_id;
+  };
+
+  // A list of {upstream actor ID, downstream actor ID} FlushLineageRequests
+  // whose FlushAll calls are pending.
+  std::vector<PendingFlushAllRequest> pending_flush_requests_;
   // For downstream actors whose locations we don't know yet. The value is the
   // local upstream actor that is recovering and its version number. Once the
   // location for the downstream actor is found, we will send a
