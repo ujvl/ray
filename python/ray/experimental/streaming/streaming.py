@@ -26,7 +26,6 @@ logger.setLevel("INFO")
 def _generate_uuid():
     return uuid.uuid4()
 
-
 # Rolling sum's logic
 def _sum(value_1, value_2):
     return value_1 + value_2
@@ -476,7 +475,8 @@ class Environment(object):
             if not self.config.task_based:
                 for actor_handle in actor_handles:
                     _ = actor_handle.start.remote()  # Start spinning actors
-        # Start sources
+        time.sleep(1)  # Give a bit of time to the actors and...
+        #  ...start sources
         for source_handle in source_handles:
             _ = source_handle.start.remote()
         # Update dictionary so that the user can lookup operators

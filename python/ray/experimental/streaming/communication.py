@@ -405,7 +405,6 @@ class DataOutput(object):
         if self.flush_timeout >= 0:
             delay = time.time() - self.last_flush_time
             if delay >= self.flush_timeout:
-                print("Batch flashed: ", time.time())
                 self._flush()  # Flush all output channels
                 self.last_flush_time = time.time()
 
