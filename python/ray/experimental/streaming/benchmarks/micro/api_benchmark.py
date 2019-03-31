@@ -8,6 +8,7 @@ try:
 except:
     from itertools import izip_longest as zip_longest
 import logging
+import numpy as np
 import random
 import string
 import sys
@@ -231,10 +232,18 @@ def write_log_files(all_parameters, latency_filename,
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
 
+def warmup_objectstore():
+    x = np.ones(10 ** 5)
+    for _ in range(100):
+        ray.put(x)
 
 if __name__ == "__main__":
     ray.init()
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
+
+    # Warmup plasma
+    logger.info("Warming plasma...")
+    warmup_objectstore()
 
     args = parser.parse_args()
 
