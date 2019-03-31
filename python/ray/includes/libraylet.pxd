@@ -71,7 +71,8 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
         CRayStatus FreeObjects(const c_vector[CObjectID] &object_ids,
                                c_bool local_only)
         CRayStatus PrepareActorCheckpoint(const CActorID &actor_id,
-                                          CActorCheckpointID &checkpoint_id)
+                                          CActorCheckpointID &checkpoint_id,
+                                          const c_vector[CActorID] &downstream_actor_ids)
         CRayStatus NotifyActorResumedFromCheckpoint(
             const CActorID &actor_id, const CActorCheckpointID &checkpoint_id)
         CLanguage GetLanguage() const

@@ -83,6 +83,23 @@ cdef VectorToObjectIDs(c_vector[CObjectID] object_ids):
     return result
 
 
+cdef c_vector[CActorID] ActorIDsToVector(actor_ids):
+    """A helper function that converts a Python list of object IDs to a vector.
+
+    Args:
+        object_ids (list): The Python list of object IDs.
+
+    Returns:
+        The output vector.
+    """
+    cdef:
+        ActorID actor_id
+        c_vector[CActorID] result
+    for actor_id in actor_ids:
+        result.push_back(actor_id.data)
+    return result
+
+
 def compute_put_id(TaskID task_id, int64_t put_index):
     if put_index < 1 or put_index > kMaxTaskPuts:
         raise ValueError("The range of 'put_index' should be [1, %d]"
@@ -357,10 +374,11 @@ cdef class RayletClient:
         cdef c_vector[CObjectID] free_ids = ObjectIDsToVector(object_ids)
         check_status(self.client.get().FreeObjects(free_ids, local_only))
 
-    def prepare_actor_checkpoint(self, ActorID actor_id):
+    def prepare_actor_checkpoint(self, ActorID actor_id, py_downstream_actor_ids):
         cdef CActorCheckpointID checkpoint_id
+        cdef c_vector[CActorID] downstream_actor_ids = ActorIDsToVector(py_downstream_actor_ids)
         check_status(self.client.get().PrepareActorCheckpoint(
-            actor_id.data, checkpoint_id))
+            actor_id.data, checkpoint_id, downstream_actor_ids))
         return ActorCheckpointID(checkpoint_id.binary())
 
     def notify_actor_resumed_from_checkpoint(self, ActorID actor_id,

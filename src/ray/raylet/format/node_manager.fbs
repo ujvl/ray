@@ -79,6 +79,8 @@ enum MessageType:int {
   NotifyActorResumedFromCheckpoint,
   // A node manager requests to connect to another node manager.
   ConnectClient,
+  FlushLineageRequest,
+  FlushLineageReply,
 }
 
 table TaskExecutionSpecification {
@@ -229,6 +231,8 @@ table FreeObjectsRequest {
 table PrepareActorCheckpointRequest {
   // ID of the actor.
   actor_id: string;
+  // IDs of any downstream actors, for nondeterministic operators.
+  downstream_actor_ids: [string];
 }
 
 table PrepareActorCheckpointReply {
@@ -246,4 +250,17 @@ table NotifyActorResumedFromCheckpoint {
 table ConnectClient {
   // ID of the connecting client.
   client_id: string;
+}
+
+table FlushLineageRequest {
+  // The actor that the sender is trying to recover.
+  actor_id: string;
+  // The version of the actor that the sender is trying to recover. The
+  // receiver must make sure that all lineage for previous versions of this
+  // actor have been flushed.
+  version: int;
+  // The downstream actor whose uncommitted lineage must be flushed.
+  downstream_actor_id: string;
+  // The ClientID of the sender.
+  node_id: string;
 }

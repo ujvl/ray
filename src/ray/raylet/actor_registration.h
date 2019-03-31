@@ -136,9 +136,15 @@ class ActorRegistration {
   /// \param task The task that just finished on the actor.
   /// \return A shared pointer to the generated checkpoint data.
   std::shared_ptr<ActorCheckpointDataT> GenerateCheckpointData(const ActorID &actor_id,
-                                                               const Task &task);
+                                                               const Task &task,
+                                                               const std::vector<ActorID> &downstream_actor_ids);
+
+  bool RemoveDownstreamActorId(const ActorID &downstream_actor_id);
+  const std::unordered_set<ActorID> &GetDownstreamActorIds();
 
  private:
+  void AddDownstreamActorId(const ActorID &downstream_actor_id);
+
   /// Information from the global actor table about this actor, including the
   /// node manager location.
   ActorTableDataT actor_table_data_;
@@ -168,6 +174,9 @@ class ActorRegistration {
   /// next task finishes. Such handles depend on D until their first tasks
   /// finish since D will be their first tasks' execution dependencies.
   std::unordered_map<ObjectID, int64_t> dummy_objects_;
+  // For nondeterministic actors that are currently recovering. The set of
+  // actors that we have not gotten a FlushLineageReply from yet.
+  std::unordered_set<ActorID> downstream_actor_ids_;
 };
 
 }  // namespace raylet

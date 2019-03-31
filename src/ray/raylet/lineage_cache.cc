@@ -466,7 +466,6 @@ void LineageCache::FlushTask(const TaskID &task_id) {
     RAY_CHECK_OK(task_storage_.Add(task->TaskData().GetTaskSpecification().DriverId(),
                                    task_id, task_data, task_callback));
   } else {
-    RAY_LOG(DEBUG) << "XXX timer for " << gcs_delay_ms_ << "ms";
     auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
     auto timer = std::make_shared<boost::asio::deadline_timer>(*io_service_, gcs_delay);
     const auto driver_id = task->TaskData().GetTaskSpecification().DriverId();

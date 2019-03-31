@@ -198,6 +198,20 @@ class NodeManager {
   ///
   /// \param task The actor creation task that created the actor.
   ActorTableDataT CreateActorTableDataFromCreationTask(const Task &task);
+  void SendFlushLineageRequest(const ActorID &actor_id, int64_t actor_version, const ActorID &downstream_actor_id);
+  void ProcessFlushLineageRequest(
+      const ActorID &upstream_actor_id,
+      int64_t upstream_actor_version,
+      const ActorID &downstream_actor_id,
+      const ClientID &upstream_node_id);
+  void ProcessFlushLineageReply(
+      const ActorID &upstream_actor_id,
+      int64_t upstream_actor_version,
+      const ActorID &downstream_actor_id,
+      const ClientID &upstream_node_id);
+  void ResumeActorCheckpoint(const ActorID &actor_id,
+                             const ActorCheckpointDataT &checkpoint_data,
+                             const ActorTableDataT &new_actor_data);
   /// Handle a worker finishing an assigned actor task or actor creation task.
   /// \param worker The worker that finished the task.
   /// \param task The actor task or actor creationt ask.
@@ -300,6 +314,8 @@ class NodeManager {
   /// \return Void.
   void HandleActorStateTransition(const ActorID &actor_id,
                                   ActorRegistration &&actor_registration);
+
+  void SubmitWaitingForActorCreationTasks(const ActorID &actor_id);
 
   /// Publish an actor's state transition to all other nodes.
   ///
@@ -500,6 +516,11 @@ class NodeManager {
   std::unordered_map<ActorID, ActorCheckpointID> checkpoint_id_to_restore_;
 
   std::unordered_map<ActorID, int64_t> pending_actors_flushed_;
+  // For downstream actors whose locations we don't know yet. The value is the
+  // local upstream actor that is recovering and its version number. Once the
+  // location for the downstream actor is found, we will send a
+  // FlushLineageRequest on behalf of the upstream actor.
+  std::unordered_map<ActorID, std::vector<std::pair<ActorID, int64_t>>> pending_downstream_actors_;
 };
 
 }  // namespace raylet

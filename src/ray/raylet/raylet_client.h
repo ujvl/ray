@@ -155,7 +155,8 @@ class RayletClient {
   /// \param checkpoint_id ID of the new checkpoint (output parameter).
   /// \return ray::Status.
   ray::Status PrepareActorCheckpoint(const ActorID &actor_id,
-                                     ActorCheckpointID &checkpoint_id);
+                                     ActorCheckpointID &checkpoint_id,
+                                     std::vector<ActorID> &downstream_actor_ids);
 
   /// Notify raylet backend that an actor was resumed from a checkpoint.
   ///

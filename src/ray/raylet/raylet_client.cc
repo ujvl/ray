@@ -364,10 +364,14 @@ ray::Status RayletClient::FreeObjects(const std::vector<ray::ObjectID> &object_i
 }
 
 ray::Status RayletClient::PrepareActorCheckpoint(const ActorID &actor_id,
-                                                 ActorCheckpointID &checkpoint_id) {
+                                                 ActorCheckpointID &checkpoint_id,
+                                                 std::vector<ActorID> &downstream_actor_ids) {
   flatbuffers::FlatBufferBuilder fbb;
   auto message =
-      ray::protocol::CreatePrepareActorCheckpointRequest(fbb, to_flatbuf(fbb, actor_id));
+      ray::protocol::CreatePrepareActorCheckpointRequest(
+          fbb,
+          to_flatbuf(fbb, actor_id),
+          to_flatbuf(fbb, downstream_actor_ids));
   fbb.Finish(message);
 
   std::unique_ptr<uint8_t[]> reply;

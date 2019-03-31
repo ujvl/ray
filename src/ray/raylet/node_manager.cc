@@ -536,6 +536,40 @@ void NodeManager::PublishActorStateTransition(
       JobID::nil(), actor_id, actor_notification, nullptr, failure_callback, log_length));
 }
 
+void NodeManager::SubmitWaitingForActorCreationTasks(const ActorID &actor_id) {
+  // The actor's location is now known. Dequeue any methods that were
+  // submitted before the actor's location was known.
+  // (See design_docs/task_states.rst for the state transition diagram.)
+  const auto &methods = local_queues_.GetTasks(TaskState::WAITING_FOR_ACTOR_CREATION);
+  std::unordered_set<TaskID> created_actor_method_ids;
+  for (const auto &method : methods) {
+    if (method.GetTaskSpecification().ActorId() == actor_id) {
+      created_actor_method_ids.insert(method.GetTaskSpecification().TaskId());
+    }
+  }
+  // Resubmit the methods that were submitted before the actor's location was
+  // known.
+  auto created_actor_methods = local_queues_.RemoveTasks(created_actor_method_ids);
+  for (const auto &method : created_actor_methods) {
+    if (!lineage_cache_.RemoveWaitingTask(method.GetTaskSpecification().TaskId())) {
+      RAY_LOG(WARNING) << "Task " << method.GetTaskSpecification().TaskId()
+                       << " already removed from the lineage cache. This is most "
+                          "likely due to reconstruction.";
+    }
+    // Maintain the invariant that if a task is in the
+    // MethodsWaitingForActorCreation queue, then it is subscribed to its
+    // respective actor creation task. Since the actor location is now known,
+    // we can remove the task from the queue and forget its dependency on the
+    // actor creation task.
+    RAY_CHECK(task_dependency_manager_.UnsubscribeGetDependencies(
+        method.GetTaskSpecification().TaskId()));
+    // The task's uncommitted lineage was already added to the local lineage
+    // cache upon the initial submission, so it's okay to resubmit it with an
+    // empty lineage this time.
+    SubmitTask(method, Lineage());
+  }
+}
+
 void NodeManager::HandleActorStateTransition(const ActorID &actor_id,
                                              ActorRegistration &&actor_registration) {
   // Update local registry.
@@ -569,36 +603,19 @@ void NodeManager::HandleActorStateTransition(const ActorID &actor_id,
   if (actor_registration.GetState() == ActorState::ALIVE) {
     // The actor is live, so stop listening for the actor's creation.
     reconstruction_policy_.Cancel(actor_registration.GetActorCreationDependency());
-    // The actor's location is now known. Dequeue any methods that were
-    // submitted before the actor's location was known.
-    // (See design_docs/task_states.rst for the state transition diagram.)
-    const auto &methods = local_queues_.GetTasks(TaskState::WAITING_FOR_ACTOR_CREATION);
-    std::unordered_set<TaskID> created_actor_method_ids;
-    for (const auto &method : methods) {
-      if (method.GetTaskSpecification().ActorId() == actor_id) {
-        created_actor_method_ids.insert(method.GetTaskSpecification().TaskId());
-      }
+    // Only move the tasks from WAITING_FOR_ACTOR_CREATION if the actor has
+    // received FlushLineageReply messages from all downstream actors.
+    // TODO: If we have not received all replies yet, call this method once we
+    // receive the last reply.
+    if (actor_registration.GetDownstreamActorIds().empty()) {
+      SubmitWaitingForActorCreationTasks(actor_id);
     }
-    // Resubmit the methods that were submitted before the actor's location was
-    // known.
-    auto created_actor_methods = local_queues_.RemoveTasks(created_actor_method_ids);
-    for (const auto &method : created_actor_methods) {
-      if (!lineage_cache_.RemoveWaitingTask(method.GetTaskSpecification().TaskId())) {
-        RAY_LOG(WARNING) << "Task " << method.GetTaskSpecification().TaskId()
-                         << " already removed from the lineage cache. This is most "
-                            "likely due to reconstruction.";
+
+    auto it = pending_downstream_actors_.find(actor_id);
+    if (it != pending_downstream_actors_.end()) {
+      for (const auto &upstream_actor : it->second) {
+        SendFlushLineageRequest(upstream_actor.first, upstream_actor.second, actor_id);
       }
-      // Maintain the invariant that if a task is in the
-      // MethodsWaitingForActorCreation queue, then it is subscribed to its
-      // respective actor creation task. Since the actor location is now known,
-      // we can remove the task from the queue and forget its dependency on the
-      // actor creation task.
-      RAY_CHECK(task_dependency_manager_.UnsubscribeGetDependencies(
-          method.GetTaskSpecification().TaskId()));
-      // The task's uncommitted lineage was already added to the local lineage
-      // cache upon the initial submission, so it's okay to resubmit it with an
-      // empty lineage this time.
-      SubmitTask(method, Lineage());
     }
   } else if (actor_registration.GetState() == ActorState::DEAD) {
     // The actor is dead, so stop listening for the actor's creation.
@@ -1072,6 +1089,7 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
   auto message =
       flatbuffers::GetRoot<protocol::PrepareActorCheckpointRequest>(message_data);
   ActorID actor_id = from_flatbuf(*message->actor_id());
+  const auto downstream_actor_ids = from_flatbuf(*message->downstream_actor_ids());
   RAY_LOG(DEBUG) << "Preparing checkpoint for actor " << actor_id;
   const auto &actor_entry = actor_registry_.find(actor_id);
   RAY_CHECK(actor_entry != actor_registry_.end());
@@ -1085,7 +1103,7 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
   // Generate checkpoint id and data.
   ActorCheckpointID checkpoint_id = UniqueID::from_random();
   auto checkpoint_data =
-      actor_entry->second.GenerateCheckpointData(actor_entry->first, task);
+      actor_entry->second.GenerateCheckpointData(actor_entry->first, task, downstream_actor_ids);
 
   // Write checkpoint data to GCS.
   RAY_CHECK_OK(gcs_client_->actor_checkpoint_table().Add(
@@ -1152,6 +1170,22 @@ void NodeManager::ProcessNodeManagerMessage(TcpClientConnection &node_manager_cl
                    << " on node " << gcs_client_->client_table().GetLocalClientId()
                    << " spillback=" << task.GetTaskExecutionSpec().NumForwards();
     SubmitTask(task, uncommitted_lineage, /* forwarded = */ true, /*push=*/message->push());
+  } break;
+  case protocol::MessageType::FlushLineageRequest: {
+    auto message = flatbuffers::GetRoot<protocol::FlushLineageRequest>(message_data);
+    const ActorID upstream_actor_id = from_flatbuf(*message->actor_id());
+    const int64_t upstream_actor_version = message->version();
+    const ActorID downstream_actor_id = from_flatbuf(*message->downstream_actor_id());
+    const ClientID upstream_node_id = from_flatbuf(*message->node_id());
+    ProcessFlushLineageRequest(upstream_actor_id, upstream_actor_version, downstream_actor_id, upstream_node_id);
+  } break;
+  case protocol::MessageType::FlushLineageReply: {
+    auto message = flatbuffers::GetRoot<protocol::FlushLineageRequest>(message_data);
+    const ActorID upstream_actor_id = from_flatbuf(*message->actor_id());
+    const int64_t upstream_actor_version = message->version();
+    const ActorID downstream_actor_id = from_flatbuf(*message->downstream_actor_id());
+    const ClientID upstream_node_id = from_flatbuf(*message->node_id());
+    ProcessFlushLineageReply(upstream_actor_id, upstream_actor_version, downstream_actor_id, upstream_node_id);
   } break;
   case protocol::MessageType::DisconnectClient: {
     // TODO(rkn): We need to do some cleanup here.
@@ -1445,7 +1479,16 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
           } else {
             // The task has not yet been executed. Queue the task for local
             // execution, bypassing placement.
-            EnqueuePlaceableTask(task, push);
+            if (actor_entry->second.GetDownstreamActorIds().empty()) {
+              // The actor is fully recovered.
+              EnqueuePlaceableTask(task, push);
+            } else {
+              // The actor is still waiting for FlushLineageReply messages from
+              // downstream actors. Queue it in WAITING_FOR_ACTOR_CREATION so
+              // that we do not resubmit its lineage yet.
+              local_queues_.QueueTasks({task}, TaskState::WAITING_FOR_ACTOR_CREATION);
+              task_dependency_manager_.TaskPending(task);
+            }
           }
         } else {
           // The actor is remote. Forward the task to the node manager that owns
@@ -1910,6 +1953,112 @@ ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &ta
   return new_actor_data;
 }
 
+void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor_version, const ActorID &downstream_actor_id) {
+  RAY_LOG(INFO) << "XXX SendFlushLineageRequest";
+  auto actor_entry = actor_registry_.find(downstream_actor_id);
+  if (actor_entry == actor_registry_.end() || actor_entry->second.GetState() != ActorState::ALIVE) {
+    if (actor_entry == actor_registry_.end()) {
+      // We do not yet have a location for the downstream actor. Look it up.
+      auto lookup_callback = [this](gcs::AsyncGcsClient *client,
+                                    const ActorID &actor_id,
+                                    const std::vector<ActorTableDataT> &data) {
+        if (!data.empty()) {
+          // The actor has been created. We only need the last entry, because
+          // it represents the latest state of this actor.
+          HandleActorStateTransition(actor_id, ActorRegistration(data.back()));
+        }
+      };
+      RAY_CHECK_OK(gcs_client_->actor_table().Lookup(JobID::nil(), downstream_actor_id,
+                                                     lookup_callback));
+    }
+    // Register a callback. Once the actor's location has been registered, then
+    // recall this method.
+    pending_downstream_actors_[downstream_actor_id].push_back({actor_id, actor_version});
+    return;
+  }
+
+  RAY_LOG(INFO) << "XXX actually sending SendFlushLineageRequest";
+  // Send the downstream actor's node a FlushLineageRequest.
+  const ClientID client_id = actor_entry->second.GetNodeManagerId();
+  // TODO: This check is too strong. The downstream actor may be on the same node.
+  RAY_CHECK(client_id != client_id_) << "Implement FlushLineageRequest for local downstream actors";
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = protocol::CreateFlushLineageRequest(fbb, to_flatbuf(fbb, actor_id), actor_version, to_flatbuf(fbb, downstream_actor_id), to_flatbuf(fbb, client_id_));
+  fbb.Finish(message);
+
+  const auto it = remote_server_connections_.find(client_id);
+  RAY_CHECK(it != remote_server_connections_.end());
+  it->second->WriteMessageAsync(
+      static_cast<int64_t>(protocol::MessageType::FlushLineageRequest), fbb.GetSize(),
+      fbb.GetBufferPointer(),
+      [this](ray::Status status) {
+        RAY_CHECK_OK(status);
+      });
+}
+
+void NodeManager::ProcessFlushLineageRequest(
+    const ActorID &upstream_actor_id,
+    int64_t upstream_actor_version,
+    const ActorID &downstream_actor_id,
+    const ClientID &upstream_node_id) {
+  RAY_LOG(INFO) << "XXX Sending FlushLineageReply";
+  // Send the upstream actor's node a FlushLineageReply.
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = protocol::CreateFlushLineageRequest(fbb, to_flatbuf(fbb, upstream_actor_id), upstream_actor_version, to_flatbuf(fbb, downstream_actor_id), to_flatbuf(fbb, client_id_));
+  fbb.Finish(message);
+
+  const auto it = remote_server_connections_.find(upstream_node_id);
+  RAY_CHECK(it != remote_server_connections_.end());
+  it->second->WriteMessageAsync(
+      static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
+      fbb.GetBufferPointer(),
+      [this](ray::Status status) {
+        RAY_CHECK_OK(status);
+      });
+}
+
+void NodeManager::ProcessFlushLineageReply(
+    const ActorID &upstream_actor_id,
+    int64_t upstream_actor_version,
+    const ActorID &downstream_actor_id,
+    const ClientID &upstream_node_id) {
+  auto it = actor_registry_.find(upstream_actor_id);
+  RAY_CHECK(it != actor_registry_.end());
+  RAY_CHECK(it->second.GetState() == ActorState::ALIVE);
+  bool ready = it->second.RemoveDownstreamActorId(downstream_actor_id);
+  if (ready) {
+    // We've received FlushLineageReply messages from all downstream actors. We
+    // can now unblock execution.
+    SubmitWaitingForActorCreationTasks(upstream_actor_id);
+  }
+}
+
+void NodeManager::ResumeActorCheckpoint(const ActorID &actor_id,
+                                        const ActorCheckpointDataT &checkpoint_data,
+                                        const ActorTableDataT &new_actor_data) {
+  ActorRegistration actor_registration =
+       ActorRegistration(new_actor_data, checkpoint_data);
+
+  int64_t actor_version = actor_registration.GetActorVersion();
+  for (const auto &downstream_actor_id : actor_registration.GetDownstreamActorIds()) {
+    SendFlushLineageRequest(actor_id, actor_version, downstream_actor_id);
+  }
+
+   // Mark the unreleased dummy objects in the checkpoint frontier as local.
+   for (const auto &entry : actor_registration.GetDummyObjects()) {
+     HandleObjectLocal(entry.first);
+   }
+   HandleActorStateTransition(actor_id, std::move(actor_registration));
+   PublishActorStateTransition(
+       actor_id, new_actor_data,
+       /*failure_callback=*/
+       [](gcs::AsyncGcsClient *client, const ActorID &id,
+          const ActorTableDataT &data) {
+         // Only one node at a time should succeed at creating the actor.
+         RAY_LOG(FATAL) << "Failed to update state to ALIVE for actor " << id;
+       });
+}
+
 void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
   ActorID actor_id;
   ActorHandleID actor_handle_id;
@@ -1943,23 +2092,9 @@ void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
           [this, actor_id, new_actor_data](ray::gcs::AsyncGcsClient *client,
                                            const UniqueID &checkpoint_id,
                                            const ActorCheckpointDataT &checkpoint_data) {
-            RAY_LOG(INFO) << "Restoring registration for actor " << actor_id
-                          << " from checkpoint " << checkpoint_id;
-            ActorRegistration actor_registration =
-                ActorRegistration(new_actor_data, checkpoint_data);
-            // Mark the unreleased dummy objects in the checkpoint frontier as local.
-            for (const auto &entry : actor_registration.GetDummyObjects()) {
-              HandleObjectLocal(entry.first);
-            }
-            HandleActorStateTransition(actor_id, std::move(actor_registration));
-            PublishActorStateTransition(
-                actor_id, new_actor_data,
-                /*failure_callback=*/
-                [](gcs::AsyncGcsClient *client, const ActorID &id,
-                   const ActorTableDataT &data) {
-                  // Only one node at a time should succeed at creating the actor.
-                  RAY_LOG(FATAL) << "Failed to update state to ALIVE for actor " << id;
-                });
+           RAY_LOG(INFO) << "Restoring registration for actor " << actor_id
+                         << " from checkpoint " << checkpoint_id;
+            ResumeActorCheckpoint(actor_id, checkpoint_data, new_actor_data);
           },
           [actor_id](ray::gcs::AsyncGcsClient *client, const UniqueID &checkpoint_id) {
             RAY_LOG(FATAL) << "Couldn't find checkpoint " << checkpoint_id

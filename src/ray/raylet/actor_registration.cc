@@ -28,6 +28,11 @@ ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data,
     auto dummy = ObjectID::from_binary(checkpoint_data.unreleased_dummy_objects[i]);
     dummy_objects_[dummy] = checkpoint_data.num_dummy_object_dependencies[i];
   }
+
+  for (const auto &downstream_actor_id_string : checkpoint_data.downstream_actor_ids) {
+    const ActorID downstream_actor_id = ActorID::from_binary(downstream_actor_id_string);
+    AddDownstreamActorId(downstream_actor_id);
+  }
 }
 
 const ClientID ActorRegistration::GetNodeManagerId() const {
@@ -114,7 +119,8 @@ void ActorRegistration::AddHandle(const ActorHandleID &handle_id,
 int ActorRegistration::NumHandles() const { return frontier_.size(); }
 
 std::shared_ptr<ActorCheckpointDataT> ActorRegistration::GenerateCheckpointData(
-    const ActorID &actor_id, const Task &task) {
+    const ActorID &actor_id, const Task &task,
+    const std::vector<ActorID> &downstream_actor_ids) {
   const auto actor_handle_id = task.GetTaskSpecification().ActorHandleId();
   const auto dummy_object = task.GetTaskSpecification().ActorDummyObject();
   // Make a copy of the actor registration, and extend its frontier to include
@@ -139,7 +145,23 @@ std::shared_ptr<ActorCheckpointDataT> ActorRegistration::GenerateCheckpointData(
     checkpoint_data->unreleased_dummy_objects.push_back(entry.first.binary());
     checkpoint_data->num_dummy_object_dependencies.push_back(entry.second);
   }
+  for (const auto &downstream_actor_id : downstream_actor_ids) {
+    checkpoint_data->downstream_actor_ids.push_back(downstream_actor_id.binary());
+  }
   return checkpoint_data;
+}
+
+void ActorRegistration::AddDownstreamActorId(const ActorID &downstream_actor_id) {
+  downstream_actor_ids_.insert(downstream_actor_id);
+}
+
+bool ActorRegistration::RemoveDownstreamActorId(const ActorID &downstream_actor_id) {
+  RAY_CHECK(downstream_actor_ids_.erase(downstream_actor_id) > 0);
+  return downstream_actor_ids_.empty();
+}
+
+const std::unordered_set<ActorID> &ActorRegistration::GetDownstreamActorIds() {
+  return downstream_actor_ids_;
 }
 
 }  // namespace raylet

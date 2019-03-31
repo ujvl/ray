@@ -37,6 +37,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
     def __init__(self, handle):
         self.handle = handle
         self.iterations = 0
+        self._ray_downstream_actors = [handle._ray_actor_id]
 
     def push(self, record):
         done = self.handle.push.remote(record)
