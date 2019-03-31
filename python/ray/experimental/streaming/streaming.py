@@ -476,7 +476,6 @@ class Environment(object):
             if not self.config.task_based:
                 for actor_handle in actor_handles:
                     _ = actor_handle.start.remote()  # Start spinning actors
-        time.sleep(5)  # Just wait a bit for the actors to start
         # Start sources
         for source_handle in source_handles:
             _ = source_handle.start.remote()
