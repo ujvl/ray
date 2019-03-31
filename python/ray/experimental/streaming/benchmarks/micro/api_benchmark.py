@@ -25,6 +25,7 @@ logger.setLevel("DEBUG")
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
+# Dataflow-related parameters
 parser.add_argument("--num-stages", default=2,
                     help="the number of stages in the chain")
 parser.add_argument("--task-based", default=False,
@@ -48,6 +49,12 @@ parser.add_argument("--record-size", default=10,
 parser.add_argument("--partitioning", default = "round_robin",
                     choices = ["shuffle","round_robin","broadcast"],
                     help="whether to shuffle or balance after each stage")
+parser.add_argument("--max-source-rate", default="inf",
+                    help="maximum source output rate (records/s)")
+parser.add_argument("--warm-up", default=False,
+                    action='store_true',
+                    help="whether to use a first round of data to warmup")
+# Queue-related parameters
 parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
@@ -60,15 +67,16 @@ parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (records/s)")
-parser.add_argument("--max-source-rate", default="inf",
-                    help="maximum source output rate (records/s)")
 
 # A custom source that periodically assigns timestamps to records
 class Source(object):
     def __init__(self, rounds, record_type="int",
                  record_size=None, sample_period=1,
-                 fixed_rate=float("inf")):
+                 fixed_rate=float("inf"), warm_up=False):
         assert rounds > 0
+        self.warm_up = warm_up
+        if self.warm_up:
+            rounds += 1
         self.total_elements = 100000 * rounds
         self.total_count = 0
         self.period = sample_period
@@ -80,6 +88,7 @@ class Source(object):
         self.record_type = record_type
         self.record_size = record_size
         self.record = -1
+
         # Set the right function
         if self.record_type == "int":
             self.__get_next_record = self.__get_next_int
@@ -112,8 +121,12 @@ class Source(object):
         while (self.rate_count / (time.time() - self.start) >
                self.fixed_rate):
             time.sleep(0.01)
+        # Do a first round to warm up
+        if self.warm_up and self.total_count <= 100000:
+            if self.total_count == 100000:
+                time.sleep(2)  # Wait a bit for the queues to drain
+            return (-1,record)
         self.count += 1
-        # print(self.total_count)
         if self.count == self.period:
             self.count = 0
             return (time.time(),record)  # Assign the generation timestamp
@@ -152,7 +165,8 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
-                            dump_filename, task_based, source_rate):
+                            dump_filename, task_based, source_rate,
+                            warm_up):
     assert num_stages >= 0, (num_stages)
     # Create streaming environment, construct and run dataflow
     env = Environment()
@@ -162,7 +176,8 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     if task_based:
         env.enable_tasks()
     stream = env.source(Source(rounds, record_type,
-                                record_size, sample_period, source_rate),
+                                record_size, sample_period, source_rate,
+                                warm_up),
                                 name="source")
     if partitioning == "shuffle":
         stream = stream.shuffle()
@@ -232,18 +247,10 @@ def write_log_files(all_parameters, latency_filename,
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
 
-def warmup_objectstore():
-    x = np.ones(10 ** 5)
-    for _ in range(100):
-        ray.put(x)
 
 if __name__ == "__main__":
     ray.init()
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
-    # Warmup plasma
-    logger.info("Warming plasma...")
-    warmup_objectstore()
 
     args = parser.parse_args()
 
@@ -264,6 +271,7 @@ if __name__ == "__main__":
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
     source_rate = float(args.max_source_rate)
+    warm_up = bool(args.warm_up)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
@@ -284,6 +292,7 @@ if __name__ == "__main__":
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
     logger.info("Source rate: {}".format(source_rate))
+    logger.info("Warm_up: {}".format(warm_up))
 
     # Estimate the ideal throughput
     source = Source(rounds, record_type, record_size,
@@ -306,5 +315,6 @@ if __name__ == "__main__":
                             partitioning, record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
-                            dump_filename, task_based, source_rate)
+                            dump_filename, task_based, source_rate,
+                            warm_up)
     ray.shutdown()

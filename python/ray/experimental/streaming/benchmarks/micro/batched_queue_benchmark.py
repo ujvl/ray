@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO)
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
+# Dataflow-related parameters
 parser.add_argument("--num-stages", default=1,
                     help="the number of queues in the chain")
 parser.add_argument("--record-type", default="int",
@@ -32,6 +33,12 @@ parser.add_argument("--dump-file", default="",
                     help="a prefix for the chrome dump file")
 parser.add_argument("--sample-period", default=1,
                     help="every how many input records latency is measured.")
+parser.add_argument("--max-source-rate", default="inf",
+                    help="maximum source output rate (records/s)")
+parser.add_argument("--warm-up", default=False,
+                    action='store_true',
+                    help="whether to use a first round of data to warmup")
+# Queue-related parameters
 parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
@@ -43,9 +50,7 @@ parser.add_argument("--prefetch-depth", default=10,
 parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
-                    help="maximum read throughput (elements/s)")
-parser.add_argument("--max-source-rate", default="inf",
-                    help="maximum source output rate (records/s)")
+                    help="maximum read throughput (records/s)")
 
 @ray.remote
 class Node(object):
@@ -109,17 +114,12 @@ class Node(object):
             return (self.id, self.latencies, self.throughputs)
 
         # It's a read-write or a sink node
-        expected_value = -1
         for _ in range(rounds):
             start = time.time()
             N = 100000
             for _ in range(N):
-                #print("Reading: ",expected_value+1)
                 record = self.queue.read_next()
                 start_time, value = record
-                #print("Read: ",value)
-                expected_value += 1
-                assert(expected_value == value), (expected_value, value)
                 self.num_reads += 1
                 if self.out_queue is not None:  # It's a sink
                     self.out_queue.put_next((start_time,value))
