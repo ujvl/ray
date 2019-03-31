@@ -8,17 +8,17 @@ import time
 import ray
 
 # Parameters
-rounds = 5
+rounds = 10
 latency_filename = "results/latencies"
 throughput_filename = "results/throughputs"
 _dump_filename = "results/dump"
 sample_period = 100
 record_type = "int"
 record_size = None
-max_queue_size = [100]        # in number of batches
-max_batch_size = [1000]       # in number of records
-batch_timeout = [0.1]
-prefetch_depth = 10
+max_queue_size = [10,100,1000]        # in number of batches
+max_batch_size = [1000,10000]         # in number of records
+batch_timeout = [0.05,0.1]
+prefetch_depth = 1
 background_flush = False
 num_stages = [1,2,5,10,15,20]
 max_reads_per_second = float("inf")
@@ -33,6 +33,7 @@ times = "--rounds " + str(rounds) + " "
 period = "--sample-period " + str(sample_period) + " "
 lf = "--latency-file " + latency_filename + " "
 tf = "--throughput-file " + throughput_filename + " "
+pd = "--prefetch-depth " + str(prefetch_depth) + " "
 cmd_queues = "python batched_queue_benchmark.py " + times + period + lf + tf
 cmd = "python api_benchmark.py " + times + period + lf + tf
 for num in num_stages:

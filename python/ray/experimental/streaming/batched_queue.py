@@ -180,8 +180,8 @@ class BatchedQueue(object):
         """Checks for backpressure by the downstream reader."""
         if self.max_size <= 0:  # Unlimited queue
             return
-        #if self.write_item_offset - self.cached_remote_offset <= self.max_size:
-        #    return  # Hasn't reached max size
+        if self.write_item_offset - self.cached_remote_offset <= self.max_size:
+            return  # Hasn't reached max size
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
