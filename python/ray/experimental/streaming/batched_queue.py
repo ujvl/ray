@@ -150,12 +150,9 @@ class BatchedQueue(object):
             self._wait_for_reader()
 
     # Currently, the 'queue' size in both task- and queue-based execution is
-    # estimated based on the number of unprocessed records
-    # However, backpressure in both execution modes could be simulated
-    # based on the number of pending batches. This approach should behave
-    # similarly when batches are small, e.g. in the order of 1K records but
-    # could result in overestimation of the 'queue' size in case batches are
-    # partially filled
+    # estimated based on the number of unprocessed records, which in turn
+    # is estimated based on the number of pending tasks and the number of
+    # records assigned to each one of them
     def _wait_for_task_reader(self):
         """Checks for backpressure by the downstream task-based reader."""
         if self.max_size <= 0:  # Unlimited queue
@@ -183,8 +180,8 @@ class BatchedQueue(object):
         """Checks for backpressure by the downstream reader."""
         if self.max_size <= 0:  # Unlimited queue
             return
-        if self.write_item_offset - self.cached_remote_offset <= self.max_size:
-            return  # Hasn't reached max size
+        #if self.write_item_offset - self.cached_remote_offset <= self.max_size:
+        #    return  # Hasn't reached max size
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")
@@ -202,7 +199,6 @@ class BatchedQueue(object):
                 time.sleep(0.01)
                 remote_offset = int(
                     internal_kv._internal_kv_get(self.read_ack_key))
-                print("Backpressured")
         self.cached_remote_offset = remote_offset
 
     def _read_next_batch(self):
