@@ -205,6 +205,10 @@ class NodeManager {
       int64_t upstream_actor_version,
       const ActorID &downstream_actor_id,
       const ClientID &upstream_node_id);
+  void SendFlushLineageReply(
+      const ActorID &upstream_actor_id,
+      const ActorID &downstream_actor_id,
+      const ClientID &upstream_node_id);
   void ProcessFlushLineageReply(
       const ActorID &upstream_actor_id,
       int64_t upstream_actor_version,
@@ -537,6 +541,13 @@ class NodeManager {
   // location for the downstream actor is found, we will send a
   // FlushLineageRequest on behalf of the upstream actor.
   std::unordered_map<ActorID, std::vector<std::pair<ActorID, int64_t>>> pending_downstream_actors_;
+  // The upstream actors that are waiting for us to recover. The key is the
+  // local actor. The value is all of the upstream actors that sent a
+  // FlushLineageRequest to the local actor, paired with their node locations.
+  // Once we receive all FlushLineageReply messages for the local actor, we
+  // will send a FlushLineageReply message to the corresponding upstream actors
+  // in this map.
+  std::unordered_map<ActorID, std::vector<std::pair<ActorID, ClientID>>> recovering_upstream_actors_;
 };
 
 }  // namespace raylet

@@ -451,27 +451,7 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
 
 void NodeManager::HandleFlushAllCompleted() {
   for (const auto &flush_request : pending_flush_requests_) {
-    RAY_LOG(INFO) << "Sending FlushLineageReply for upstream actor "
-      << flush_request.upstream_actor_id
-      << " downstream actor " << flush_request.downstream_actor_id
-      << " to node " << flush_request.upstream_node_id;
-    // Send the upstream actor's node a FlushLineageReply.
-    flatbuffers::FlatBufferBuilder fbb;
-    auto message = protocol::CreateFlushLineageRequest(fbb,
-        to_flatbuf(fbb, flush_request.upstream_actor_id),
-        0,
-        to_flatbuf(fbb, flush_request.downstream_actor_id),
-        to_flatbuf(fbb, client_id_));
-    fbb.Finish(message);
-
-    const auto it = remote_server_connections_.find(flush_request.upstream_node_id);
-    RAY_CHECK(it != remote_server_connections_.end());
-    it->second->WriteMessageAsync(
-        static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
-        fbb.GetBufferPointer(),
-        [this](ray::Status status) {
-          RAY_CHECK_OK(status);
-        });
+    SendFlushLineageReply(flush_request.upstream_actor_id, flush_request.downstream_actor_id, flush_request.upstream_node_id);
   }
 }
 
@@ -1193,11 +1173,11 @@ void NodeManager::ProcessNodeManagerMessage(TcpClientConnection &node_manager_cl
   } break;
   case protocol::MessageType::FlushLineageReply: {
     auto message = flatbuffers::GetRoot<protocol::FlushLineageRequest>(message_data);
-    const ActorID upstream_actor_id = from_flatbuf(*message->actor_id());
+    const ActorID recovered_actor_id = from_flatbuf(*message->actor_id());
     const int64_t upstream_actor_version = message->version();
     const ActorID downstream_actor_id = from_flatbuf(*message->downstream_actor_id());
     const ClientID upstream_node_id = from_flatbuf(*message->node_id());
-    ProcessFlushLineageReply(upstream_actor_id, upstream_actor_version, downstream_actor_id, upstream_node_id);
+    ProcessFlushLineageReply(recovered_actor_id, upstream_actor_version, downstream_actor_id, upstream_node_id);
   } break;
   case protocol::MessageType::DisconnectClient: {
     // TODO(rkn): We need to do some cleanup here.
@@ -1874,6 +1854,7 @@ bool NodeManager::AssignTask(const Task &task) {
 
     auto actor_entry = actor_registry_.find(spec.ActorId());
     if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
+      RAY_LOG(DEBUG) << "XXX Actor not yet recovered, skipping task " << spec.TaskId();
       return false;
     }
   }
@@ -2010,7 +1991,7 @@ ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &ta
 }
 
 void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor_version, const ActorID &downstream_actor_id) {
-  RAY_LOG(INFO) << "XXX SendFlushLineageRequest";
+  RAY_LOG(INFO) << "XXX SendFlushLineageRequest for actor " << actor_id << " to downstream actor " << downstream_actor_id;
   auto actor_entry = actor_registry_.find(downstream_actor_id);
   if (actor_entry == actor_registry_.end() || actor_entry->second.GetState() != ActorState::ALIVE) {
     if (actor_entry == actor_registry_.end()) {
@@ -2022,6 +2003,8 @@ void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor
           // The actor has been created. We only need the last entry, because
           // it represents the latest state of this actor.
           HandleActorStateTransition(actor_id, ActorRegistration(data.back()));
+        } else {
+          RAY_LOG(INFO) << "SendFlushLineageRequest: No actor location found for " << actor_id;
         }
       };
       RAY_CHECK_OK(gcs_client_->actor_table().Lookup(JobID::nil(), downstream_actor_id,
@@ -2033,9 +2016,9 @@ void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor
     return;
   }
 
-  RAY_LOG(INFO) << "XXX actually sending SendFlushLineageRequest";
   // Send the downstream actor's node a FlushLineageRequest.
   const ClientID client_id = actor_entry->second.GetNodeManagerId();
+  RAY_LOG(INFO) << "Sending FlushLineageRequest for actor " << actor_id << " to downstream actor " << downstream_actor_id << " at node " << client_id;
   // TODO: This check is too strong. The downstream actor may be on the same node.
   RAY_CHECK(client_id != client_id_) << "Implement FlushLineageRequest for local downstream actors";
   flatbuffers::FlatBufferBuilder fbb;
@@ -2059,25 +2042,71 @@ void NodeManager::ProcessFlushLineageRequest(
     const ClientID &upstream_node_id) {
   auto downstream_actor = actor_registry_.find(downstream_actor_id);
   RAY_CHECK(downstream_actor != actor_registry_.end());
-  RAY_CHECK(downstream_actor->second.GetDownstreamActorIds().empty()) << "TODO: Implement multiple simultaneous failures in a chain";
+  if (downstream_actor->second.GetDownstreamActorIds().empty()) {
+    RAY_LOG(INFO) << "Received FlushLineageRequest from " << upstream_actor_id << " for downstream actor " << downstream_actor_id;
+    lineage_cache_.FlushAll();
+    pending_flush_requests_.push_back(PendingFlushAllRequest(upstream_actor_id, downstream_actor_id, upstream_node_id));
+  } else {
+    RAY_LOG(INFO) << "Received FlushLineageRequest from " << upstream_actor_id << " but actor " << downstream_actor_id << " is still recovering";
+    recovering_upstream_actors_[downstream_actor_id].push_back({upstream_actor_id, upstream_node_id});
+  }
+}
 
-  lineage_cache_.FlushAll();
-  pending_flush_requests_.push_back(PendingFlushAllRequest(upstream_actor_id, downstream_actor_id, upstream_node_id));
+void NodeManager::SendFlushLineageReply(
+    const ActorID &upstream_actor_id,
+    const ActorID &downstream_actor_id,
+    const ClientID &upstream_node_id) {
+  RAY_LOG(INFO) << "Sending FlushLineageReply for upstream actor "
+    << upstream_actor_id
+    << " downstream actor " << downstream_actor_id
+    << " to node " << upstream_node_id;
+  // Send the upstream actor's node a FlushLineageReply.
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = protocol::CreateFlushLineageRequest(fbb,
+      to_flatbuf(fbb, upstream_actor_id),
+      0,
+      to_flatbuf(fbb, downstream_actor_id),
+      to_flatbuf(fbb, client_id_));
+  fbb.Finish(message);
+
+  const auto it = remote_server_connections_.find(upstream_node_id);
+  RAY_CHECK(it != remote_server_connections_.end());
+  it->second->WriteMessageAsync(
+      static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
+      fbb.GetBufferPointer(),
+      [this](ray::Status status) {
+        RAY_CHECK_OK(status);
+      });
 }
 
 void NodeManager::ProcessFlushLineageReply(
-    const ActorID &upstream_actor_id,
+    const ActorID &recovered_actor_id,
     int64_t upstream_actor_version,
     const ActorID &downstream_actor_id,
     const ClientID &upstream_node_id) {
-  auto it = actor_registry_.find(upstream_actor_id);
+  RAY_LOG(INFO) << "Received FlushLineageReply from"
+    << " downstream actor " << downstream_actor_id
+    << " for recovering actor " << recovered_actor_id;
+  auto it = actor_registry_.find(recovered_actor_id);
   RAY_CHECK(it != actor_registry_.end());
   RAY_CHECK(it->second.GetState() == ActorState::ALIVE);
   bool ready = it->second.RemoveDownstreamActorId(downstream_actor_id);
   if (ready) {
     // We've received FlushLineageReply messages from all downstream actors. We
     // can now unblock execution.
-    SubmitWaitingForActorCreationTasks(upstream_actor_id);
+    SubmitWaitingForActorCreationTasks(recovered_actor_id);
+
+    auto it = recovering_upstream_actors_.find(recovered_actor_id);
+    if (it != recovering_upstream_actors_.end()) {
+      for (const auto &upstream_actor : it->second) {
+        RAY_LOG(INFO) << "Forwarding FlushLineageReply from"
+          << " actor " << recovered_actor_id
+          << " to upstream actor " << upstream_actor.first
+          << " at node " << upstream_actor.second;
+        SendFlushLineageReply(upstream_actor.first, recovered_actor_id, upstream_actor.second);
+      }
+      recovering_upstream_actors_.erase(it);
+    }
   }
 }
 

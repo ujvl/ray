@@ -131,6 +131,7 @@ ObjectID ActorRegistration::ExtendFrontier(const ActorHandleID &handle_id,
       if (frontier_entry.task_counter == it->second) {
         recovery_frontier_.erase(it);
         if (recovery_frontier_.empty()) {
+          RAY_LOG(DEBUG) << "RECOVERED in ExtendFrontier!";
           recovered_ = true;
         }
       }
@@ -151,7 +152,7 @@ void ActorRegistration::SetRecoveryFrontier(const ActorHandleID &handle_id, int6
     if (frontier_[handle_id].task_counter == counter) {
       recovery_frontier_.erase(it);
       if (recovery_frontier_.empty()) {
-        RAY_LOG(DEBUG) << "RECOVERED!";
+        RAY_LOG(DEBUG) << "RECOVERED in SetRecoveryFrontier!";
         recovered_ = true;
       }
     }

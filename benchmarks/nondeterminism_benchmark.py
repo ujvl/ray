@@ -32,7 +32,6 @@ class Source(object):
         while len(self.queue) > self.max_queue_length:
             _, self.queue = ray.wait(self.queue, len(self.queue), timeout=0.1)
 
-@ray.remote(resources={"Node1": 1}, max_reconstructions=100)
 class NondeterministicOperator(ray.actor.Checkpointable):
     def __init__(self, handle):
         self.handle = handle
@@ -62,12 +61,14 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 "checkpoint_id": checkpoint_id,
                 }
         checkpoint = pickle.dumps(checkpoint)
-        with open('/home/stephanie/ray-fork/benchmarks/checkpoint', 'wb+') as f:
+        print("new actor handles", self.handle._ray_new_actor_handles)
+        self.handle._ray_new_actor_handles.clear()
+        with open('/home/stephanie/ray-fork/benchmarks/checkpoint-{}'.format(actor_id.hex()), 'wb+') as f:
             f.write(checkpoint)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         print("Available checkpoints", available_checkpoints)
-        with open('/home/stephanie/ray-fork/benchmarks/checkpoint', 'rb') as f:
+        with open('/home/stephanie/ray-fork/benchmarks/checkpoint-{}'.format(actor_id.hex()), 'rb') as f:
             checkpoint = pickle.loads(f.read())
         self.handle = checkpoint["handle"]
         self.iterations = checkpoint["iterations"]
@@ -80,7 +81,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
     def checkpoint_expired(self, actor_id, checkpoint_id):
         return
 
-@ray.remote(resources={"Node2": 1})
+@ray.remote(resources={"Node3": 1})
 class Sink(object):
     def __init__(self, keys):
         self.records = {
@@ -105,7 +106,7 @@ if __name__ == '__main__':
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": 100,
-        "lineage_stash_max_failures": 1,
+        "lineage_stash_max_failures": 2,
     })
 
     node_kwargs = {
@@ -114,7 +115,7 @@ if __name__ == '__main__':
         "_internal_config": internal_config,
     }
     cluster = Cluster(initialize_head=True, head_node_args=node_kwargs)
-    num_workers = 3
+    num_workers = 4
     for i in range(num_workers):
         node_kwargs["resources"] = {"Node{}".format(i): 100}
         cluster.add_node(**node_kwargs)
@@ -125,8 +126,11 @@ if __name__ == '__main__':
     source_keys = ["a", "b", "c"]
     max_queue_length = 100
     sink = Sink.remote(source_keys)
-    nondeterministic_operator = NondeterministicOperator.remote(sink)
-    sources = [Source.remote(key, nondeterministic_operator, max_queue_length) for key in source_keys]
+    cls1 = ray.remote(resources={"Node1": 1}, max_reconstructions=100)(NondeterministicOperator)
+    nondeterministic_operator1 = cls1.remote(sink)
+    cls2 = ray.remote(resources={"Node2": 1}, max_reconstructions=100)(NondeterministicOperator)
+    nondeterministic_operator2 = cls2.remote(nondeterministic_operator1)
+    sources = [Source.remote(key, nondeterministic_operator2, max_queue_length) for key in source_keys]
 
     start = time.time()
     num_records = 1000
@@ -135,7 +139,11 @@ if __name__ == '__main__':
     time.sleep(3)
     node = cluster.list_all_nodes()[-2]
     cluster.remove_node(node)
+    node = cluster.list_all_nodes()[-2]
+    cluster.remove_node(node)
     node_kwargs["resources"] = {"Node1": 100}
+    cluster.add_node(**node_kwargs)
+    node_kwargs["resources"] = {"Node2": 100}
     cluster.add_node(**node_kwargs)
 
     ray.get(generators)
@@ -144,3 +152,7 @@ if __name__ == '__main__':
     print("Final records:", final_records)
     print("Latency:", end - start)
     assert all([val == 1000 for val in final_records.values()])
+
+    events = ray.global_state.chrome_tracing_dump()
+    with open("test.json", "w") as outfile:
+        json.dump(events, outfile)
