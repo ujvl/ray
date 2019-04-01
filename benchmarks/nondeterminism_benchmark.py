@@ -29,8 +29,18 @@ class Source(object):
         self.queue.append(self.handle.push.remote(record))
         self.index += 1
 
+        wait_time = 0
         while len(self.queue) > self.max_queue_length:
-            _, self.queue = ray.wait(self.queue, len(self.queue), timeout=0.1)
+            _, self.queue[:-1] = ray.wait(self.queue[:-1], len(self.queue) - 1, timeout=0.1, request_once=True)
+            wait_time += 0.1
+
+            # Hack to resubmit the last task. If we've waited for a while and
+            # there's still no progress, then try a long-standing ray.wait on
+            # the last task that we submitted to resubmit it.
+            if wait_time > 0.3 and len(self.queue) > 0:
+                last_item = self.queue[-1]
+                ray.wait([last_item], 1, timeout=0)
+                wait_time = 0
 
 class NondeterministicOperator(ray.actor.Checkpointable):
     def __init__(self, handle):
