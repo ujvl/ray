@@ -1741,10 +1741,7 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
 
           assigned_task.IncrementNumExecutions();
           // We started running the task, so the task is ready to write to GCS.
-          //if (!lineage_cache_.AddReadyTask(assigned_task)) {
-          //  RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
-          //                   << " This is most likely due to reconstruction.";
-          //}
+          RAY_CHECK(lineage_cache_.AddWaitingTask(assigned_task, Lineage()));
           // Remove the task from the SWAP queue.
           local_queues_.RemoveTask(spec.TaskId());
           // Mark the task as running.
@@ -1858,6 +1855,9 @@ void NodeManager::FinishAssignedTask(Worker &worker) {
       !task.GetTaskSpecification().IsActorTask()) {
     worker.AssignDriverId(DriverID::nil());
   }
+
+  // The task has finished, so we can now commit it.
+  lineage_cache_.AddReadyTask(task);
 }
 
 ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &task) {
