@@ -62,6 +62,7 @@ void LineageEntry::ComputeParentTaskIds() {
   for (const auto &dependency : task_.GetDependencies()) {
     parent_task_ids_.insert(ComputeTaskId(dependency));
   }
+  parent_task_ids_.insert(task_.GetTaskSpecification().ParentTaskId());
 }
 
 const Task &LineageEntry::TaskData() const { return task_; }
