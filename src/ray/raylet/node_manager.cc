@@ -1815,7 +1815,7 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
 
           assigned_task.IncrementNumExecutions();
           // We started running the task, so the task is ready to write to GCS.
-          RAY_CHECK(lineage_cache_.AddWaitingTask(assigned_task, Lineage()));
+          RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
           // Remove the task from the SWAP queue.
           local_queues_.RemoveTask(spec.TaskId());
           // Mark the task as running.
@@ -1937,7 +1937,10 @@ void NodeManager::FinishAssignedTask(Worker &worker) {
   }
 
   // The task has finished, so we can now commit it.
-  lineage_cache_.AddReadyTask(task);
+  // NOTE: We do not wait to add the task so that downstream nodes can evict as
+  // quickly as possible. But another option for tasks that exit quickly is to
+  // only add the task to the GCS once, when the task finishes.
+  //lineage_cache_.AddReadyTask(task);
 }
 
 ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &task) {
