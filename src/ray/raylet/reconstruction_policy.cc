@@ -71,7 +71,13 @@ void ReconstructionPolicy::HandleReconstructionLogAppend(const TaskID &task_id,
   // Reset the timer to wait for task lease notifications again. NOTE(swang):
   // The timer should already be set here, but we extend it to give some time
   // for the reconstructed task to propagate notifications.
-  SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
+  if (success) {
+    SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
+  } else if (it->second.fast_reconstruction) {
+    SetTaskTimeout(it, 0);
+  } else {
+    SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
+  }
 
   if (success) {
     reconstruction_handler_(task_id, it->second.return_values_lost);
@@ -190,6 +196,7 @@ void ReconstructionPolicy::ListenAndMaybeReconstruct(const ObjectID &object_id,
       SetTaskTimeout(it, initial_reconstruction_timeout_ms_);
     }
   }
+  it->second.fast_reconstruction = fast_reconstruction;
   it->second.created_objects.insert(object_id);
 }
 
