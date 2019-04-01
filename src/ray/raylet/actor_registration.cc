@@ -9,7 +9,11 @@ namespace ray {
 namespace raylet {
 
 ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data)
-    : actor_table_data_(actor_table_data) {}
+    : actor_table_data_(actor_table_data) {
+  if (GetActorVersion() == 0) {
+    recovered_ = true;
+  }
+}
 
 ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data,
                                      const ActorCheckpointDataT &checkpoint_data)
@@ -32,6 +36,23 @@ ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data,
   for (const auto &downstream_actor_id_string : checkpoint_data.downstream_actor_ids) {
     const ActorID downstream_actor_id = ActorID::from_binary(downstream_actor_id_string);
     AddDownstreamActorId(downstream_actor_id);
+  }
+
+  if (!checkpoint_data.downstream_actor_ids.empty()) {
+    for (const auto &handle : frontier_) {
+      // Do not include the creator of the actor. This is specific to stream
+      // processing, where the driver is the original creator and does not call
+      // any tasks on the actor.
+      if (!handle.first.is_nil()) {
+        RAY_LOG(DEBUG) << "Adding handle " << handle.first << " to recovery frontier";
+        // We don't know what the latest task submitted by this handle was, so
+        // set the counter to the max.
+        recovery_frontier_[handle.first] = INT64_MAX;
+      }
+    }
+    recovered_ = false;
+  } else {
+    recovered_ = true;
   }
 }
 
@@ -103,7 +124,42 @@ ObjectID ActorRegistration::ExtendFrontier(const ActorHandleID &handle_id,
   // Add a reference to the new cursor for the task that will follow this
   // task during execution.
   dummy_objects_[execution_dependency]++;
+
+  if (!IsRecovered()) {
+    auto it = recovery_frontier_.find(handle_id);
+    if (it != recovery_frontier_.end()) {
+      if (frontier_entry.task_counter == it->second) {
+        recovery_frontier_.erase(it);
+        if (recovery_frontier_.empty()) {
+          recovered_ = true;
+        }
+      }
+    }
+  }
+
   return object_to_release;
+}
+
+void ActorRegistration::SetRecoveryFrontier(const ActorHandleID &handle_id, int64_t counter) {
+  auto it = recovery_frontier_.find(handle_id);
+  if (it != recovery_frontier_.end() && counter < it->second) {
+    // We have seen a task that has not yet been executed and that was
+    // submitted before the currently known task.
+    RAY_LOG(DEBUG) << "Recovery count for handle " << handle_id << " is now " << counter;
+    it->second = counter;
+
+    if (frontier_[handle_id].task_counter == counter) {
+      recovery_frontier_.erase(it);
+      if (recovery_frontier_.empty()) {
+        RAY_LOG(DEBUG) << "RECOVERED!";
+        recovered_ = true;
+      }
+    }
+  }
+}
+
+bool ActorRegistration::IsRecovered() const {
+  return recovered_;
 }
 
 void ActorRegistration::AddHandle(const ActorHandleID &handle_id,

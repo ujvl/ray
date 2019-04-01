@@ -451,7 +451,10 @@ void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {
 
 void NodeManager::HandleFlushAllCompleted() {
   for (const auto &flush_request : pending_flush_requests_) {
-    RAY_LOG(INFO) << "XXX Sending FlushLineageReply for upstream actor " << flush_request.upstream_actor_id << " downstream actor " << flush_request.downstream_actor_id << " to node " << flush_request.upstream_node_id;
+    RAY_LOG(INFO) << "Sending FlushLineageReply for upstream actor "
+      << flush_request.upstream_actor_id
+      << " downstream actor " << flush_request.downstream_actor_id
+      << " to node " << flush_request.upstream_node_id;
     // Send the upstream actor's node a FlushLineageReply.
     flatbuffers::FlatBufferBuilder fbb;
     auto message = protocol::CreateFlushLineageRequest(fbb,
@@ -570,8 +573,8 @@ void NodeManager::SubmitWaitingForActorCreationTasks(const ActorID &actor_id) {
     // respective actor creation task. Since the actor location is now known,
     // we can remove the task from the queue and forget its dependency on the
     // actor creation task.
-    RAY_CHECK(task_dependency_manager_.UnsubscribeGetDependencies(
-        method.GetTaskSpecification().TaskId()));
+    task_dependency_manager_.UnsubscribeGetDependencies(
+        method.GetTaskSpecification().TaskId());
     // The task's uncommitted lineage was already added to the local lineage
     // cache upon the initial submission, so it's okay to resubmit it with an
     // empty lineage this time.
@@ -614,12 +617,12 @@ void NodeManager::HandleActorStateTransition(const ActorID &actor_id,
     reconstruction_policy_.Cancel(actor_registration.GetActorCreationDependency());
     // Only move the tasks from WAITING_FOR_ACTOR_CREATION if the actor has
     // received FlushLineageReply messages from all downstream actors.
-    // TODO: If we have not received all replies yet, call this method once we
-    // receive the last reply.
     if (actor_registration.GetDownstreamActorIds().empty()) {
       SubmitWaitingForActorCreationTasks(actor_id);
     }
-
+    // Send requests to flush uncommitted lineage to all downstream actors.
+    // Once we receive the replies, we will call
+    // SubmitWaitingForActorCreationTasks.
     auto it = pending_downstream_actors_.find(actor_id);
     if (it != pending_downstream_actors_.end()) {
       for (const auto &upstream_actor : it->second) {
@@ -1415,6 +1418,21 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
   }
 }
 
+void NodeManager::EnqueuePlaceableActorTask(const Task &task, bool push) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
+  const auto actor_entry = actor_registry_.find(spec.ActorId());
+  RAY_CHECK(actor_entry != actor_registry_.end());
+  // The task has not yet been executed. Queue the task for local
+  // execution, bypassing placement.
+  RAY_CHECK(actor_entry->second.GetDownstreamActorIds().empty());
+  if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
+    actor_entry->second.SetRecoveryFrontier(
+        spec.ActorHandleId(),
+        spec.ActorCounter());
+  }
+  EnqueuePlaceableTask(task, push);
+}
+
 void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded, bool push) {
   const TaskSpecification &spec = task.GetTaskSpecification();
@@ -1486,17 +1504,41 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
                              << "should only happen during reconstruction.";
             TreatTaskAsFailedIfLost(task);
           } else {
-            // The task has not yet been executed. Queue the task for local
-            // execution, bypassing placement.
-            if (actor_entry->second.GetDownstreamActorIds().empty()) {
-              // The actor is fully recovered.
-              EnqueuePlaceableTask(task, push);
-            } else {
+            if (!actor_entry->second.GetDownstreamActorIds().empty()) {
               // The actor is still waiting for FlushLineageReply messages from
               // downstream actors. Queue it in WAITING_FOR_ACTOR_CREATION so
               // that we do not resubmit its lineage yet.
               local_queues_.QueueTasks({task}, TaskState::WAITING_FOR_ACTOR_CREATION);
               task_dependency_manager_.TaskPending(task);
+            } else if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
+              local_queues_.QueueTasks({task}, TaskState::SWAP);
+              // If the task has never been executed before, but we are still
+              // recovering the actor to its frontier from before the failure,
+              // then there may be a more recent version of the task in the
+              // GCS. Retrieve the task spec in order to re-execute the task.
+              RAY_CHECK_OK(gcs_client_->raylet_task_table().Lookup(
+                  JobID::nil(), spec.TaskId(),
+                  /*success_callback=*/
+                  [this, push](ray::gcs::AsyncGcsClient *client, const TaskID &task_id,
+                         const ray::protocol::TaskT &task_data) {
+                    const auto task = local_queues_.RemoveTask(task_id);
+                    // The task was in the GCS task table. Use the stored task spec to
+                    // re-execute the task.
+                    const Task committed_method(task_data);
+                    if (committed_method.GetTaskExecutionSpec().Version() > task.GetTaskExecutionSpec().Version()) {
+                      RAY_LOG(INFO) << "XXX Queueing GCS version of task " << task_id;
+                      EnqueuePlaceableActorTask(committed_method, push);
+                    } else {
+                      EnqueuePlaceableActorTask(task, push);
+                    }
+                  },
+                  /*failure_callback=*/
+                  [this, task, push](ray::gcs::AsyncGcsClient *client, const TaskID &task_id) {
+                        const auto task = local_queues_.RemoveTask(task_id);
+                        EnqueuePlaceableActorTask(task, push);
+                      }));
+            } else {
+              EnqueuePlaceableActorTask(task, push);
             }
           }
         } else {
@@ -1829,6 +1871,11 @@ bool NodeManager::AssignTask(const Task &task) {
     RAY_CHECK(spec.ActorCounter() == expected_task_counter)
         << "Expected actor counter: " << expected_task_counter << ", task "
         << spec.TaskId() << " has: " << spec.ActorCounter();
+
+    auto actor_entry = actor_registry_.find(spec.ActorId());
+    if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
+      return false;
+    }
   }
 
   // Try to get an idle worker that can execute this task.

@@ -142,6 +142,9 @@ class ActorRegistration {
   bool RemoveDownstreamActorId(const ActorID &downstream_actor_id);
   const std::unordered_set<ActorID> &GetDownstreamActorIds();
 
+  void SetRecoveryFrontier(const ActorHandleID &handle_id, int64_t counter);
+  bool IsRecovered() const;
+
  private:
   void AddDownstreamActorId(const ActorID &downstream_actor_id);
 
@@ -177,6 +180,8 @@ class ActorRegistration {
   // For nondeterministic actors that are currently recovering. The set of
   // actors that we have not gotten a FlushLineageReply from yet.
   std::unordered_set<ActorID> downstream_actor_ids_;
+  std::unordered_map<ActorHandleID, int64_t> recovery_frontier_;
+  bool recovered_;
 };
 
 }  // namespace raylet

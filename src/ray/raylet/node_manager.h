@@ -150,6 +150,7 @@ class NodeManager {
   /// \param task The task in question.
   /// \return Void.
   void EnqueuePlaceableTask(const Task &task, bool push);
+  void EnqueuePlaceableActorTask(const Task &task, bool push);
   /// This will treat a task removed from the local queue as if it had been
   /// executed and failed. This is done by looping over the task return IDs and
   /// for each ID storing an object that represents a failure in the object
