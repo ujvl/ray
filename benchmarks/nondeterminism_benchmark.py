@@ -117,6 +117,7 @@ if __name__ == '__main__':
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": 100,
         "lineage_stash_max_failures": 2,
+        "node_manager_forward_task_retry_timeout_milliseconds": 100,
     })
 
     node_kwargs = {

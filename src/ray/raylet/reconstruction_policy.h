@@ -86,7 +86,8 @@ class ReconstructionPolicy : public ReconstructionPolicyInterface {
         : expires_at(INT64_MAX),
           subscribed(false),
           reconstruction_attempt(0),
-          reconstruction_timer(new boost::asio::deadline_timer(io_service)) {}
+          reconstruction_timer(new boost::asio::deadline_timer(io_service)),
+          fast_reconstruction(false) {}
 
     // The objects created by this task that we are listening for notifications for.
     std::unordered_set<ObjectID> created_objects;
@@ -101,6 +102,7 @@ class ReconstructionPolicy : public ReconstructionPolicyInterface {
     // The task's reconstruction timer. If this expires before a lease
     // notification is received, then the task will be reconstructed.
     std::unique_ptr<boost::asio::deadline_timer> reconstruction_timer;
+    bool fast_reconstruction;
   };
 
   /// Set the reconstruction timer for a task. If no task lease notifications
