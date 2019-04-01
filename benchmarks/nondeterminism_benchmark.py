@@ -104,7 +104,7 @@ if __name__ == '__main__':
         "num_heartbeats_timeout": 20,
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
-        #"gcs_delay_ms": gcs_delay_ms,
+        "gcs_delay_ms": 100,
         "lineage_stash_max_failures": 1,
     })
 
@@ -132,7 +132,7 @@ if __name__ == '__main__':
     num_records = 1000
     generators = [source.generate.remote(num_records) for source in sources]
 
-    time.sleep(2)
+    time.sleep(3)
     node = cluster.list_all_nodes()[-2]
     cluster.remove_node(node)
     node_kwargs["resources"] = {"Node1": 100}
@@ -140,5 +140,7 @@ if __name__ == '__main__':
 
     ray.get(generators)
     end = time.time()
-    print("Final records:", ray.get(sink.get_records.remote()))
+    final_records = ray.get(sink.get_records.remote())
+    print("Final records:", final_records)
     print("Latency:", end - start)
+    assert all([val == 1000 for val in final_records.values()])
