@@ -2051,6 +2051,16 @@ void NodeManager::ResubmitTask(const Task &task) {
     }
   }
 
+  if (task.GetTaskSpecification().IsActorTask()) {
+    const auto &actor_id = task.GetTaskSpecification().ActorId();
+    const auto it = actor_registry_.find(actor_id);
+    if (it != actor_registry_.end() && it->second.GetState() == ActorState::ALIVE && it->second.GetActorVersion() == 0) {
+      // Do not resubmit tasks for actors that have not reconstructed yet.
+      RAY_LOG(DEBUG) << "Actor task " << task.GetTaskSpecification().TaskId() << " resubmitted, but its actor has not been reconstructed";
+      return;
+    }
+  }
+
   // Driver tasks cannot be reconstructed. If this is a driver task, push an
   // error to the driver and do not resubmit it.
   if (task.GetTaskSpecification().IsDriverTask()) {
