@@ -131,7 +131,10 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             self.flush()
 
     def flush(self):
-        future = self.handle.push.remote(self.operator_id, self.flush_buffer, self.checkpoint_epoch)
+        future = self.handle.push._remote(
+                args=[self.operator_id, self.flush_buffer, self.checkpoint_epoch],
+                kwargs={},
+                nondeterministic_event=pickle.dumps('hi'))
         self.flush_buffer.clear()
         return future
 

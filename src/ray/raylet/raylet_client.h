@@ -79,7 +79,8 @@ class RayletClient {
   /// \param The task specification.
   /// \return ray::Status.
   ray::Status SubmitTask(const std::vector<ObjectID> &execution_dependencies,
-                         const ray::raylet::TaskSpecification &task_spec);
+                         const ray::raylet::TaskSpecification &task_spec,
+                         const std::string &nondeterministic_event);
 
   /// Get next task for this client. This will block until the scheduler assigns
   /// a task to this worker. The caller takes ownership of the returned task

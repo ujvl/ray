@@ -583,7 +583,8 @@ class Worker(object):
                     num_return_vals=None,
                     resources=None,
                     placement_resources=None,
-                    driver_id=None):
+                    driver_id=None,
+                    nondeterministic_event=None):
         """Submit a remote task to the scheduler.
 
         Tell the scheduler to schedule the execution of the function with
@@ -698,7 +699,10 @@ class Worker(object):
                 resources,
                 placement_resources,
             )
-            self.raylet_client.submit_task(task)
+            if nondeterministic_event is None:
+                nondeterministic_event = b''
+            self.raylet_client.submit_task(task,
+                    nondeterministic_event=nondeterministic_event)
 
             return task.returns()
 

@@ -125,7 +125,7 @@ class ActorMethod(object):
     def remote(self, *args, **kwargs):
         return self._remote(args, kwargs)
 
-    def _remote(self, args, kwargs, num_return_vals=None):
+    def _remote(self, args, kwargs, num_return_vals=None, nondeterministic_event=None):
         if num_return_vals is None:
             num_return_vals = self._num_return_vals
 
@@ -133,7 +133,8 @@ class ActorMethod(object):
             self._method_name,
             args=args,
             kwargs=kwargs,
-            num_return_vals=num_return_vals)
+            num_return_vals=num_return_vals,
+            nondeterministic_event=nondeterministic_event)
 
 
 class ActorClass(object):
@@ -432,7 +433,8 @@ class ActorHandle(object):
                            method_name,
                            args=None,
                            kwargs=None,
-                           num_return_vals=None):
+                           num_return_vals=None,
+                           nondeterministic_event=None):
         """Method execution stub for an actor handle.
 
         This is the function that executes when
@@ -485,6 +487,7 @@ class ActorHandle(object):
                 resources={"CPU": self._ray_actor_method_cpus},
                 placement_resources={},
                 driver_id=self._ray_actor_driver_id,
+                nondeterministic_event=nondeterministic_event
             )
             # Update the actor counter and cursor to reflect the most recent
             # invocation.

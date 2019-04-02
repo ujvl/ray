@@ -248,10 +248,11 @@ cdef class RayletClient:
     def disconnect(self):
         check_status(self.client.get().Disconnect())
 
-    def submit_task(self, Task task_spec):
+    def submit_task(self, Task task_spec, const c_string &nondeterministic_event):
         check_status(self.client.get().SubmitTask(
             task_spec.execution_dependencies.get()[0],
-            task_spec.task_spec.get()[0]))
+            task_spec.task_spec.get()[0],
+            nondeterministic_event))
 
     def get_task(self):
         cdef:
