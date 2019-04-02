@@ -158,7 +158,7 @@ class BatchedQueue(object):
         if self.max_size <= 0:  # Unlimited queue
             return
         if len(self.task_queue) <= self.max_size_batches:
-            return
+            return  # Hasn't exceeded max size
         # Check pending downstream tasks
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
@@ -181,7 +181,7 @@ class BatchedQueue(object):
         if self.max_size <= 0:  # Unlimited queue
             return
         if self.write_item_offset - self.cached_remote_offset <= self.max_size:
-            return  # Hasn't reached max size
+            return  # Hasn't exceeded max size
         remote_offset = internal_kv._internal_kv_get(self.read_ack_key)
         if remote_offset is None:
             # logger.debug("[writer] Waiting for reader to start...")

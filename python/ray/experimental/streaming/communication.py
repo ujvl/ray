@@ -386,8 +386,7 @@ class DataOutput(object):
                 #     record, channel))
                 channel.queue.put_next(record)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
-            _, key = record
-            h = _hash(key)
+            h = _hash(record)
             for channels in self.shuffle_channels:
                 num_instances = len(channels)  # Downstream instances
                 channel = channels[h % num_instances]
@@ -399,7 +398,8 @@ class DataOutput(object):
         else:  # TODO (john): Add support for custom partitioning
             pass
 
-        # Flush channels if timeout expired
+        # TODO (john): This must be done by a separate thread
+        # Flush all channels if timeout expired
         if not self.last_flush_time:  # Set the timer
             self.last_flush_time = time.time()
         if self.flush_timeout >= 0:
@@ -459,6 +459,7 @@ class DataOutput(object):
         else:  # TODO (john): Add support for custom partitioning
             pass
 
+        # TODO (john): This must be done by a separate thread
         # Flush channels if timeout expired
         if not self.last_flush_time:  # Set the timer
             self.last_flush_time = time.time()

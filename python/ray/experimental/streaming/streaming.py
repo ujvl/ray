@@ -11,6 +11,7 @@ import uuid
 import networkx as nx
 
 import ray
+import ray.experimental.streaming.benchmarks.utils as utils
 from ray.experimental.streaming.communication import DataChannel, DataInput
 from ray.experimental.streaming.communication import DataOutput, QueueConfig
 import ray.experimental.streaming.operator as operator
@@ -217,15 +218,23 @@ class Environment(object):
         # Select actor to construct
         actor_handle = None
         if operator.type == OpType.Source:
-            actor_handle = operator_instance.Source.remote(actor_id, operator,
-                                                        input, output)
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.Source._remote(args=[*args],
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.Map:
-            actor_handle = operator_instance.Map.remote(actor_id, operator,
-                                                        input, output)
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.Map._remote(args=[*args],
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.FlatMap:
-            actor_handle = operator_instance.FlatMap.remote(actor_id,
-                                                            operator,
-                                                            input, output)
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.FlatMap._remote(args=[*args],
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.Filter:
             actor_handle = operator_instance.Filter.remote(actor_id, operator,
                                                     input, output)
@@ -249,9 +258,11 @@ class Environment(object):
                                                            input, output,
                                                            self.config)
         elif operator.type == OpType.Sink:
-            actor_handle = operator_instance.Sink.remote(actor_id,
-                                                            operator,
-                                                            input, output)
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.Sink._remote(args=[*args],
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.Inspect:
             actor_handle = operator_instance.Inspect.remote(actor_id,
                                                             operator,
@@ -411,14 +422,16 @@ class Environment(object):
     # TODO (john): There should be different types of sources, e.g. sources
     # reading from Kafka, text files, etc.
     # TODO (john): Handle case where environment parallelism is set
-    def source(self, source_object, name="Source_"+str(_generate_uuid())):
+    def source(self, source_object, name="Source_"+str(_generate_uuid()),
+               placement=None):
         source_id = _generate_uuid()
         source_stream = DataStream(self, source_id)
         self.operators[source_id] = operator.CustomSourceOperator(source_id,
                                              OpType.Source,
                                              source_object,
                                              name,
-                                             logging=self.config.logging)
+                                             logging=self.config.logging,
+                                             placement=placement)
         return source_stream
 
     # Creates and registers a new data source that reads a
@@ -460,7 +473,10 @@ class Environment(object):
                 all_handles.extend(handles)
             upstream_channels.update(downstream_channels)
         # Start and register the monitoring actor to the physical dataflow
-        monitoring_actor = operator_instance.ProgressMonitor.remote(all_handles)
+        first_node_id = utils.get_cluster_node_ids()[0]
+        monitoring_actor = operator_instance.ProgressMonitor._remote(
+                                            args=[all_handles], kwargs=None,
+                                            resources={first_node_id: 1})
         self.physical_dataflow.monitoring_actor = monitoring_actor
         # Start spinning actors
         source_handles = []
@@ -693,7 +709,8 @@ class DataStream(object):
     # generating and processing watermarks
 
     # Registers map operator to the environment
-    def map(self, map_fn, name="Map_"+str(_generate_uuid())):
+    def map(self, map_fn, name="Map_"+str(_generate_uuid()),
+            placement=None):
         """Applies a map operator to the stream.
 
         Attributes:
@@ -705,11 +722,13 @@ class DataStream(object):
             name,
             map_fn,
             num_instances=self.env.config.parallelism,
-            logging=self.env.config.logging)
+            logging=self.env.config.logging,
+            placement=placement)
         return self.__register(op)
 
     # Registers flatmap operator to the environment
-    def flat_map(self, flatmap_fn, name="FlatMap_"+str(_generate_uuid())):
+    def flat_map(self, flatmap_fn, name="FlatMap_"+str(_generate_uuid()),
+                 placement=None):
         """Applies a flatmap operator to the stream.
 
         Attributes:
@@ -722,7 +741,8 @@ class DataStream(object):
             name,
             flatmap_fn,
             num_instances=self.env.config.parallelism,
-            logging=self.env.config.logging)
+            logging=self.env.config.logging,
+            placement=placement)
         return self.__register(op)
 
     # Registers keyBy operator to the environment
@@ -875,7 +895,8 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers a custom sink operator to the environment
-    def sink(self, sink_object, name="Sink_"+str(_generate_uuid())):
+    def sink(self, sink_object, name="Sink_"+str(_generate_uuid()),
+             placement=None):
         """Closes the stream with a custom sink operator."""
         op = operator.CustomSinkOperator(
             _generate_uuid(),
@@ -883,5 +904,6 @@ class DataStream(object):
             sink_object,
             name,
             num_instances=self.env.config.parallelism,
-            logging=self.env.config.logging)
+            logging=self.env.config.logging,
+            placement=placement)
         return self.__register(op)

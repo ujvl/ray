@@ -57,7 +57,8 @@ class Operator(object):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False):
+                 logging=False,
+                 placement=None):
         self.id = id
         self.type = type
         self.name = name
@@ -67,6 +68,12 @@ class Operator(object):
         self.partitioning_strategies = {}
         # Actor logging
         self.logging = logging
+        # An optional mapping of operator instances with local ids in
+        # [0..num_instances) to cluster nodes ids
+        self.placement = placement
+        # TODO (john): Allow partial mappings of instances to nodes
+        if self.placement is None:  # Set default mapping (node 0)
+            self.placement = ["0"] * num_instances
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -188,14 +195,16 @@ class CustomSourceOperator(Operator):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False):
+                 logging=False,
+                 placement=None):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
                           num_instances,
-                          logging)
+                          logging,
+                          placement)
         self.source = source_object
 
 
@@ -226,14 +235,16 @@ class CustomSinkOperator(Operator):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False):
+                 logging=False,
+                 placement=None):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
                           num_instances,
-                          logging)
+                          logging,
+                          placement)
         self.sink = sink_object
 
 
