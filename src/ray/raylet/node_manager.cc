@@ -2022,20 +2022,22 @@ void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor
   // Send the downstream actor's node a FlushLineageRequest.
   const ClientID client_id = actor_entry->second.GetNodeManagerId();
   RAY_LOG(INFO) << "Sending FlushLineageRequest for actor " << actor_id << " to downstream actor " << downstream_actor_id << " at node " << client_id;
-  // TODO: This check is too strong. The downstream actor may be on the same node.
-  RAY_CHECK(client_id != client_id_) << "Implement FlushLineageRequest for local downstream actors";
-  flatbuffers::FlatBufferBuilder fbb;
-  auto message = protocol::CreateFlushLineageRequest(fbb, to_flatbuf(fbb, actor_id), actor_version, to_flatbuf(fbb, downstream_actor_id), to_flatbuf(fbb, client_id_));
-  fbb.Finish(message);
+  if (client_id == client_id_) {
+    ProcessFlushLineageRequest(actor_id, actor_version, downstream_actor_id, client_id);
+  } else {
+    flatbuffers::FlatBufferBuilder fbb;
+    auto message = protocol::CreateFlushLineageRequest(fbb, to_flatbuf(fbb, actor_id), actor_version, to_flatbuf(fbb, downstream_actor_id), to_flatbuf(fbb, client_id_));
+    fbb.Finish(message);
 
-  const auto it = remote_server_connections_.find(client_id);
-  RAY_CHECK(it != remote_server_connections_.end());
-  it->second->WriteMessageAsync(
-      static_cast<int64_t>(protocol::MessageType::FlushLineageRequest), fbb.GetSize(),
-      fbb.GetBufferPointer(),
-      [this](ray::Status status) {
-        RAY_CHECK_OK(status);
-      });
+    const auto it = remote_server_connections_.find(client_id);
+    RAY_CHECK(it != remote_server_connections_.end());
+    it->second->WriteMessageAsync(
+        static_cast<int64_t>(protocol::MessageType::FlushLineageRequest), fbb.GetSize(),
+        fbb.GetBufferPointer(),
+        [this](ray::Status status) {
+          RAY_CHECK_OK(status);
+        });
+  }
 }
 
 void NodeManager::ProcessFlushLineageRequest(
@@ -2063,23 +2065,27 @@ void NodeManager::SendFlushLineageReply(
     << upstream_actor_id
     << " downstream actor " << downstream_actor_id
     << " to node " << upstream_node_id;
-  // Send the upstream actor's node a FlushLineageReply.
-  flatbuffers::FlatBufferBuilder fbb;
-  auto message = protocol::CreateFlushLineageRequest(fbb,
-      to_flatbuf(fbb, upstream_actor_id),
-      0,
-      to_flatbuf(fbb, downstream_actor_id),
-      to_flatbuf(fbb, client_id_));
-  fbb.Finish(message);
+  if (upstream_node_id == client_id_) {
+    ProcessFlushLineageReply(upstream_actor_id, 0, downstream_actor_id, upstream_node_id);
+  } else {
+    // Send the upstream actor's node a FlushLineageReply.
+    flatbuffers::FlatBufferBuilder fbb;
+    auto message = protocol::CreateFlushLineageRequest(fbb,
+        to_flatbuf(fbb, upstream_actor_id),
+        0,
+        to_flatbuf(fbb, downstream_actor_id),
+        to_flatbuf(fbb, client_id_));
+    fbb.Finish(message);
 
-  const auto it = remote_server_connections_.find(upstream_node_id);
-  RAY_CHECK(it != remote_server_connections_.end());
-  it->second->WriteMessageAsync(
-      static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
-      fbb.GetBufferPointer(),
-      [this](ray::Status status) {
-        RAY_CHECK_OK(status);
-      });
+    const auto it = remote_server_connections_.find(upstream_node_id);
+    RAY_CHECK(it != remote_server_connections_.end());
+    it->second->WriteMessageAsync(
+        static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
+        fbb.GetBufferPointer(),
+        [this](ray::Status status) {
+          RAY_CHECK_OK(status);
+        });
+  }
 }
 
 void NodeManager::ProcessFlushLineageReply(

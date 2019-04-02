@@ -139,6 +139,7 @@ if __name__ == '__main__':
     sink = Sink.remote(source_keys)
     cls1 = ray.remote(resources={"Node1": 1}, max_reconstructions=100)(NondeterministicOperator)
     nondeterministic_operator1 = cls1.remote(sink)
+    # Modify this resource to be Node2 to test case where multiple actors on same machine fail.
     cls2 = ray.remote(resources={"Node2": 1}, max_reconstructions=100)(NondeterministicOperator)
     nondeterministic_operator2 = cls2.remote(nondeterministic_operator1)
     sources = [Source.remote(key, nondeterministic_operator2, max_queue_length) for key in source_keys]
