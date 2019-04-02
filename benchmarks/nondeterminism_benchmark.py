@@ -4,6 +4,7 @@ import time
 import os
 from collections import defaultdict
 import string
+import numpy as np
 
 import ray
 from ray.tests.cluster_utils import Cluster
@@ -34,13 +35,13 @@ class Source(object):
     def generate(self, num_records):
         for i in range(num_records):
             self.push()
-        ray.get(self.handle.push.remote(None, self.checkpoint_epoch))
+        ray.get(self.handle.push.remote(self.operator_id, [], self.checkpoint_epoch))
 
     def push(self):
-        record = (self.operator_id, self.operator_id, self.index)
+        record = (self.operator_id, self.index)
         if self.index % self.checkpoint_interval == 0 and self.index > 0:
             self.checkpoint_epoch += 1
-        self.queue.append(self.handle.push.remote(record, self.checkpoint_epoch))
+        self.queue.append(self.handle.push.remote(self.operator_id, [record], self.checkpoint_epoch))
         self.index += 1
 
         wait_time = 0
@@ -57,7 +58,7 @@ class Source(object):
                 wait_time = 0
 
 class NondeterministicOperator(ray.actor.Checkpointable):
-    def __init__(self, operator_id, handle, upstream_ids, checkpoint_dir):
+    def __init__(self, operator_id, handle, upstream_ids, checkpoint_dir, flush_probability):
         self.operator_id = operator_id
         self.handle = handle
         self._ray_downstream_actors = [handle._ray_actor_id]
@@ -75,6 +76,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         except FileExistsError:
             pass
 
+        self.flush_probability = flush_probability
+        self.flush_buffer = []
 
     def checkpoint(self, upstream_id, checkpoint_epoch):
         if checkpoint_epoch > self.checkpoint_epoch:
@@ -97,20 +100,40 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             process_record = True
         return process_record
 
-    def push(self, record, checkpoint_epoch):
-        process_record = True
-        if record is not None:
-            upstream_id, _, _ = record
-            process_record = self.checkpoint(upstream_id, checkpoint_epoch)
+    def push(self, upstream_id, records, checkpoint_epoch):
+        process_records = self.checkpoint(upstream_id, checkpoint_epoch)
 
-        if process_record:
-            if record is not None:
-                record = (self.operator_id, record[1], record[2])
-            done = self.handle.push.remote(record, checkpoint_epoch)
-            if record is None:
-                ray.get(done)
+        if process_records:
+            if len(records) == 0:
+                # This is the last batch that we will receive from this
+                # upstream operator.
+                if len(self.flush_buffer) > 0:
+                    self.flush()
+                # Send an empty batch. Block on the result to notify the
+                # upstream operator when we are finished processing all of its
+                # records.
+                ray.get(self.flush())
+            else:
+                for record in records:
+                    # Process the record.
+                    self.flush_buffer.append(record)
+                    self.try_flush()
+
         else:
-            self.checkpoint_buffer.append((record, checkpoint_epoch))
+            self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
+
+    def try_flush(self):
+        # Flush randomly.
+        do_flush = np.random.rand() < self.flush_probability
+        # If we are about to take a checkpoint, then force a flush.
+        do_flush = do_flush or self._should_checkpoint
+        if do_flush:
+            self.flush()
+
+    def flush(self):
+        future = self.handle.push.remote(self.operator_id, self.flush_buffer, self.checkpoint_epoch)
+        self.flush_buffer.clear()
+        return future
 
     def get_pid(self):
         return os.getpid()
@@ -146,8 +169,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         # Make a copy of the checkpoint buffer and try to process them again.
         checkpoint_buffer = self.checkpoint_buffer[:]
         self.checkpoint_buffer.clear()
-        for record, checkpoint_epoch in checkpoint_buffer:
-            self.push(record, checkpoint_epoch)
+        for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+            self.push(upstream_id, records, checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         print("Available checkpoints", available_checkpoints)
@@ -168,8 +191,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         assert self.checkpoint_epoch == latest_checkpoint_interval
         self.checkpoint_epoch += 1
         # Try to process the records that were in the buffer.
-        for record, checkpoint_epoch in checkpoint["buffer"]:
-            self.push(record, checkpoint_epoch)
+        for upstream_id, record, checkpoint_epoch in checkpoint["buffer"]:
+            self.push(upstream_id, record, checkpoint_epoch)
 
         checkpoint_id = checkpoint["checkpoint_id"]
         print("Reloaded checkpoint", latest_checkpoint_interval, checkpoint_id, flush=True)
@@ -187,21 +210,20 @@ class Sink(object):
         self.checkpoint_tracker = checkpoint_tracker
         self.checkpoint_epoch = 0
 
-    def push(self, record, checkpoint_epoch):
-        if record is None:
-            return
-        _, source_key, val = record
-        assert self.records[source_key] == val, (source_key, self.records[source_key], val)
-        self.records[source_key] += 1
+    def push(self, upstream_id, records, checkpoint_epoch):
+        for record in records:
+            source_key, val = record
+            assert self.records[source_key] == val, (source_key, self.records[source_key], val)
+            self.records[source_key] += 1
 
-        # TODO: Normally we would also take a checkpoint on the sink, then
-        # release the new checkpoint interval to the tracker.
-        if checkpoint_epoch > self.checkpoint_epoch:
-            assert checkpoint_epoch == self.checkpoint_epoch + 1, ("Sink did not receive any records for checkpoint", checkpoint_epoch)
-            # Notify the checkpoint tracker that we have completed this
-            # checkpoint.
-            self.checkpoint_tracker.notify_checkpoint_complete.remote(self.operator_id, self.checkpoint_epoch)
-            self.checkpoint_epoch = checkpoint_epoch
+            # TODO: Normally we would also take a checkpoint on the sink, then
+            # release the new checkpoint interval to the tracker.
+            if checkpoint_epoch > self.checkpoint_epoch:
+                assert checkpoint_epoch == self.checkpoint_epoch + 1, ("Sink did not receive any records for checkpoint", checkpoint_epoch)
+                # Notify the checkpoint tracker that we have completed this
+                # checkpoint.
+                self.checkpoint_tracker.notify_checkpoint_complete.remote(self.operator_id, self.checkpoint_epoch)
+                self.checkpoint_epoch = checkpoint_epoch
 
     def get_records(self):
         return self.records
@@ -243,6 +265,11 @@ if __name__ == '__main__':
         '--same-node',
         action='store_true',
         help='Place all intermediate operators on the same node.')
+    parser.add_argument(
+        '--flush-probability',
+        type=float,
+        default=1.0,
+        help='The probability of flushing a batch on the nondeterministic operator.')
     args = parser.parse_args()
 
     # Create the checkpoint directory.
@@ -327,7 +354,7 @@ if __name__ == '__main__':
         else:
             upstream_keys = [intermediate_keys[i-1]]
         print("Starting intermediate operator", key, upstream_keys)
-        operator = cls.remote(key, operator, upstream_keys, checkpoint_dir)
+        operator = cls.remote(key, operator, upstream_keys, checkpoint_dir, args.flush_probability)
         operators.append(operator)
 
     # Create the sources.
