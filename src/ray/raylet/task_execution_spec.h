@@ -92,6 +92,9 @@ class TaskExecutionSpecification {
   /// time stamp to. Tracks the last time this task entered a local scheduler.
   void SetLastTimestamp(int64_t new_timestamp);
 
+  void AppendNondeterministicEvent(const std::string &nondeterministic_event);
+  const std::vector<std::string> &GetNondeterministicEvents() const;
+
  private:
   protocol::TaskExecutionSpecificationT execution_spec_;
 };

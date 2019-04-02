@@ -969,6 +969,19 @@ void NodeManager::ProcessSubmitTaskMessage(const uint8_t *message_data) {
       from_flatbuf(*message->execution_dependencies()));
   TaskSpecification task_spec(*message->task_spec());
   Task task(task_execution_spec, task_spec);
+
+  const std::string &nondeterministic_event = message->nondeterministic_event()->str();
+  if (!nondeterministic_event.empty()) {
+    const auto &parent_task_id = task_spec.ParentTaskId();
+    RAY_CHECK(local_queues_.HasTask(parent_task_id));
+    const auto state = local_queues_.GetTaskState(parent_task_id);
+    auto &parent_task = local_queues_.GetTaskOfState(parent_task_id, state);
+    if (parent_task.GetTaskExecutionSpec().NumExecutions() <= 1) {
+      parent_task.AppendNondeterministicEvent(nondeterministic_event);
+      RAY_CHECK(lineage_cache_.AddReadyTask(parent_task));
+    }
+  }
+
   // Submit the task to the local scheduler. Since the task was submitted
   // locally, there is no uncommitted lineage.
   SubmitTask(task, Lineage());
@@ -1754,6 +1767,8 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
   auto resource_id_set_flatbuf = resource_id_set.ToFlatbuf(fbb);
 
   auto message = protocol::CreateGetTaskReply(fbb, spec.ToFlatbuffer(fbb),
+                                              task.GetTaskExecutionSpec().NumExecutions() > 0,
+                                              fbb.CreateVectorOfStrings(task.GetTaskExecutionSpec().GetNondeterministicEvents()),
                                               fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
 

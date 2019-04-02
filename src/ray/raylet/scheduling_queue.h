@@ -88,6 +88,8 @@ class TaskQueue {
   /// \return The task.
   const Task &GetTask(const TaskID &task_id) const;
 
+  Task &GetTaskMutable(const TaskID &task_id) const;
+
   /// \brief Get the total resources required by the tasks in the queue.
   ///
   /// \return Total resources required by the tasks in the queue.
@@ -186,7 +188,7 @@ class SchedulingQueue {
   /// \param task_id The task to get.
   /// \param task_state The state that the requested task should be in.
   /// \return The task.
-  const Task &GetTaskOfState(const TaskID &task_id, TaskState task_state) const;
+  Task &GetTaskOfState(const TaskID &task_id, TaskState task_state) const;
 
   /// \brief Return an aggregate resource set for all tasks exerting load on this raylet.
   ///

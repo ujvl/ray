@@ -143,11 +143,14 @@ bool Lineage::SetEntry(const Task &task, GcsStatus status, const std::unordered_
       // The task version is newer, so update the task field.
       it->second.UpdateTaskData(task, forwarded_to);
       updated = true;
-      // Reset the task's status.
-      if (!it->second.SetStatus(status)) {
+      // Reset the task's status. Only return true if the old status was
+      // different from the new status.
+      if (it->second.SetStatus(status)) {
+        set = true;
+      } else if (it->second.GetStatus() != status) {
         it->second.ResetStatus(status);
+        set = true;
       }
-      set = true;
     } else if (it->second.SetStatus(status)) {
       set = true;
     }

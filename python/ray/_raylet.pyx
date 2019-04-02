@@ -257,10 +257,15 @@ cdef class RayletClient:
     def get_task(self):
         cdef:
             unique_ptr[CTaskSpecification] task_spec
+            c_bool reexecution = False
+            c_vector[c_string] nondeterministic_events
 
         with nogil:
-            check_status(self.client.get().GetTask(&task_spec))
-        return Task.make(task_spec)
+            check_status(self.client.get().GetTask(&task_spec, &reexecution, &nondeterministic_events))
+        if reexecution:
+            return Task.make(task_spec), nondeterministic_events
+        else:
+            return Task.make(task_spec), None
 
     def task_done(self):
         check_status(self.client.get().TaskDone())

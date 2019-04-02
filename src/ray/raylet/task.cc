@@ -63,6 +63,10 @@ void Task::CopyTaskExecutionSpec(const Task &task) {
   ComputeDependencies();
 }
 
+void Task::AppendNondeterministicEvent(const std::string &nondeterministic_event) {
+  task_execution_spec_.AppendNondeterministicEvent(nondeterministic_event);
+}
+
 std::string SerializeTaskAsString(const std::vector<ObjectID> *dependencies,
                                   const TaskSpecification *task_spec) {
   flatbuffers::FlatBufferBuilder fbb;

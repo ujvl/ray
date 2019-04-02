@@ -88,7 +88,9 @@ class RayletClient {
   ///
   /// \param task_spec The assigned task.
   /// \return ray::Status.
-  ray::Status GetTask(std::unique_ptr<ray::raylet::TaskSpecification> *task_spec);
+  ray::Status GetTask(std::unique_ptr<ray::raylet::TaskSpecification> *task_spec,
+    bool *reexecution,
+    std::vector<std::string> *nondeterministic_events);
 
   /// Tell the raylet that the client has finished executing a task.
   ///

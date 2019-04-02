@@ -55,8 +55,8 @@ int TaskExecutionSpecification::NumResubmissions() const {
 }
 
 void TaskExecutionSpecification::IncrementNumExecutions() {
-  execution_spec_.num_executions += 1;
-  execution_spec_.version += 1;
+  execution_spec_.num_executions++;
+  execution_spec_.version++;
 }
 
 void TaskExecutionSpecification::IncrementNumResubmissions() {
@@ -73,6 +73,15 @@ int64_t TaskExecutionSpecification::LastTimestamp() const {
 
 void TaskExecutionSpecification::SetLastTimestamp(int64_t new_timestamp) {
   execution_spec_.last_timestamp = new_timestamp;
+}
+
+void TaskExecutionSpecification::AppendNondeterministicEvent(const std::string &nondeterministic_event) {
+  execution_spec_.nondeterministic_events.push_back(nondeterministic_event);
+  execution_spec_.version++;
+}
+
+const std::vector<std::string> &TaskExecutionSpecification::GetNondeterministicEvents() const {
+  return execution_spec_.nondeterministic_events;
 }
 
 }  // namespace raylet

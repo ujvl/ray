@@ -53,7 +53,9 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
             const c_vector[CObjectID] &execution_dependencies,
             const CTaskSpecification &task_spec,
             const c_string &nondeterministic_event)
-        CRayStatus GetTask(unique_ptr[CTaskSpecification] *task_spec)
+        CRayStatus GetTask(unique_ptr[CTaskSpecification] *task_spec,
+            c_bool *reexecution,
+            c_vector[c_string] *nondeterministic_events)
         CRayStatus TaskDone()
         CRayStatus FetchOrReconstruct(c_vector[CObjectID] &object_ids,
                                       c_bool fetch_only,

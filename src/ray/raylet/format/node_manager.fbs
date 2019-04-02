@@ -96,6 +96,7 @@ table TaskExecutionSpecification {
   // The number of times this task has been resubmitted.
   num_resubmissions: int;
   version: int;
+  nondeterministic_events: [string];
 }
 
 table Task {
@@ -129,6 +130,12 @@ table DisconnectClient {
 table GetTaskReply {
   // A string of bytes representing the task specification.
   task_spec: string;
+  // Whether this task is a re-execution. If this is true, then for
+  // nondeterministic tasks, the application must replay the events in
+  // nondeterministic_events for correctness.
+  reexecution: bool;
+  // The list of nondeterministic events that occured, if any.
+  nondeterministic_events: [string];
   // A list of the resources reserved for this worker.
   fractional_resource_ids: [ResourceIdSetInfo];
 }

@@ -198,6 +198,7 @@ class Worker(object):
 
             self._task_context.task_index = 0
             self._task_context.put_index = 1
+            self._task_context.nondeterministic_events = None
             self._task_context.initialized = True
             # A list of (object ID, argument) for the current task's arguments.
             # This is used to forward arguments that get passed into a nested
@@ -945,7 +946,7 @@ class Worker(object):
         # Send signal with the error.
         ray_signal.send(ray_signal.ErrorSignal(error))
 
-    def _wait_for_and_process_task(self, task):
+    def _wait_for_and_process_task(self, task, nondeterministic_events):
         """Wait for a task to be ready and process the task.
 
         Args:
@@ -999,6 +1000,8 @@ class Worker(object):
                 title = "ray_{}:{}()".format(actor.__class__.__name__,
                                              function_name)
                 next_title = "ray_{}".format(actor.__class__.__name__)
+
+            self.task_context.nondeterministic_events = nondeterministic_events
             with profiling.profile("task", extra_data=extra_data):
                 with _changeproctitle(title, next_title):
                     self._process_task(task, execution_info)
@@ -1031,12 +1034,12 @@ class Worker(object):
             A task from the local scheduler.
         """
         with profiling.profile("worker_idle"):
-            task = self.raylet_client.get_task()
+            task, nondeterministic_events = self.raylet_client.get_task()
 
         # Automatically restrict the GPUs available to this task.
         ray.utils.set_cuda_visible_devices(ray.get_gpu_ids())
 
-        return task
+        return task, nondeterministic_events
 
     def main_loop(self):
         """The main loop a worker runs to receive and execute tasks."""
@@ -1048,8 +1051,8 @@ class Worker(object):
         signal.signal(signal.SIGTERM, exit)
 
         while True:
-            task = self._get_next_task_from_local_scheduler()
-            self._wait_for_and_process_task(task)
+            task, nondeterministic_events = self._get_next_task_from_local_scheduler()
+            self._wait_for_and_process_task(task, nondeterministic_events)
 
 
 def get_gpu_ids():

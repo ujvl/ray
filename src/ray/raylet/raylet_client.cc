@@ -235,7 +235,9 @@ ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_depe
 }
 
 ray::Status RayletClient::GetTask(
-    std::unique_ptr<ray::raylet::TaskSpecification> *task_spec) {
+    std::unique_ptr<ray::raylet::TaskSpecification> *task_spec,
+    bool *reexecution,
+    std::vector<std::string> *nondeterministic_events) {
   std::unique_ptr<uint8_t[]> reply;
   // Receive a task from the raylet. This will block until the local
   // scheduler gives this client a task.
@@ -264,6 +266,13 @@ ray::Status RayletClient::GetTask(
         RAY_CHECK(whole_fraction == resource_fraction);
       }
       acquired_resources.push_back(std::make_pair(resource_id, resource_fraction));
+    }
+  }
+
+  if (reply_message->reexecution()) {
+    *reexecution = true;
+    for (size_t i = 0; i < reply_message->nondeterministic_events()->size(); ++i) {
+      nondeterministic_events->push_back(reply_message->nondeterministic_events()->Get(i)->str());
     }
   }
 
