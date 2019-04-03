@@ -220,19 +220,19 @@ class Environment(object):
         if operator.type == OpType.Source:
             node_id = operator.placement[instance_id]
             args = [actor_id, operator, input, output]
-            actor_handle = operator_instance.Source._remote(args=[*args],
+            actor_handle = operator_instance.Source._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Map:
             node_id = operator.placement[instance_id]
             args = [actor_id, operator, input, output]
-            actor_handle = operator_instance.Map._remote(args=[*args],
+            actor_handle = operator_instance.Map._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.FlatMap:
             node_id = operator.placement[instance_id]
             args = [actor_id, operator, input, output]
-            actor_handle = operator_instance.FlatMap._remote(args=[*args],
+            actor_handle = operator_instance.FlatMap._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Filter:
@@ -260,7 +260,7 @@ class Environment(object):
         elif operator.type == OpType.Sink:
             node_id = operator.placement[instance_id]
             args = [actor_id, operator, input, output]
-            actor_handle = operator_instance.Sink._remote(args=[*args],
+            actor_handle = operator_instance.Sink._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Inspect:
@@ -715,6 +715,10 @@ class DataStream(object):
 
         Attributes:
              map_fn (function): The user-defined logic of the map.
+             name (str): The name of the map operator
+             placement list(str): A mapping from local instance ids in
+             [0...num_instances) to cluster node ids
+
         """
         op = operator.Operator(
             _generate_uuid(),
@@ -734,6 +738,9 @@ class DataStream(object):
         Attributes:
              flatmap_fn (function): The user-defined logic of the flatmap
              (e.g. split()).
+             name (str): The name of the flatmap operator
+             placement list(str): A mapping from local instance ids in
+             [0...num_instances) to cluster node ids
         """
         op = operator.Operator(
             _generate_uuid(),
@@ -897,7 +904,14 @@ class DataStream(object):
     # Registers a custom sink operator to the environment
     def sink(self, sink_object, name="Sink_"+str(_generate_uuid()),
              placement=None):
-        """Closes the stream with a custom sink operator."""
+        """Closes the stream with a custom sink operator.
+
+        Attributes:
+            sink_object (object): The sink class with the user-defined logic
+            name (str): The name of the sink operator
+            placement list(str): A mapping from local instance ids in
+            [0...num_instances) to cluster node ids
+        """
         op = operator.CustomSinkOperator(
             _generate_uuid(),
             OpType.Sink,

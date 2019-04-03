@@ -14,23 +14,23 @@ from statistics import mean, median, stdev
 from statsmodels.distributions.empirical_distribution import ECDF
 
 
-# Max number of parameters across all types of experiments
-NUM_PARAMETERS = 13
-NUM_QUEUE_PARAMETERS = 11
-API_QUEUE_COMMON_PARAMETERS = 10
+NUM_PARAMETERS = 18  # Total number of parameters for experiments with the API
+NUM_QUEUE_PARAMETERS = 16
+API_QUEUE_COMMON_PARAMETERS = 14
 
 queue_only_parameters = ["max_reads"]
 not_queue_parameters = ["task_based", "dataflow_parallelism", "partitioning"]
 
 # Parameters position in log file names
-_index_of = {"rounds":0,"sample_period":1,
-             "record_type":2,"record_size":3,
-             "max_queue_size":4,"max_batch_size":5,
-             "batch_timeout":6,"prefetch_depth":7,
-             "background_flush":8,"num_stages":9,
-             "partitioning":10,"task_based":11,
-             "dataflow_parallelism":12,
-             "num_queues":9, "max_reads":10}
+_index_of = {"nodes":0, "source_rate":1,
+             "redis_shards":2, "redis_max_memory":3,
+             "plasma_memory":4, "rounds":5, "sample_period":6,
+             "record_type":7,"record_size":8,
+             "max_queue_size":9,"max_batch_size":10,
+             "batch_timeout":11,"prefetch_depth":12,
+             "background_flush":13,"num_stages":14,
+             "partitioning":15,"task_based":16,
+             "dataflow_parallelism":17, "max_reads":15}
 
 # Default file prefixes
 latency_plot_file_prefix = "latency_plot_"
@@ -38,20 +38,6 @@ throughput_plot_file_prefix = "throughput_plot_"
 latency_file_prefix = "latencies"
 throughput_file_prefix = "throughputs"
 dump_file_prefix = "dump_"
-
-# Parameters space
-num_stages = [n for n in range(1,21)]
-parallelism = [2, 4]  # number of instances for each actor (except the source)
-partitioning = ["round_robin", "shuffle", "broadcast"]
-task_based = [True, False]  # False corresponds to queue-based execution
-record_type = ["int", "string"]
-record_size = [10, 100, 1000, 10000]  # in bytes (iff record_type = "string")
-sample_period = [100]
-
-batch_size = [1, 100, 1000, 10000]  # in number of records
-queue_size = [1000, 10000, 100000]  # in number of batches
-batch_timeout = [0.01, 0.1]  # in secs
-prefetch_depth = [10]
 
 # Used to load parameters from a configuration file
 class LoadFromFile(argparse.Action):
@@ -65,7 +51,6 @@ class LoadFromFile(argparse.Action):
         parser.parse_args(args, namespace)
 
 parser = argparse.ArgumentParser()
-
 # Plot-related parameteres
 parser.add_argument("--plot-type", default="latency",
                     choices = ["api_overhead", "latency",
@@ -74,6 +59,9 @@ parser.add_argument("--plot-type", default="latency",
 parser.add_argument("--cdf", default=False,
                     action = 'store_true',
                     help="whether to generate latency CDFs instead of lines")
+parser.add_argument("--logscale", default=False,
+                    action = 'store_true',
+                    help="whether to generate a logscale plot")
 parser.add_argument("--plot-repo", default="./",
                     help="the folder to store plots")
 parser.add_argument("--plot-file", default=latency_plot_file_prefix,
@@ -88,6 +76,18 @@ parser.add_argument("--throughput-file", default=throughput_file_prefix,
 parser.add_argument("--dump-file", default=dump_file_prefix,
                     help="the chrome timeline dump file")
 # Dataflow-related parameters
+parser.add_argument("--nodes", default=1,
+                    help="total number of nodes in the cluster")
+parser.add_argument("--redis-shards", default=1,
+                    help="total number of Redis shards")
+parser.add_argument("--redis-max-memory", default=10**9,
+                    help="max amount of memory per Redis shard")
+parser.add_argument("--plasma-memory", default=10**9,
+                    help="amount of memory to start plasma with")
+parser.add_argument("--source-rate", default=-1,
+                    type=lambda x: ((float(x) == -1) or float(x)) or
+                                parser.error("Source rate cannot be zero."),
+                    help="source output rate (records/s)")
 parser.add_argument("--rounds", default=1,
                     help="the number of rounds in the experiment")
 parser.add_argument("--num-stages", default=2,
@@ -111,9 +111,9 @@ parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
-parser.add_argument("--batch-timeout", default=0.01,
+parser.add_argument("--batch-timeout", default=0.1,
                     help="the timeout to flush a batch")
-parser.add_argument("--prefetch-depth", default=10,
+parser.add_argument("--prefetch-depth", default=1,
                     help="the number of batches prefetched from plasma")
 parser.add_argument("--background-flush", default=False,
                     choices = [True,False],
@@ -123,7 +123,6 @@ parser.add_argument("--max-reads", default=float("inf"),
 
 parser.add_argument("--conf-file", type=open, action=LoadFromFile,
                     help="load parameters from a configuration file")
-
 
 # 'agg' backend is used to create plot as a .png file
 mpl.use('agg')
@@ -137,9 +136,11 @@ blues = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
                               cmap="Blues")
 oranges = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
                               cmap="Oranges")
+greys = mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=-8, vmax=8),
+                              cmap="Greys")
 
 # Line color generator
-colors = cycle([blues, reds, greens, oranges])
+colors = cycle([blues, greys, reds, greens, oranges])
 
 # Linestyle generator
 linestyles = cycle(['solid', 'dashed', 'dotted', 'dashdot'])
@@ -202,7 +203,7 @@ def _generate_labels(parameter_names, parameter_values, label_prefix=""):
 def _is_pair(api_parameters, queue_parameters):
     assert(len(queue_parameters) < len(api_parameters))
     for i in range(len(queue_parameters)):
-        if i < API_QUEUE_COMMON_PARAMETERS:
+        if i <= API_QUEUE_COMMON_PARAMETERS:
             if queue_parameters[i] != api_parameters[i]:
                 return False
     return True
@@ -332,7 +333,7 @@ def collect_rates(file_repo, throughput_file_prefix,
 # Generates a line plot
 def generate_line_plot(x_data, y_data, x_label, y_label, line_labels,
                        plot_repo, plot_file_name,
-                       cdf=False, point_labels=None):
+                       cdf=False, point_labels=None, logscale=False):
     # Create a figure instance
     line_plot = plt.figure(1, figsize=(9, 6))
     # Create an axes instance
@@ -361,7 +362,8 @@ def generate_line_plot(x_data, y_data, x_label, y_label, line_labels,
     ax.legend(fontsize=8)
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
-    # ax.set_yscale('log')
+    if logscale:
+        ax.set_yscale('log')
     # Set font sizes
     for item in ([ax.title, ax.xaxis.label,
         ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels()):
@@ -381,7 +383,7 @@ def generate_line_plot(x_data, y_data, x_label, y_label, line_labels,
 
 # Generates a boxplot
 def generate_box_plot(data, x_label, y_label,
-                      labels, plot_repo, plot_file_name):
+                      labels, plot_repo, plot_file_name, logscale=False):
     # Create a figure instance
     box_plot = plt.figure(1, figsize=(9, 6))
     # Create an axes instance
@@ -391,7 +393,8 @@ def generate_box_plot(data, x_label, y_label,
     ax.get_xaxis().tick_bottom()
     ax.get_yaxis().tick_left()
     ax.boxplot(data)
-    ax.set_yscale('log')
+    if logscale:
+        ax.set_yscale('log')
     ax.set_xticklabels(labels)
     # Set font sizes
     for item in ([ax.title, ax.xaxis.label, ax.yaxis.label]):
@@ -408,7 +411,7 @@ def generate_box_plot(data, x_label, y_label,
 
 # Generates a barchart
 def generate_barchart_plot(data, x_label, y_label, bar_metadata, exp_labels,
-                           plot_repo, plot_file_name):
+                           plot_repo, plot_file_name, logscale=False):
     # TODO (john): Add option to use actor ids at the bottom of each bar
     num_exps = len(data)        # Total number of histograms in the plot
     ind = np.arange(num_exps)   # The x-axis locations of the histograms
@@ -458,7 +461,8 @@ def generate_barchart_plot(data, x_label, y_label, bar_metadata, exp_labels,
     # Set font size for x-axis tick labels
     for item in ax.get_xticklabels():
         item.set_fontsize(10)
-    # ax.set_yscale('log')
+    if logscale:
+        ax.set_yscale('log')
     # Save plot
     if plot_repo[-1] != "/":
         plot_repo += "/"
@@ -469,7 +473,7 @@ def generate_barchart_plot(data, x_label, y_label, bar_metadata, exp_labels,
 
 # Generates a latency vs throughput plot for a single varying parameter
 def latency_vs_throughput(latencies, rates, plot_repo, varying_parameters,
-                          plot_file_prefix, plot_type="line"):
+                          plot_file_prefix, plot_type="line", logscale=False):
     assert len(latencies) > 0
     assert len(rates) > 0
     # TODO (john): Support multiple varying parameters
@@ -483,14 +487,14 @@ def latency_vs_throughput(latencies, rates, plot_repo, varying_parameters,
         plot_filename = plot_file_prefix + "-latency-vs-throughput.png"
         generate_line_plot([latencies], [rates], x_axis_label, y_axis_label,
                            labels, plot_repo, plot_filename,
-                           plot_type=="cdf", values)
+                           plot_type=="cdf", values, logscale=logscale)
     else:
         sys.exit("Unrecognized or unsupported plot type.")
 
 # Generates boxplots showing the overhead of
 # using the Streaming API over batch queues
 def api_overhead(latencies, plot_repo, varying_parameters,
-                 plot_file_prefix, plot_type="boxplot"):
+                 plot_file_prefix, plot_type="boxplot", logscale=False):
     assert len(latencies) > 0
     labels = [""] * len(latencies)
     try:  # In case there is at least one varying parameter
@@ -510,20 +514,21 @@ def api_overhead(latencies, plot_repo, varying_parameters,
         plot_filename = plot_file_prefix + "-api-overhead.png"
         data = [data for _, data in latencies]
         generate_box_plot(data, x_axis_label, y_axis_label,
-                          labels, plot_repo, plot_filename)
+                          labels, plot_repo, plot_filename, logscale)
     elif plot_type == "cdf":
         x_axis_label = "End-to-end record latency [s]"
         y_axis_label = "Percentage [%]"
         plot_filename = plot_file_prefix + "-api-overhead-cdf.png"
         x_data = [data for _, data in latencies]
         generate_line_plot(x_data, [], x_axis_label, y_axis_label,
-                          labels, plot_repo, plot_filename, True)
+                          labels, plot_repo, plot_filename, True,
+                          logscale=logscale)
     else:
         sys.exit("Unrecognized or unsupported plot type.")
 
 # Generates barcharts showing actor rates
 def actor_rates(rates, plot_repo, varying_parameters,
-                 plot_file_prefix, plot_type="barchart"):
+                 plot_file_prefix, plot_type="barchart", logscale=False):
     assert len(rates) > 0
     try:
         tag, values = varying_parameters
@@ -567,14 +572,14 @@ def actor_rates(rates, plot_repo, varying_parameters,
             i += 1
         generate_barchart_plot(data, x_axis_label, y_axis_label,
                                bar_metadata, exp_labels, plot_repo,
-                               plot_filename)
+                               plot_filename, logscale)
     else:
         sys.exit("Unrecognized or unsupported plot type.")
 
 # Generates plots showing how end-to-end record latency is affected
 # by varying the batched queue size
 def latency_vs_queue_size(latencies, plot_repo, parameter_values,
-                          plot_file_prefix, plot_type):
+                          plot_file_prefix, plot_type, logscale=False):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Queue size")
     samples = []
@@ -595,12 +600,12 @@ def latency_vs_queue_size(latencies, plot_repo, parameter_values,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
-                       plot_type=="cdf")
+                       plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
 # by varying the batch size
 def latency_vs_batch_size(latencies, plot_repo, parameter_values,
-                          plot_file_prefix, plot_type="line"):
+                          plot_file_prefix, plot_type="line", logscale=False):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Batch size")
     if plot_type == "line":
@@ -620,12 +625,12 @@ def latency_vs_batch_size(latencies, plot_repo, parameter_values,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
-                       plot_type=="cdf")
+                       plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
 # by varying the batch timeout (flush timeout)
 def latency_vs_timeout(latencies, plot_repo, parameter_values,
-                       plot_file_prefix, plot_type="line"):
+                       plot_file_prefix, plot_type="line", logscale=False):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Batch timeout")
     if plot_type == "line":
@@ -645,12 +650,12 @@ def latency_vs_timeout(latencies, plot_repo, parameter_values,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
-                       plot_type=="cdf")
+                       plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
 # when using tasks compared to batched queues
 def latency_task_vs_queue(latencies, plot_repo, parameter_values,
-                          plot_file_prefix, plot_type="line"):
+                          plot_file_prefix, plot_type="line", logscale=False):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Task-based")
     if plot_type == "line":
@@ -670,12 +675,13 @@ def latency_task_vs_queue(latencies, plot_repo, parameter_values,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                        labels, plot_repo, plot_filename,
-                       plot_type=="cdf")
+                       plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
 # by varying the number of stages in the dataflow
 def latency_vs_chain_length(latencies, plot_repo, parameter_values,
-                             plot_file_prefix, plot_type="line"):
+                             plot_file_prefix, plot_type="line",
+                             logscale=False):
     labels = _generate_labels([], parameter_values,
                               label_prefix="Chain length")
     if plot_type == "line":
@@ -695,12 +701,39 @@ def latency_vs_chain_length(latencies, plot_repo, parameter_values,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                            labels, plot_repo, plot_filename,
-                           plot_type=="cdf")
+                           plot_type=="cdf", logscale=logscale)
+
+# Generates plots showing how end-to-end record latency is affected
+# by varying the number of operator instances per stage
+def latency_vs_parallelism(latencies, plot_repo, parameter_values,
+                             plot_file_prefix, plot_type="line",
+                             logscale=False):
+    labels = _generate_labels([], parameter_values,
+                              label_prefix="Parallelism")
+    if plot_type == "line":
+        x_axis_label = "Samples"
+        y_axis_label = "End-to-end record latency [s]"
+        plot_filename = plot_file_prefix + "-parallelism.png"
+    elif plot_type == "cdf":
+        x_axis_label = "End-to-end record latency [s]"
+        y_axis_label = "Percentage [%]"
+        plot_filename = plot_file_prefix + "-parallelism-cdf.png"
+    else:
+        sys.exit("Unrecognized or unsupported plot type.")
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
+                           labels, plot_repo, plot_filename,
+                           plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
 # by varying a combination of parameters
 def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
-                                   plot_file_prefix, plot_type="line"):
+                                   plot_file_prefix, plot_type="line",
+                                   logscale=False):
     combined_names = varying_combination[0]
     combined_values = varying_combination[1]
     labels = _generate_labels([combined_names],
@@ -722,7 +755,7 @@ def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
     y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
     generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
                            labels, plot_repo, plot_filename,
-                           plot_type=="cdf")
+                           plot_type=="cdf", logscale=logscale)
 
 # Writes a log file containing all parameters
 # of the experiment the plot corresponds to
@@ -749,6 +782,7 @@ if __name__ == "__main__":
     # Plotting arguments
     plot_type = str(args.plot_type)
     cdf = bool(args.cdf)
+    logscale = bool(args.logscale)
     plot_repo = str(args.plot_repo)
     plot_file_prefix = str(args.plot_file)
     if plot_type == "throughput":
@@ -762,6 +796,14 @@ if __name__ == "__main__":
 
     # Configuration arguments
     exp_args = []
+    exp_args.append(("nodes", [int(args.nodes)]))
+    input_rate = float(args.source_rate)
+    if input_rate < 0:
+        input_rate = "inf"
+    exp_args.append(("source_rate", [input_rate]))
+    exp_args.append(("redis_shards", [int(args.redis_shards)]))
+    exp_args.append(("redis_max_memory", [int(args.redis_max_memory)]))
+    exp_args.append(("plasma_memory", [int(args.plasma_memory)]))
     exp_args.append(("rounds", [int(args.rounds)]))
     exp_args.append(("num_stages",
                          _parse_arg(args.num_stages, type="int")))
@@ -856,33 +898,42 @@ if __name__ == "__main__":
                       varying_parameters) > 1 else varying_parameters[
                       0] if len(varying_parameters) > 0 else None
             api_overhead(paired_latencies, plot_repo, varying,
-                         plot_file_prefix, plot_type)
+                         plot_file_prefix, plot_type, logscale)
         elif len(varying_parameters) > 1:  # Multiple varying parameters
             plot_type = "cdf" if cdf else "line"
             varying_combination = _varying_combination(varying_parameters)
             latency_vs_multiple_parameters(latencies, plot_repo,
                                            varying_combination,
                                            plot_file_prefix,
-                                           plot_type)
+                                           plot_type, logscale)
         elif len(varying_parameters) == 1:
             # Identify parameter to generate the respective plot labels
             plot_type = "cdf" if cdf else "line"
             for tag, values in varying_parameters:
                 if tag == "max_queue_size":
                     latency_vs_queue_size(latencies, plot_repo, values,
-                                          plot_file_prefix, plot_type)
+                                          plot_file_prefix, plot_type,
+                                          logscale)
                 elif tag == "max_batch_size":
                     latency_vs_batch_size(latencies, plot_repo, values,
-                                          plot_file_prefix, plot_type)
+                                          plot_file_prefix, plot_type,
+                                          logscale)
                 elif tag == "batch_timeout":
                     latency_vs_timeout(latencies, plot_repo, values,
-                                       plot_file_prefix, plot_type)
+                                       plot_file_prefix, plot_type,
+                                       logscale)
                 elif tag == "task_based":
                     latency_task_vs_queue(latencies, plot_repo, values,
-                                          plot_file_prefix, plot_type)
+                                          plot_file_prefix, plot_type,
+                                          logscale)
                 elif tag == "num_stages":
                     latency_vs_chain_length(latencies, plot_repo, values,
-                                            plot_file_prefix, plot_type)
+                                            plot_file_prefix, plot_type,
+                                            logscale)
+                elif tag == "dataflow_parallelism":
+                    latency_vs_parallelism(latencies, plot_repo, values,
+                                            plot_file_prefix, plot_type,
+                                            logscale)
                 else:
                     sys.exit("Unrecognized or unsupported option.")
         else:  # All parameters are fixed
@@ -894,6 +945,7 @@ if __name__ == "__main__":
                                       for data in latencies]
             y_data = [] if cdf else [data for _, data in latencies]
             generate_line_plot(x_data, y_data, x_label, y_label, labels,
-                               plot_repo, plot_file_prefix, cdf)
+                               plot_repo, plot_file_prefix, cdf,
+                               logscale=logscale)
     # Store plot metadata
     write_plot_metadata(plot_repo, plot_file_prefix, plot_id, exp_args)

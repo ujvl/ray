@@ -4,12 +4,15 @@ from __future__ import print_function
 
 import argparse
 import logging
+import math
 import random
 import string
+import sys
 import time
 
 import ray
 from ray.experimental.streaming.batched_queue import BatchedQueue
+import ray.experimental.streaming.benchmarks.utils as utils
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +20,17 @@ logging.basicConfig(level=logging.INFO)
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
+parser.add_argument("--pin-processes", default=False,
+                    action='store_true',
+                    help="whether to pin python processes to cores or not")
+parser.add_argument("--nodes", default=1,
+                    help="total number of nodes in the cluster")
+parser.add_argument("--redis-shards", default=1,
+                    help="total number of Redis shards")
+parser.add_argument("--redis-max-memory", default=10**9,
+                    help="max amount of memory per Redis shard")
+parser.add_argument("--plasma-memory", default=10**9,
+                    help="amount of memory to start plasma with")
 # Dataflow-related parameters
 parser.add_argument("--num-stages", default=1,
                     help="the number of queues in the chain")
@@ -31,10 +45,12 @@ parser.add_argument("--throughput-file", default="throughputs",
                     help="a prefix for the rate log files")
 parser.add_argument("--dump-file", default="",
                     help="a prefix for the chrome dump file")
-parser.add_argument("--sample-period", default=1,
+parser.add_argument("--sample-period", default=100,
                     help="every how many input records latency is measured.")
-parser.add_argument("--max-source-rate", default="inf",
-                    help="maximum source output rate (records/s)")
+parser.add_argument("--source-rate", default=-1,
+                    type=lambda x: ((float(x) == -1) or float(x)) or
+                                parser.error("Source rate cannot be zero."),
+                    help="source output rate (records/s)")
 parser.add_argument("--warm-up", default=False,
                     action='store_true',
                     help="whether to use a first round of data to warmup")
@@ -142,41 +158,48 @@ class Node(object):
             self.out_queue._flush_writes()
         return (self.id, self.latencies, self.throughputs)
 
-def benchmark_queue(rounds, latency_filename,
-                        throughput_filename, dump_filename,
-                        record_type, record_size,
-                        sample_period, max_queue_size,
-                        max_batch_size, batch_timeout,
-                        prefetch_depth, background_flush,
-                        num_stages, max_reads_per_second=float("inf"),
-                        source_rate=float("inf"), warm_up=False):
+def benchmark_queue(num_nodes, source_rate,
+                    redis_shards, redis_max_memory, plasma_memory,
+                    rounds, latency_filename,
+                    throughput_filename, dump_filename,
+                    record_type, record_size,
+                    sample_period, max_queue_size,
+                    max_batch_size, batch_timeout,
+                    prefetch_depth, background_flush,
+                    num_stages, max_reads_per_second=float("inf"),
+                    warm_up=False):
+
     assert num_stages >= 1
+    assert num_nodes >= 1
 
     first_queue = BatchedQueue(
-        "ID",           # Dummy channel id
-        "SRC_OP_ID",    # Dummy source operator id
-        0,              # Dummy source instance id
-        "DST_OP_ID",    # Dummy destination operator id
-        0,              # Dummy destination instance id
-        max_size=max_queue_size,
-        max_batch_size=max_batch_size,
-        max_batch_time=batch_timeout,
-        prefetch_depth=prefetch_depth,
-        background_flush=background_flush)
+                    "ID",           # Dummy channel id
+                    "SRC_OP_ID",    # Dummy source operator id
+                    0,              # Dummy source instance id
+                    "DST_OP_ID",    # Dummy destination operator id
+                    0,              # Dummy destination instance id
+                    max_size=max_queue_size,
+                    max_batch_size=max_batch_size,
+                    max_batch_time=batch_timeout,
+                    prefetch_depth=prefetch_depth,
+                    background_flush=background_flush)
 
     previous_queue = first_queue
     logs = []
     log_latency = False
     nodes = []
-    source = Node.remote(-1, None, first_queue,
-                         RecordGenerator(rounds, record_type=record_type,
-                                         record_size=record_size,
-                                         sample_period=sample_period,
-                                         fixed_rate=source_rate,
-                                         warm_up=warm_up),
-                         max_reads_per_second,
-                         log_latency)
+    node_prefix = utils.CLUSTER_NODE_PREFIX
+    generator = utils.RecordGenerator(rounds,
+               record_type=record_type,
+               record_size=record_size,
+               sample_period=sample_period,
+               fixed_rate=source_rate,
+               warm_up=warm_up)
+    args = [-1, None, first_queue, generator, max_reads_per_second, log_latency]
+    source = Node._remote(args=args, kwargs=None,
+                         resources={node_prefix+"0": 1})
     nodes.append(source)
+    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
     for i in range(num_stages):
         # Construct the batched queue
         in_queue = previous_queue
@@ -195,14 +218,16 @@ def benchmark_queue(rounds, latency_filename,
                 background_flush=background_flush)
         else:  # The last actor should log per-record latencies
             log_latency = True
-        node = Node.remote(i, in_queue, out_queue, None,
-                           max_reads_per_second,log_latency)
+        node_id = node_prefix
+        node_id += str(i // stages_per_node)
+        args = [i, in_queue, out_queue, None,
+                max_reads_per_second, log_latency]
+        node = Node._remote(args=args, kwargs=None, resources={node_id: 1})
         nodes.append(node)
         previous_queue = out_queue
 
     # Wait for all of the node actors to come up.
     ray.get([node.ping.remote() for node in nodes])
-
     for node in nodes:
         # Each actor returns a list of per-record latencies
         # sampled every 'sample_period' records
@@ -213,8 +238,12 @@ def benchmark_queue(rounds, latency_filename,
     # Collect logs from all actors
     result = ray.get(logs)
 
+    input_rate = source_rate if source_rate > 0 else "inf"
+
     # Write log files
-    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, input_rate,
+        redis_shards, redis_max_memory, plasma_memory,
         rounds, sample_period,
         record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
@@ -223,92 +252,33 @@ def benchmark_queue(rounds, latency_filename,
 
     # Dump timeline
     if dump_filename:
-        dump_filename = dump_filename + all_parameters
+        dump_filename = dump_filename + all
         ray.global_state.chrome_tracing_dump(dump_filename)
 
     # Write sampled per-record latencies
-    latency_filename = latency_filename + all_parameters
+    latency_filename = latency_filename + all
     with open(latency_filename, "w") as lf:
             for node_id, latencies, _ in result:
                 for latency in latencies:
                     lf.write(str(latency) + "\n")
 
     # Collect throughputs from all actors
-    throughput_filename = throughput_filename + all_parameters
+    throughput_filename = throughput_filename + all
     with open(throughput_filename, "w") as tf:
             for node_id, _, throughputs in result:
                 for throughput in throughputs:
                     tf.write(str(node_id) + " | " + str(throughput) + "\n")
 
-class RecordGenerator(object):
-    def __init__(self, rounds, record_type="int",
-                 record_size=None, sample_period=1, fixed_rate=float("inf"),
-                 warm_up=False):
-        assert rounds > 0
-        self.warm_up = warm_up
-        if self.warm_up:
-            rounds += 1
-        self.total_elements = 100000 * rounds
-        self.total_count = 0
-        self.period = sample_period
-        self.fixed_rate = fixed_rate
-        self.rate_count = 0
-        self.start = time.time()
-        self.count = 0
-        self.current_round = 0
-        self.record_type = record_type
-        self.record_size = record_size
-        self.record = -1
-        # Set the right function
-        if self.record_type == "int":
-            self.__get_next_record = self.__get_next_int
-        else:
-            self.__get_next_record = self.__get_next_string
-
-    # Returns the next int
-    def __get_next_int(self):
-        self.record += 1
-        return self.record
-
-    # Returns the next random string
-    def __get_next_string(self):
-        return "".join(random.choice(
-                string.ascii_letters + string.digits) for _ in range(
-                                                            self.record_size))
-
-    def get_next(self):
-        if self.total_count == self.total_elements:
-            return None
-        record = self.__get_next_record()
-        self.total_count += 1
-        self.rate_count += 1
-        # Measure source rate per round
-        if self.rate_count == 100000:
-            self.rate_count = 0
-            self.start = time.time()
-            time.sleep(0.001)
-        while (self.rate_count / (time.time() - self.start) >
-               self.fixed_rate):
-            time.sleep(0.01)
-        # Do a first round to warm up
-        if self.warm_up and self.total_count <= 100000:
-            if self.total_count == 100000:
-                logger.info("Finished warmup.")
-            return (-1,record)
-        self.count += 1
-        if self.count == self.period:
-            self.count = 0
-            return (time.time(),record)  # Assign the generation timestamp
-        else:
-            return(-1,record)
 
 if __name__ == "__main__":
-    ray.init()
-    ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
     # Benchmark parameters
     args = parser.parse_args()
+
     rounds = int(args.rounds)
+    num_nodes = int(args.nodes)
+    num_redis_shards = int(args.redis_shards)
+    redis_max_memory = int(args.redis_max_memory)
+    plasma_memory = int(args.plasma_memory)
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     dump_filename = str(args.dump_file)
@@ -322,16 +292,17 @@ if __name__ == "__main__":
     background_flush = bool(args.background_flush)
     num_stages = int(args.num_stages)
     max_reads_per_second = float(args.max_throughput)
-    source_rate = float(args.max_source_rate)
+    source_rate = float(args.source_rate)
     warm_up = bool(args.warm_up)
+    pin_processes = bool(args.pin_processes)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
     logger.info("Number of queues: {}".format(num_stages))
     logger.info("Sample period: {}".format(sample_period))
-    logger.info("Latency file: {}".format(latency_filename))
-    logger.info("Throughput file: {}".format(throughput_filename))
-    logger.info("Dump file: {}".format(dump_filename))
+    logger.info("Latency file prefix: {}".format(latency_filename))
+    logger.info("Throughput file prefix: {}".format(throughput_filename))
+    logger.info("Dump file prefix: {}".format(dump_filename))
     logger.info("Record type: {}".format(record_type))
     if record_type == "string":
         logger.info("Record size: {}".format(record_size))
@@ -341,35 +312,43 @@ if __name__ == "__main__":
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
     logger.info("Max read throughput: {}".format(max_reads_per_second))
-    logger.info("Source rate: {}".format(source_rate))
+    message = (" (as fast as it gets)") if source_rate < 0 else ""
+    logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Warm_up: {}".format(warm_up))
 
-    # A record generator
-    generator = RecordGenerator(rounds, record_type, record_size,
-                                sample_period, source_rate)
-    total = 0
-    count = 0
+    # Measure the throughput of the record generator when it is not
+    # backpressured by downstream nodes in the chain
+    generator = utils.RecordGenerator(rounds, record_type,
+                                      record_size, sample_period)
+
     start = time.time()
-    while True:
-        next = generator.get_next()
-        if count == 100000:
-            count = 0
-            self.throughputs.append(100000 / (time.time() - start))
-            start = time.time()
-        if next is None:
-            break
-        total += 1
-    logger.info("Ideal throughput: {}".format(total / (time.time()-start)))
+    records = generator.drain()
+    throughput = records / (time.time() - start)
+    logger.info("Ideal throughput: {}".format(throughput))
+
+    if source_rate > throughput:
+        message = "Cannot reach source rate {} with a single source."
+        logger.info(message.format(source_rate))
+        sys.exit()
+
+    # Start Ray with the specified configuration
+    utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
+                    redis_max_memory, num_stages, 1, 1, pin_processes)
+
+    # Use pickle for BatchedQueue
+    ray.register_custom_serializer(BatchedQueue, use_pickle=True)
 
     logger.info("== Testing Batched Queue Chaining ==")
     start = time.time()
-    benchmark_queue(rounds, latency_filename,
-                        throughput_filename, dump_filename,
-                        record_type, record_size,
-                        sample_period, max_queue_size,
-                        max_batch_size, batch_timeout,
-                        prefetch_depth, background_flush,
-                        num_stages, max_reads_per_second, source_rate,
-                        warm_up)
+    benchmark_queue(num_nodes, source_rate, num_redis_shards,
+                    redis_max_memory, plasma_memory, rounds,
+                    latency_filename, throughput_filename, dump_filename,
+                    record_type, record_size,
+                    sample_period, max_queue_size,
+                    max_batch_size, batch_timeout,
+                    prefetch_depth, background_flush,
+                    num_stages,
+                    max_reads_per_second, warm_up)
     logger.info("Elapsed time: {}".format(time.time()-start))
-    ray.shutdown()
+
+    utils.shutdown_ray(sleep=2)

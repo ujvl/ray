@@ -8,6 +8,7 @@ try:
 except:
     from itertools import izip_longest as zip_longest
 import logging
+import math
 import numpy as np
 import random
 import string
@@ -16,8 +17,10 @@ import time
 
 import ray
 from ray.experimental.streaming.batched_queue import BatchedQueue
+import ray.experimental.streaming.benchmarks.utils as utils
 from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -25,6 +28,17 @@ logger.setLevel("DEBUG")
 parser = argparse.ArgumentParser()
 parser.add_argument("--rounds", default=10,
                     help="the number of experiment rounds")
+parser.add_argument("--pin-processes", default=False,
+                    action='store_true',
+                    help="whether to pin python processes to cores or not")
+parser.add_argument("--nodes", default=1,
+                    help="total number of nodes in the cluster")
+parser.add_argument("--redis-shards", default=1,
+                    help="total number of Redis shards")
+parser.add_argument("--redis-max-memory", default=10**9,
+                    help="max amount of memory per Redis shard")
+parser.add_argument("--plasma-memory", default=10**9,
+                    help="amount of memory to start plasma with")
 # Dataflow-related parameters
 parser.add_argument("--num-stages", default=2,
                     help="the number of stages in the chain")
@@ -42,15 +56,17 @@ parser.add_argument("--throughput-file", default="throughputs",
                     help="a prefix for the rate log files")
 parser.add_argument("--dump-file", default="",
                     help="a prefix for the chrome dump file")
-parser.add_argument("--sample-period", default=1,
+parser.add_argument("--sample-period", default=100,
                     help="every how many input records latency is measured.")
 parser.add_argument("--record-size", default=10,
                     help="the size of a record of type string in bytes")
 parser.add_argument("--partitioning", default = "round_robin",
                     choices = ["shuffle","round_robin","broadcast"],
                     help="whether to shuffle or balance after each stage")
-parser.add_argument("--max-source-rate", default="inf",
-                    help="maximum source output rate (records/s)")
+parser.add_argument("--source-rate", default=-1,
+                    type=lambda x: ((float(x) == -1) or float(x)) or
+                                parser.error("Source rate cannot be zero."),
+                    help="source output rate (records/s)")
 parser.add_argument("--warm-up", default=False,
                     action='store_true',
                     help="whether to use a first round of data to warmup")
@@ -67,71 +83,6 @@ parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (records/s)")
-
-# A custom source that periodically assigns timestamps to records
-class Source(object):
-    def __init__(self, rounds, record_type="int",
-                 record_size=None, sample_period=1,
-                 fixed_rate=float("inf"), warm_up=False):
-        assert rounds > 0
-        self.warm_up = warm_up
-        if self.warm_up:
-            rounds += 1
-        self.total_elements = 100000 * rounds
-        self.total_count = 0
-        self.period = sample_period
-        self.fixed_rate = fixed_rate
-        self.rate_count = 0
-        self.start = time.time()
-        self.count = 0
-        self.current_round = 0
-        self.record_type = record_type
-        self.record_size = record_size
-        self.record = -1
-
-        # Set the right function
-        if self.record_type == "int":
-            self.__get_next_record = self.__get_next_int
-        else:
-            self.__get_next_record = self.__get_next_string
-
-    # Returns the next int
-    def __get_next_int(self):
-        self.record += 1
-        return self.record
-
-    # Returns the next random string
-    def __get_next_string(self):
-        return "".join(random.choice(
-                string.ascii_letters + string.digits) for _ in range(
-                                                        self.record_size))
-
-    # Generates next record
-    def get_next(self):
-        if self.total_count == self.total_elements:
-            return None
-        record = self.__get_next_record()
-        self.total_count += 1
-        self.rate_count += 1
-        # Measure source rate per round
-        if self.rate_count == 100000:
-            self.rate_count = 0
-            self.start = time.time()
-            time.sleep(0.001)
-        while (self.rate_count / (time.time() - self.start) >
-               self.fixed_rate):
-            time.sleep(0.01)
-        # Do a first round to warm up
-        if self.warm_up and self.total_count <= 100000:
-            if self.total_count == 100000:
-                logger.info("Finished warmup.")
-            return (-1,record)
-        self.count += 1
-        if self.count == self.period:
-            self.count = 0
-            return (time.time(),record)  # Assign the generation timestamp
-        else:
-            return (-1,record)
 
 # A custom sink used to collect per-record latencies
 # Latencies are kept in memory and they are retrieved
@@ -161,13 +112,18 @@ def compute_elapsed_time(record):
     else:
         return []
 
-def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
-                            partitioning, record_type, record_size,
+def create_and_run_dataflow(num_nodes,  num_sources,
+                            redis_shards, redis_max_memory,
+                            plasma_memory, rounds, num_stages,
+                            dataflow_parallelism, partitioning,
+                            record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based, source_rate,
                             warm_up):
+
     assert num_stages >= 0, (num_stages)
+
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
@@ -175,18 +131,27 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     env.enable_logging()
     if task_based:
         env.enable_tasks()
-    stream = env.source(Source(rounds, record_type,
+    node_prefix = utils.CLUSTER_NODE_PREFIX
+    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+    stream = env.source(utils.RecordGenerator(rounds, record_type,
                                 record_size, sample_period, source_rate,
                                 warm_up),
-                                name="source")
+                                name="source",
+                                placement=[node_prefix+"0"] * num_sources)
+    # TODO (john): Use custom partitioning here to shuffle by key
     if partitioning == "shuffle":
         stream = stream.shuffle()
     for stage in range(num_stages):
+        node_id = stage // stages_per_node
+        instances_to_nodes = [node_prefix+str(node_id)] * dataflow_parallelism
         if stage < num_stages - 1:
-            stream = stream.map(lambda record: record, name="map_"+str(stage))
+            stream = stream.map(lambda record: record, name="map_"+str(stage),
+                                placement=instances_to_nodes)
         else: # Last stage actors should compute the per-record latencies
-            stream = stream.flat_map(compute_elapsed_time, name="flatmap")
-    _ = stream.sink(Sink(), name="sink")
+            stream = stream.flat_map(compute_elapsed_time, name="flatmap",
+                                     placement=instances_to_nodes)
+    instances_to_nodes = [node_prefix+str(num_nodes-1)] * dataflow_parallelism
+    _ = stream.sink(Sink(), name="sink", placement=instances_to_nodes)
     start = time.time()
     dataflow = env.execute()
     ray.get(dataflow.termination_status())
@@ -197,14 +162,17 @@ def create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
     batch_timeout = queue_config.max_batch_time
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
-    all_parameters = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+    input_rate = source_rate if source_rate > 0 else "inf"
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, input_rate,
+        redis_shards, redis_max_memory, plasma_memory,
         rounds, sample_period,
         record_type, record_size,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
         background_flush, num_stages,
         partitioning, task_based, dataflow_parallelism
     )
-    write_log_files(all_parameters, latency_filename,
+    write_log_files(all, latency_filename,
                     throughput_filename, dump_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
@@ -247,14 +215,14 @@ def write_log_files(all_parameters, latency_filename,
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
 
-
 if __name__ == "__main__":
-    ray.init()
-    ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
     args = parser.parse_args()
 
     rounds = int(args.rounds)
+    num_nodes = int(args.nodes)
+    num_redis_shards = int(args.redis_shards)
+    redis_max_memory = int(args.redis_max_memory)
+    plasma_memory = int(args.plasma_memory)
     task_based = args.task_based
     num_stages = int(args.num_stages)
     latency_filename = str(args.latency_file)
@@ -270,17 +238,22 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
-    source_rate = float(args.max_source_rate)
+    source_rate = float(args.source_rate)
     warm_up = bool(args.warm_up)
+    pin_processes = bool(args.pin_processes)
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Number of nodes: {}".format(num_nodes))
+    logger.info("Number of Redis shards: {}".format(num_redis_shards))
+    logger.info("Max memory per Redis shard: {}".format(redis_max_memory))
+    logger.info("Plasma memory: {}".format(plasma_memory))
     logger.info("Number of stages: {}".format(num_stages))
     logger.info("Task-based execution: {}".format(task_based))
     logger.info("Sample period: {}".format(sample_period))
-    logger.info("Latency file: {}".format(latency_filename))
-    logger.info("Throughput file: {}".format(throughput_filename))
-    logger.info("Dump file: {}".format(dump_filename))
+    logger.info("Latency file prefix: {}".format(latency_filename))
+    logger.info("Throughput file prefix: {}".format(throughput_filename))
+    logger.info("Dump file prefix: {}".format(dump_filename))
     logger.info("Parallelism: {}".format(dataflow_parallelism))
     logger.info("Record type: {}".format(record_type))
     if record_type == "string":
@@ -291,30 +264,47 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
-    logger.info("Source rate: {}".format(source_rate))
+    message = (" (as fast as it gets)") if source_rate < 0 else ""
+    logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Warm_up: {}".format(warm_up))
+    logger.info("Pin processes: {}".format(pin_processes))
 
-    # Estimate the ideal throughput
-    source = Source(rounds, record_type, record_size,
-                    sample_period, source_rate)
-    count = 0
+    # Estimate the ideal output rate of a single source instance
+    # when it is not backpressured by downstream operators in the chain
+    source = utils.RecordGenerator(rounds, record_type, record_size,
+                                   sample_period)
     start = time.time()
-    while True:
-        next = source.get_next()
-        if next is None:
-            break
-        count += 1
-    logger.info("Ideal throughput: {}".format(count / (time.time()-start)))
+    records = source.drain()
+    rate = records / (time.time() - start)
+    logger.info("Ideal rate (per source instance): {}".format(rate))
 
+    # This estimation makes sense only if source(s) live at the
+    # same machine with this script (true for micro-benchmarks)
+    num_sources = math.trunc(
+                   math.ceil(source_rate / rate)) if rate < source_rate else 1
+
+    # Start Ray with the specified configuration
+    utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
+                    redis_max_memory, num_stages, dataflow_parallelism,
+                    num_sources, pin_processes)
+
+    # Use pickle for BatchedQueue
+    ray.register_custom_serializer(BatchedQueue, use_pickle=True)
+
+    # In queue-based execution, all batched queues have the same configuration
     queue_config = QueueConfig(max_queue_size,
                         max_batch_size, batch_timeout,
                         prefetch_depth, background_flush)
 
     logger.info("== Testing Chaining ==")
-    create_and_run_dataflow(rounds, num_stages, dataflow_parallelism,
-                            partitioning, record_type, record_size,
+    create_and_run_dataflow(num_nodes,  num_sources, num_redis_shards,
+                            redis_max_memory,
+                            plasma_memory, rounds, num_stages,
+                            dataflow_parallelism, partitioning,
+                            record_type, record_size,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based, source_rate,
                             warm_up)
-    ray.shutdown()
+
+    utils.shutdown_ray(sleep=2)
