@@ -334,7 +334,8 @@ if __name__ == "__main__":
     message = (" (as fast as it gets)") if source_rate < 0 else ""
     logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Warm_up: {}".format(warm_up))
-
+    logger.info("Pin processes: {}".format(pin_processes))
+    
     # Measure the throughput of the record generator when it is not
     # backpressured by downstream nodes in the chain
     generator = utils.RecordGenerator(rounds, record_type,
