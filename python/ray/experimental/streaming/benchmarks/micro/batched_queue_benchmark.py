@@ -32,7 +32,7 @@ parser.add_argument("--redis-max-memory", default=10**9,
 parser.add_argument("--plasma-memory", default=10**9,
                     help="amount of memory to start plasma with")
 # Dataflow-related parameters
-parser.add_argument("--num-stages", default=1,
+parser.add_argument("--num-stages", default=2,
                     help="the number of queues in the chain")
 parser.add_argument("--record-type", default="int",
                     choices = ["int","string"],

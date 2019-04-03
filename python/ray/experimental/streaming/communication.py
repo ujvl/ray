@@ -332,7 +332,7 @@ class DataOutput(object):
         # TODO (john): Add more channel types
 
         if self.logging:  # Log rate
-            self.__log(force=True)
+            self.__log(force=close)
 
     # Returns all destination actor ids
     def _destination_actor_ids(self):
