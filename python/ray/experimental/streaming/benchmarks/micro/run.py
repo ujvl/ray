@@ -15,20 +15,20 @@ _dump_filename = "results/dump"
 sample_period = 100
 record_type = "int"
 record_size = None
-max_queue_size = [10,100,1000]        # in number of batches
-max_batch_size = [1000,10000]         # in number of records
-batch_timeout = [0.05,0.1]
+max_queue_size = [100]        # in number of batches
+max_batch_size = [1000]       # in number of records
+batch_timeout = [0.1]
 prefetch_depth = 1
 background_flush = False
-num_stages = [1,2,5,10,15,20]
+num_stages = [4]
 max_reads_per_second = float("inf")
 partitioning = "round_robin"                # "shuffle", "broadcast"
 dataflow_parallelism = [1]
-cluster_nodes = [1,2,3,4]
-source_rate = [10000,20000,40000,-1]
+cluster_nodes = [1,2,4,5]
+source_rate = [20000,-1]
 redis_shards = 1
 redis_max_memory = 10**10
-plasma_memory = 20**10
+plasma_memory = 2*(10**10)
 
 # Task- and queue-based execution micro-benchmark
 cluster_config = "--redis-shards " + str(redis_shards) + " "
@@ -55,18 +55,19 @@ for nodes in cluster_nodes:
                     arg4 = "--flush-timeout " + str(batch_time) + " "
                     for rate in source_rate:
                         arg5 = "--source-rate " + str(rate) + " "
-                    # Plain-queue experiment
-                    run = cmd_queues + arg0 + arg1 + arg2 + arg3 + arg4 + arg5
-                    code = subprocess.call(run, shell=True,
-                                           stdout=subprocess.PIPE)
-                    for p in dataflow_parallelism:
-                        arg6 = "--dataflow-parallelism " + str(p) + " "
-                        # Queue-based execution
-                        run = cmd + arg0 + arg1 + arg2 + arg3 + arg4 + arg5
-                        run += arg6
+                        # Plain-queue experiment
+                        run = cmd_queues + arg0 + arg1 + arg2 + arg3 + arg4
+                        run += arg5
                         code = subprocess.call(run, shell=True,
                                                stdout=subprocess.PIPE)
-                        # Task-based execution
-                        run += "--task-based"
-                        code = subprocess.call(run, shell=True,
-                                               stdout=subprocess.PIPE)
+                        for p in dataflow_parallelism:
+                            arg6 = "--dataflow-parallelism " + str(p) + " "
+                            # Queue-based execution
+                            run = cmd + arg0 + arg1 + arg2 + arg3 + arg4
+                            run += arg5 + arg6
+                            code = subprocess.call(run, shell=True,
+                                                   stdout=subprocess.PIPE)
+                            # Task-based execution
+                            run += "--task-based"
+                            code = subprocess.call(run, shell=True,
+                                                   stdout=subprocess.PIPE)

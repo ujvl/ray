@@ -48,7 +48,7 @@ parser.add_argument("--dump-file", default="",
 parser.add_argument("--sample-period", default=100,
                     help="every how many input records latency is measured.")
 parser.add_argument("--source-rate", default=-1,
-                    type=lambda x: ((float(x) == -1) or float(x)) or
+                    type=lambda x: float(x) or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
 parser.add_argument("--warm-up", default=False,

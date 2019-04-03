@@ -64,7 +64,7 @@ parser.add_argument("--partitioning", default = "round_robin",
                     choices = ["shuffle","round_robin","broadcast"],
                     help="whether to shuffle or balance after each stage")
 parser.add_argument("--source-rate", default=-1,
-                    type=lambda x: ((float(x) == -1) or float(x)) or
+                    type=lambda x: float(x) or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
 parser.add_argument("--warm-up", default=False,
