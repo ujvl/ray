@@ -12,7 +12,17 @@ import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
 
+DEBUG = False
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
+
+
+def debug(*args):
+    if DEBUG:
+        print(
+            "task ID:",
+            ray.worker.global_worker.current_task_id,
+            *args,
+            flush=True)
 
 
 @ray.remote(resources={"Node0": 1})
@@ -62,12 +72,14 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self.operator_id = operator_id
         self.handle = handle
         self._ray_downstream_actors = [handle._ray_actor_id]
+        self.num_records_seen = 0
 
         self.checkpoint_buffer = []
         self.upstream_ids = upstream_ids
         self.checkpoints_pending = set()
         self.checkpoint_epoch = 0
         self._should_checkpoint = False
+        self.flush_checkpoint_buffer = False
 
         # Create the checkpoint directory.
         self.checkpoint_dir = checkpoint_dir
@@ -84,16 +96,16 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             # This is the first checkpoint marker for the new checkpoint
             # interval that we've received so far.
             if len(self.checkpoints_pending) == 0:
-                print("Starting checkpoint", self.checkpoint_epoch)
+                debug("Starting checkpoint", self.checkpoint_epoch)
                 self.checkpoints_pending = set(self.upstream_ids)
             # Record the checkpoint marker received from this upstream actor's
             # operator_id.
-            print("Received checkpoint marker", checkpoint_epoch, "from", upstream_id)
+            debug("Received checkpoint marker", checkpoint_epoch, "from", upstream_id)
             self.checkpoints_pending.discard(upstream_id)
             # If we've received all checkpoint markers from all upstream
             # actors, then take the checkpoint.
             if len(self.checkpoints_pending) == 0:
-                print("Received all checkpoint markers, taking checkpoint for interval", self.checkpoint_epoch)
+                debug("Received all checkpoint markers, taking checkpoint for interval", self.checkpoint_epoch)
                 self._should_checkpoint = True
             process_record = False
         else:
@@ -101,6 +113,21 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         return process_record
 
     def push(self, upstream_id, records, checkpoint_epoch):
+        if ray.worker.global_worker.task_context.nondeterministic_events is not None:
+            submit_log = [int(event.decode('ascii')) for event in ray.worker.global_worker.task_context.nondeterministic_events]
+            debug("REPLAY: Submit log", submit_log)
+        else:
+            submit_log = None
+
+        if self.flush_checkpoint_buffer:
+            self.push_checkpoint_buffer(submit_log)
+
+        if submit_log is not None:
+            self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
+        else:
+            self.log_push(upstream_id, records, checkpoint_epoch)
+
+    def replay_push(self, upstream_id, records, checkpoint_epoch, submit_log):
         process_records = self.checkpoint(upstream_id, checkpoint_epoch)
 
         if process_records:
@@ -117,6 +144,34 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 for record in records:
                     # Process the record.
                     self.flush_buffer.append(record)
+                    self.num_records_seen += 1
+                    if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
+                        future = self.flush()
+                        debug("REPLAY: submit after", self.num_records_seen, future)
+                        submit_log.pop(0)
+
+        else:
+            self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
+
+
+    def log_push(self, upstream_id, records, checkpoint_epoch):
+        process_records = self.checkpoint(upstream_id, checkpoint_epoch)
+
+        if process_records:
+            if len(records) == 0:
+                # This is the last batch that we will receive from this
+                # upstream operator.
+                if len(self.flush_buffer) > 0:
+                    self.flush()
+                # Send an empty batch. Block on the result to notify the
+                # upstream operator when we are finished processing all of its
+                # records.
+                ray.get(self.flush())
+            else:
+                for record in records:
+                    # Process the record.
+                    self.flush_buffer.append(record)
+                    self.num_records_seen += 1
                     self.try_flush()
 
         else:
@@ -128,13 +183,14 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         # If we are about to take a checkpoint, then force a flush.
         do_flush = do_flush or self._should_checkpoint
         if do_flush:
-            self.flush()
+            future = self.flush(event=str(self.num_records_seen).encode('ascii'))
+            debug("Flushing after", self.num_records_seen, future)
 
-    def flush(self):
+    def flush(self, event=None):
         future = self.handle.push._remote(
                 args=[self.operator_id, self.flush_buffer, self.checkpoint_epoch],
                 kwargs={},
-                nondeterministic_event=pickle.dumps('hi'))
+                nondeterministic_event=event)
         self.flush_buffer.clear()
         return future
 
@@ -147,13 +203,14 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         return should_checkpoint
 
     def save_checkpoint(self, actor_id, checkpoint_id):
-        print("Saving checkpoint", self.checkpoint_epoch, checkpoint_id)
+        debug("Saving checkpoint", self.checkpoint_epoch, checkpoint_id)
         assert len(self.checkpoints_pending) == 0
         checkpoint = {
                 "handle": self.handle,
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_epoch": self.checkpoint_epoch,
                 "buffer": self.checkpoint_buffer,
+                "num_records_seen": self.num_records_seen,
                 }
         checkpoint = pickle.dumps(checkpoint)
         # NOTE: The default behavior is to register a random actor handle
@@ -169,14 +226,25 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             f.write(checkpoint)
 
         self.checkpoint_epoch += 1
+        self.flush_checkpoint_buffer = True
+
+    def push_checkpoint_buffer(self, submit_log=None):
+        debug("Pushing checkpoint buffer", self.checkpoint_epoch)
+        self.flush_checkpoint_buffer = False
+
         # Make a copy of the checkpoint buffer and try to process them again.
         checkpoint_buffer = self.checkpoint_buffer[:]
         self.checkpoint_buffer.clear()
-        for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
-            self.push(upstream_id, records, checkpoint_epoch)
+        if submit_log is not None:
+            for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+                self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
+        else:
+            for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+                self.log_push(upstream_id, records, checkpoint_epoch)
+        debug("Done pushing checkpoint buffer", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
-        print("Available checkpoints", available_checkpoints)
+        debug("Available checkpoints", available_checkpoints)
 
         # Get the latest checkpoint that completed.
         checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
@@ -189,16 +257,19 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             checkpoint = pickle.loads(f.read())
         self.handle = checkpoint["handle"]
         self.handle.reset_handle_id()
+        self.num_records_seen = checkpoint["num_records_seen"]
 
         self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
         assert self.checkpoint_epoch == latest_checkpoint_interval
         self.checkpoint_epoch += 1
         # Try to process the records that were in the buffer.
-        for upstream_id, record, checkpoint_epoch in checkpoint["buffer"]:
-            self.push(upstream_id, record, checkpoint_epoch)
+        self.checkpoint_buffer = checkpoint["buffer"]
+        self.flush_checkpoint_buffer = True
+        #for upstream_id, record, checkpoint_epoch in checkpoint["buffer"]:
+        #    self.replay_push(upstream_id, record, checkpoint_epoch)
 
         checkpoint_id = checkpoint["checkpoint_id"]
-        print("Reloaded checkpoint", latest_checkpoint_interval, checkpoint_id, flush=True)
+        debug("Reloaded checkpoint", latest_checkpoint_interval, checkpoint_id)
         return checkpoint_id
 
     def checkpoint_expired(self, actor_id, checkpoint_id):
@@ -367,7 +438,7 @@ if __name__ == '__main__':
     num_records = 1000
     generators = [source.generate.remote(num_records) for source in sources]
 
-    time.sleep(3)
+    time.sleep(2)
     # The intermediate operators are on all nodes except the source node and
     # the sink node.
     intermediate_nodes = nodes[1:-1]

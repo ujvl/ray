@@ -1439,6 +1439,7 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
                  << ", parent_task_id=" << spec.ParentTaskId()
                  << ", num_executions=" << exec_spec.NumExecutions()
                  << ", num_resubmissions=" << exec_spec.NumResubmissions()
+                 << ", version=" << exec_spec.Version()
                  << ", task_descriptor=" << spec.FunctionDescriptorString() << " on node "
                  << gcs_client_->client_table().GetLocalClientId();
 
@@ -1519,7 +1520,7 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
                     // re-execute the task.
                     const Task committed_method(task_data);
                     if (committed_method.GetTaskExecutionSpec().Version() > task.GetTaskExecutionSpec().Version()) {
-                      RAY_LOG(INFO) << "XXX Queueing GCS version of task " << task_id;
+                      RAY_LOG(INFO) << "XXX Queueing GCS copy of task " << task_id << " version=" << committed_method.GetTaskExecutionSpec().Version();
                       EnqueuePlaceableActorTask(committed_method, push);
                     } else {
                       EnqueuePlaceableActorTask(task, push);
