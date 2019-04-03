@@ -48,12 +48,14 @@ def get_cluster_node_ids():
 # instances of a particular stage will run at the same node
 def start_ray(num_nodes, num_redis_shards, plasma_memory,
               redis_max_memory, num_stages, dataflow_parallelism,
-              num_sources, pin_processes):
+              num_sources, pin_processes, api=True):
     # Simulate a cluster on a single machine
     cluster = Cluster()
     # 'num_stages' is the user-defined parameter that does not include sources
     # and sinks. We also need to count the actor for tracking progress
     num_actors = num_sources + dataflow_parallelism * (num_stages + 1) + 1
+    if not api:  # No sink and progress monitoring when plain queues are used
+        num_actors -= 2
     logger.info("Total number of required actors: {}".format(num_actors))
     num_cpus = multiprocessing.cpu_count()
     if num_cpus < num_actors:
@@ -67,7 +69,8 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
     stages_per_node = math.trunc(math.ceil(len(actors_per_stage) / num_nodes))
     logger.info("Number of stages per node: {}".format(stages_per_node))
     assigned_actors = 0
-    node_actors = 1  # The monitoring actor runs at the first node
+    # The monitoring actor runs at the first node
+    node_actors = 1 if api else 0
     for i in range(num_nodes):
         remaining_actors = num_actors - assigned_actors
         if remaining_actors == 0:  # No more nodes are needed
@@ -75,7 +78,8 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         low = i * stages_per_node
         high = (i + 1) * stages_per_node
         if high >= len(actors_per_stage):  # Last node
-            node_actors += dataflow_parallelism  # Sinks run at the last node
+            # Sinks run at the last node
+            node_actors += dataflow_parallelism if api else 0
             high = len(actors_per_stage)
         node_actors += sum(n for n in actors_per_stage[low:high])
         # Add cluster node

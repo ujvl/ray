@@ -93,12 +93,14 @@ class Node(object):
         self.start = time.time()
         self.log_latency = log_latency
         self.record_generator = record_generator
+        self.last_flush_time = 0.0
 
     def ping(self):
         return
 
     def read_write(self, rounds):
         # Start spinning
+        self.last_flush_time = time.time()
         debug_log = "[actor {}] Reads throttled to {} reads/s"
         log = ""
         if self.queue is None:
@@ -118,7 +120,14 @@ class Node(object):
                 record = self.record_generator.get_next()
                 if record is None:
                     break
-                self.out_queue.put_next(record)
+                flushed = self.out_queue.put_next(record)
+                if flushed:
+                    self.last_flush_time = time.time()
+                else:
+                    delay = time.time() - self.last_flush_time
+                    if delay >= self.out_queue.max_batch_time:
+                        self.out_queue._flush_writes()
+                        self.last_flush_time = time.time()
                 self.num_writes += 1
                 counter += 1
                 if counter == 100000:
@@ -138,7 +147,14 @@ class Node(object):
                 start_time, value = record
                 self.num_reads += 1
                 if self.out_queue is not None:  # It's a sink
-                    self.out_queue.put_next((start_time,value))
+                    flushed = self.out_queue.put_next((start_time,value))
+                    if flushed:
+                        self.last_flush_time = time.time()
+                    else:
+                        delay = time.time() - self.last_flush_time
+                        if delay >= self.out_queue.max_batch_time:
+                            self.out_queue._flush_writes()
+                            self.last_flush_time = time.time()
                     self.num_writes += 1
                 elif self.log_latency:  # Log end-to-end latency
                     # TODO (john): Clock skew might distort elapsed time
@@ -335,7 +351,8 @@ if __name__ == "__main__":
 
     # Start Ray with the specified configuration
     utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
-                    redis_max_memory, num_stages, 1, 1, pin_processes)
+                    redis_max_memory, num_stages, 1, 1,
+                    pin_processes, api=False)
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
