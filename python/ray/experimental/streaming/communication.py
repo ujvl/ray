@@ -432,6 +432,7 @@ class DataOutput(object):
                     channel_index += 1
                     channel_index %= len(channels)
                     self.round_robin_indexes[i] = channel_index
+                    self.last_flush_time = time.time()
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:

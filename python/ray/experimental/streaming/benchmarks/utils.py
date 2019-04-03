@@ -62,7 +62,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         part_1 = "Dataflow contains {} actors".format(num_actors)
         part_2 = "but only {} available CPUs were found.".format(num_cpus)
         logger.error(part_1 + " " + part_2)
-        sys.exit()
+        # sys.exit()
     # The 'actors_per_stage' list includes only source and map instances
     actors_per_stage = [num_sources]
     actors_per_stage.extend([dataflow_parallelism for _ in range(num_stages)])
