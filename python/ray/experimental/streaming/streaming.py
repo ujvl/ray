@@ -243,8 +243,11 @@ class Environment(object):
             # Discard them to avoid serialization errors due to
             # recursive references between stream and environment
             del operator.other_inputs[:]
-            actor_handle = operator_instance.Union.remote(actor_id, operator,
-                                                       input, output)
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.Union._remote(args=args,
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.Reduce:
             actor_handle = operator_instance.Reduce.remote(actor_id, operator,
                                                     input, output)
@@ -472,6 +475,8 @@ class Environment(object):
             if handles: # TODO (john): We should not return empty handle lists
                 all_handles.extend(handles)
             upstream_channels.update(downstream_channels)
+        # self.print_logical_graph()
+        # self.print_physical_graph()
         # Start and register the monitoring actor to the physical dataflow
         first_node_id = utils.get_cluster_node_ids()[0]
         monitoring_actor = operator_instance.ProgressMonitor._remote(
@@ -806,7 +811,8 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers union operator to the environment
-    def union(self, other_inputs, name="Union_"+str(_generate_uuid())):
+    def union(self, other_inputs, name="Union_"+str(_generate_uuid()),
+              placement=None):
         """Unions the stream with one or more other streams.
 
         Attributes:
@@ -819,7 +825,8 @@ class DataStream(object):
             other_inputs,
             name,
             num_instances=self.env.config.parallelism,
-            logging=self.env.config.logging)
+            logging=self.env.config.logging,
+            placement=placement)
         return self.__register(op)
 
     # Registers window operator to the environment.

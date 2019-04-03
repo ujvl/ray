@@ -104,11 +104,11 @@ class Operator(object):
     def print(self):
         log = "Operator<\nID = {}\nName = {}\nType = {}\n"
         log += "Logic = {}\nNumber_of_Instances = {}\n"
-        log += "Partitioning_Scheme = {}\nOther_Args = {}>\n"
+        log += "Partitioning_Scheme = {}\nPlacement = {}>\n"
         logger.info(
             log.format(self.id, self.name, self.type, self.logic,
                        self.num_instances, self.partitioning_strategies,
-                       self.other_args))
+                       self.placement))
 
 
 class KeyByOperator(Operator):
@@ -157,14 +157,16 @@ class UnionOperator(Operator):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False):
+                 logging=False,
+                 placement=None):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
                           num_instances,
-                          logging)
+                          logging,
+                          placement)
         self.other_inputs = other_inputs
 
 
