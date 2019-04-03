@@ -6,8 +6,7 @@ import enum
 import logging
 
 logger = logging.getLogger(__name__)
-logger.setLevel("DEBUG")
-
+logging.basicConfig(level=logging.INFO)
 
 # Stream partitioning schemes
 class PScheme(object):
@@ -45,6 +44,8 @@ class OpType(enum.Enum):
     ReadTextFile = 9
     Reduce = 10
     Sum = 11
+    Union = 12
+    WriteTextFile = 13
     # ...
 
 
@@ -56,17 +57,23 @@ class Operator(object):
                  name="",
                  logic=None,
                  num_instances=1,
-                 other=None,
-                 state_actor=None):
+                 logging=False,
+                 placement=None):
         self.id = id
         self.type = type
         self.name = name
         self.logic = logic  # The operator's logic
         self.num_instances = num_instances
-        # One partitioning strategy per downstream operator (default: forward)
+        # One partitioning strategy per downstream operator (default: rescale)
         self.partitioning_strategies = {}
-        self.other_args = other  # Depends on the type of the operator
-        self.state_actor = state_actor  # Actor to query state
+        # Actor logging
+        self.logging = logging
+        # An optional mapping of operator instances with local ids in
+        # [0..num_instances) to cluster nodes ids
+        self.placement = placement
+        # TODO (john): Allow partial mappings of instances to nodes
+        if self.placement is None:  # Set default mapping (node 0)
+            self.placement = ["0"] * num_instances
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -76,15 +83,14 @@ class Operator(object):
         self.partitioning_strategies[stream_id] = (partitioning_scheme,
                                                    dest_operator)
 
-    # Retrieves the partitioning scheme for the given
-    # output stream of the operator
+    # Retrieves the partitioning scheme for the given output stream
     # Returns None is no strategy has been defined for the particular stream
     def _get_partition_strategy(self, stream_id):
         return self.partitioning_strategies.get(stream_id)
 
-    # Cleans metatada from all partitioning strategies that lack a
-    # destination operator
-    # Valid entries are re-organized as
+    # Cleans metatada from all partitioning strategies
+    # that lack a destination operator
+    # Valid entries are re-organized as:
     # 'destination operator id -> partitioning scheme'
     # Should be called only after the logical dataflow has been constructed
     def _clean(self):
@@ -99,7 +105,163 @@ class Operator(object):
         log = "Operator<\nID = {}\nName = {}\nType = {}\n"
         log += "Logic = {}\nNumber_of_Instances = {}\n"
         log += "Partitioning_Scheme = {}\nOther_Args = {}>\n"
-        logger.debug(
+        logger.info(
             log.format(self.id, self.name, self.type, self.logic,
                        self.num_instances, self.partitioning_strategies,
                        self.other_args))
+
+
+class KeyByOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 key_selector,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.key_selector = key_selector
+
+
+class SumOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 attribute_selector,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.attribute_selector = attribute_selector
+
+
+class UnionOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 other_inputs,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.other_inputs = other_inputs
+
+
+class TimeWindowOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 length,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.length = length  # ms
+
+
+class CustomSourceOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 source_object,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.source = source_object
+
+
+class ReadTextFileOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 filepath,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.filepath = filepath
+
+
+class CustomSinkOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 sink_object,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.sink = sink_object
+
+
+class WriteTextFileOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 filename_prefix,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging)
+        self.filename_prefix = filename_prefix

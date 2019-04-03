@@ -12,22 +12,19 @@ from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.operator import OpType, PStrategy
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input-file", required=True, help="the input text file")
-
 
 # Test functions
 def splitter(line):
     return line.split()
 
-
 def filter_fn(word):
     if "f" in word:
         return True
     return False
-
 
 if __name__ == "__main__":
 
@@ -40,6 +37,7 @@ if __name__ == "__main__":
 
     # A Ray streaming environment with the default configuration
     env = Environment()
+    env.enable_tasks()
 
     # Stream represents the ouput of the filter and
     # can be forked into other dataflows
@@ -50,10 +48,11 @@ if __name__ == "__main__":
                 .filter(filter_fn) \
                 .set_parallelism(2) \
                 .inspect(print)     # Prints the contents of the
-    # stream to stdout
+                                    # stream to stdout
     start = time.time()
-    env_handle = env.execute()
-    ray.get(env_handle)  # Stay alive until execution finishes
+    dataflow = env.execute()
+    # Stay alive until execution finishes
+    ray.get(dataflow.termination_status())
     end = time.time()
     logger.info("Elapsed time: {} secs".format(end - start))
     logger.debug("Output stream id: {}".format(stream.id))

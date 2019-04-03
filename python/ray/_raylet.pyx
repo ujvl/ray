@@ -383,8 +383,12 @@ cdef class RayletClient:
     def prepare_actor_checkpoint(self, ActorID actor_id, py_downstream_actor_ids):
         cdef CActorCheckpointID checkpoint_id
         cdef c_vector[CActorID] downstream_actor_ids = ActorIDsToVector(py_downstream_actor_ids)
-        check_status(self.client.get().PrepareActorCheckpoint(
-            actor_id.data, checkpoint_id, downstream_actor_ids))
+        cdef CActorID c_actor_id = actor_id.data
+        # PrepareActorCheckpoint will wait for raylet's reply, release
+        # the GIL so other Python threads can run.
+        with nogil:
+            check_status(self.client.get().PrepareActorCheckpoint(
+                c_actor_id, checkpoint_id, downstream_actor_ids))
         return ActorCheckpointID(checkpoint_id.binary())
 
     def notify_actor_resumed_from_checkpoint(self, ActorID actor_id,

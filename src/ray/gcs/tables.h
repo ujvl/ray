@@ -581,6 +581,7 @@ class ClientTable : private Log<UniqueID, ClientTableData> {
  public:
   using ClientTableCallback = std::function<void(
       AsyncGcsClient *client, const ClientID &id, const ClientTableDataT &data)>;
+  using DisconnectCallback = std::function<void(void)>;
   ClientTable(const std::vector<std::shared_ptr<RedisContext>> &contexts,
               AsyncGcsClient *client, const ClientID &client_id)
       : Log(contexts, client),
@@ -609,7 +610,7 @@ class ClientTable : private Log<UniqueID, ClientTableData> {
   /// registration should never be reused after disconnecting.
   ///
   /// \return Status
-  ray::Status Disconnect();
+  ray::Status Disconnect(const DisconnectCallback &callback = nullptr);
 
   /// Mark a different client as disconnected. The client ID should never be
   /// reused for a new client.
@@ -658,6 +659,13 @@ class ClientTable : private Log<UniqueID, ClientTableData> {
   ///
   /// \return The client ID to client information map.
   const std::unordered_map<ClientID, ClientTableDataT> &GetAllClients() const;
+
+  /// Lookup the client data in the client table.
+  ///
+  /// \param lookup Callback that is called after lookup. If the callback is
+  /// called with an empty vector, then there was no data at the key.
+  /// \return Status.
+  Status Lookup(const Callback &lookup);
 
   /// Returns debug string for class.
   ///

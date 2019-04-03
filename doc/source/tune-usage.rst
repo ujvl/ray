@@ -416,13 +416,17 @@ via the Experiment object as follows:
 
 .. code-block:: python
 
+    from ray.tune.logger import DEFAULT_LOGGERS
+
     exp = Experiment(
         name="experiment_name",
         run=MyTrainableClass,
-        custom_loggers=[CustomLogger1, CustomLogger2]
+        loggers=DEFAULT_LOGGERS + (CustomLogger1, CustomLogger2)
     )
 
 These loggers will be called along with the default Tune loggers. All loggers must inherit the `Logger interface <tune-package-ref.html#ray.tune.logger.Logger>`__.
+
+Tune has default loggers for Tensorboard, CSV, and JSON formats.
 
 You can also check out `logger.py <https://github.com/ray-project/ray/blob/master/python/ray/tune/logger.py>`__ for implementation details.
 
@@ -488,7 +492,7 @@ The API also supports curl. Here are the examples for getting trials (``GET /tri
     curl http://<address>:<port>/trials
     curl http://<address>:<port>/trials/<trial_id>
 
-And stopping a trial (``PUT /trials/[:id]``):
+And stopping a trial (``PUT /trials/:id``):
 
 .. code-block:: bash
 
