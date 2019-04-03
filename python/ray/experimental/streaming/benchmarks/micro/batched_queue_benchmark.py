@@ -195,9 +195,11 @@ def benchmark_queue(num_nodes, source_rate,
                sample_period=sample_period,
                fixed_rate=source_rate,
                warm_up=warm_up)
-    args = [-1, None, first_queue, generator, max_reads_per_second, log_latency]
+    args = [-1, None, first_queue, generator,
+            max_reads_per_second, log_latency]
+    node_id = 0
     source = Node._remote(args=args, kwargs=None,
-                         resources={node_prefix+"0": 1})
+                          resources={node_prefix + str(node_id): 1})
     nodes.append(source)
     stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
     for i in range(num_stages):
@@ -219,7 +221,7 @@ def benchmark_queue(num_nodes, source_rate,
         else:  # The last actor should log per-record latencies
             log_latency = True
         node_id = node_prefix
-        node_id += str(i // stages_per_node)
+        node_id += str((i + 1) // stages_per_node)
         args = [i, in_queue, out_queue, None,
                 max_reads_per_second, log_latency]
         node = Node._remote(args=args, kwargs=None, resources={node_id: 1})
