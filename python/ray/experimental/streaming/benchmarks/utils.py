@@ -27,7 +27,7 @@ def pin_processes():
     print("Found {} python processes with PIDs: {}".format(len(pids), pids))
     cmd_pin = ["taskset", "-p", None, None]
     for i, pid in enumerate(pids):
-        cmd_pin[2] = str(hex(i))  # Affinity mask
+        cmd_pin[2] = str(hex(i+1))  # Affinity mask
         cmd_pin[3] = pid
         subprocess.call(cmd_pin)
 
