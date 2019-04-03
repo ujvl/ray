@@ -132,26 +132,28 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     if task_based:
         env.enable_tasks()
     node_prefix = utils.CLUSTER_NODE_PREFIX
-    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
-    node_id = 0
+    stages_per_node = math.trunc(
+                            math.ceil((num_stages + num_sources) / num_nodes))
+    id = 0
+    node_id = node_prefix + str(id)
     stream = env.source(utils.RecordGenerator(rounds, record_type,
-                        record_size, sample_period, source_rate,
-                        warm_up),
-                        name="source",
-                        placement=[node_prefix + str(node_id)] * num_sources)
+                                    record_size, sample_period, source_rate,
+                                    warm_up),
+                                    name="source",
+                                    placement=[node_id] * num_sources)
     # TODO (john): Use custom partitioning here to shuffle by key
     if partitioning == "shuffle":
         stream = stream.shuffle()
     for stage in range(num_stages):
-        node_id = (stage + 1) // stages_per_node
-        mapping = [node_prefix + str(node_id)] * dataflow_parallelism
+        id = (stage + 1) // stages_per_node
+        mapping = [node_prefix + str(id)] * dataflow_parallelism
         if stage < num_stages - 1:
             stream = stream.map(lambda record: record, name="map_"+str(stage),
                                 placement=mapping)
         else: # Last stage actors should compute the per-record latencies
             stream = stream.flat_map(compute_elapsed_time, name="flatmap",
                                      placement=mapping)
-    mapping = [node_prefix + str(node_id)] * dataflow_parallelism
+    mapping = [node_prefix + str(id)] * dataflow_parallelism
     _ = stream.sink(Sink(), name="sink", placement=mapping)
     start = time.time()
     dataflow = env.execute()

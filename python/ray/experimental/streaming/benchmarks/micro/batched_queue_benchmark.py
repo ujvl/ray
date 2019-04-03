@@ -197,11 +197,11 @@ def benchmark_queue(num_nodes, source_rate,
                warm_up=warm_up)
     args = [-1, None, first_queue, generator,
             max_reads_per_second, log_latency]
-    node_id = 0
-    source = Node._remote(args=args, kwargs=None,
-                          resources={node_prefix + str(node_id): 1})
+    node_id = node_prefix + "0"
+    source = Node._remote(args=args, kwargs=None, resources={node_id: 1})
     nodes.append(source)
-    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+    # +1 stage for the record generator
+    stages_per_node = math.trunc(math.ceil((num_stages + 1) / num_nodes))
     for i in range(num_stages):
         # Construct the batched queue
         in_queue = previous_queue
