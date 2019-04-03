@@ -48,7 +48,7 @@ def get_cluster_node_ids():
 # instances of a particular stage will run at the same node
 def start_ray(num_nodes, num_redis_shards, plasma_memory,
               redis_max_memory, num_stages, dataflow_parallelism,
-              num_sources, pin_processes, api=True):
+              num_sources, pin, api=True):
     # Simulate a cluster on a single machine
     cluster = Cluster()
     # 'num_stages' is the user-defined parameter that does not include sources
@@ -67,7 +67,8 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
     actors_per_stage = [num_sources]
     actors_per_stage.extend([dataflow_parallelism for _ in range(num_stages)])
     stages_per_node = math.trunc(math.ceil(len(actors_per_stage) / num_nodes))
-    logger.info("Number of stages per node: {}".format(stages_per_node))
+    message = "Number of stages per node: {} (source stage included)"
+    logger.info(message.format(stages_per_node))
     assigned_actors = 0
     # The monitoring actor runs at the first node
     node_actors = 1 if api else 0
@@ -98,8 +99,8 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
     # Start ray
     ray.init(redis_address=cluster.redis_address)
 
-    if pin_processes:  # Pin python processes to CPU cores (Linux only)
-        logger.info("Waiting to pin python processes to cores...")
+    if pin:  # Pin python processes to CPU cores (Linux only)
+        logger.info("Waiting for python processes to come up...")
         time.sleep(5)  # Wait a bit for Ray to start
         pin_processes()
 
