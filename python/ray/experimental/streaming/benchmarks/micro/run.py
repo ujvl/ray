@@ -34,6 +34,7 @@ plasma_memory = 2*(10**10)
 cluster_config = "--redis-shards " + str(redis_shards) + " "
 cluster_config +=  "--redis-max-memory " + str(redis_max_memory) + " "
 cluster_config +=  "--plasma-memory " + str(plasma_memory) + " "
+cluster_config += "--pin-processes "
 times = "--rounds " + str(rounds) + " "
 period = "--sample-period " + str(sample_period) + " "
 lf = "--latency-file " + latency_filename + " "

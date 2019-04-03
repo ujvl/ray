@@ -316,6 +316,7 @@ if __name__ == "__main__":
 
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Number of nodes: {}".format(num_nodes))
     logger.info("Number of queues: {}".format(num_stages))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Latency file prefix: {}".format(latency_filename))
