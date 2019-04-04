@@ -14,6 +14,7 @@ import random
 import string
 import sys
 import time
+import json
 
 import ray
 from ray.experimental.streaming.batched_queue import BatchedQueue
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--rounds", default=10,
+parser.add_argument("--rounds", default=5,
                     help="the number of experiment rounds")
 parser.add_argument("--pin-processes", default=False,
                     action='store_true',
@@ -90,13 +91,17 @@ parser.add_argument("--max-throughput", default="inf",
 # by the driver script after the job is finished
 # TODO (john): Custom sinks should inherit from a CustomSink class
 class Sink(object):
-    def __init__(self):
-        self.state = []
+    def __init__(self, source_keys):
+        self.records = {
+                key: 0 for key in source_keys
+                }
 
     # Evicts next record
     def evict(self, record):
-        self.state.append(record)
-        # TODO: Override this method.
+        _, record = record
+        source_key, val = record
+        assert self.records[source_key] == val, (source_key, self.records[source_key], val)
+        self.records[source_key] += 1
 
     # Closes the sink
     def close(self):
@@ -104,13 +109,12 @@ class Sink(object):
 
     # Returns sink's state
     def get_state(self):
-        return self.state
+        return self.records
 
 def compute_elapsed_time(record):
-    #generation_time, _ = record
-    return record
+    return [record]
 
-def create_and_run_dataflow(num_nodes,  num_sources,
+def create_and_run_dataflow(args, num_nodes,  num_sources,
                             redis_shards, redis_max_memory,
                             plasma_memory, rounds, num_stages,
                             dataflow_parallelism, partitioning,
@@ -118,7 +122,7 @@ def create_and_run_dataflow(num_nodes,  num_sources,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filenamex, source_rate,
-                            warm_up):
+                            warm_up, cluster, internal_config):
 
     assert num_stages >= 0, (num_stages)
 
@@ -131,27 +135,36 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     node_prefix = utils.CLUSTER_NODE_PREFIX
     stages_per_node = math.trunc(
                             math.ceil((num_stages + num_sources) / num_nodes))
-    id = 0
-    node_id = node_prefix + str(id)
+    node_index = 0
+    node_id = node_prefix + str(node_index)
     source_streams = []
+
+    operator_ids = list(string.ascii_uppercase)
+    source_keys = [operator_ids.pop(0) for _ in range(num_sources)]
+    intermediate_keys = [operator_ids.pop(0) for _ in range(num_stages - 1)]
+    # One sink.
+    sink_key = operator_ids.pop(0)
+
     for i in range(num_sources):
         stream = env.source(utils.RecordGenerator(rounds, record_type,
                                     record_size, sample_period, source_rate,
-                                    warm_up),
+                                    warm_up, key=source_keys[i]),
                                     name="source_" + str(i),
                                     placement=[node_id])
+        print("source", node_id)
         # TODO (john): Use custom partitioning here to shuffle by key
         if partitioning == "shuffle":
             stream = stream.shuffle()
         source_streams.append(stream)
     stream = source_streams.pop()
-    id = 1 // stages_per_node
-    mapping = [node_prefix + str(id)] * dataflow_parallelism
+    node_index += 1
+    mapping = [node_prefix + str(node_index)] * dataflow_parallelism
+    print("union", mapping)
     stream = stream.union(source_streams, name="union",
                           placement=mapping)
     for stage in range(1,num_stages):
-        id = (stage + 1) // stages_per_node
-        mapping = [node_prefix + str(id)] * dataflow_parallelism
+        node_index += 1
+        mapping = [node_prefix + str(node_index)] * dataflow_parallelism
         if stage < num_stages - 1:
             stream = stream.map(lambda record: record, name="map_"+str(stage),
                                 placement=mapping)
@@ -160,12 +173,31 @@ def create_and_run_dataflow(num_nodes,  num_sources,
                                      placement=mapping)
         if partitioning == "shuffle":
             stream = stream.shuffle()
-    mapping = [node_prefix + str(id)] * dataflow_parallelism
-    _ = stream.sink(Sink(), name="sink", placement=mapping)
+    mapping = [node_prefix + str(node_index)] * dataflow_parallelism
+    _ = stream.sink(Sink(source_keys), name="sink", placement=mapping)
     start = time.time()
     dataflow = env.execute()
-    # TODO: dataflow.print_logical_graph()
+
+    nodes = cluster.list_all_nodes()
+    node_resources = ["Node{}".format(i) for i in range(num_nodes)]
+    intermediate_nodes = nodes[1:-1]
+    intermediate_resources = node_resources[1:-1]
+    time.sleep(5)
+    print("intermediate nodes", intermediate_resources)
+    # Kill and restart all intermediate operators.
+    node_kwargs = {
+        "num_cpus": 4,
+        "object_store_memory": 10**9,
+        "_internal_config": internal_config,
+    }
+    for node in intermediate_nodes:
+        cluster.remove_node(node)
+    for resource in intermediate_resources:
+        node_kwargs["resources"] = {resource: 100}
+        cluster.add_node(**node_kwargs)
+
     ray.get(dataflow.termination_status())
+    print(ray.get(dataflow.state_of("sink")))
 
     # Write log files
     max_queue_size = queue_config.max_size
@@ -196,6 +228,7 @@ def write_log_files(all_parameters, latency_filename,
     if dump_filename:
         dump_filename = dump_filename + all_parameters
         ray.global_state.chrome_tracing_dump(dump_filename)
+    return
 
     # Collect sampled per-record latencies
     sink_id = dataflow.operator_id("sink")
@@ -230,7 +263,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rounds = int(args.rounds)
-    num_nodes = int(args.nodes)
     num_redis_shards = int(args.redis_shards)
     redis_max_memory = int(args.redis_max_memory)
     plasma_memory = int(args.plasma_memory)
@@ -238,6 +270,7 @@ if __name__ == "__main__":
     if num_stages < 2:
         parser.error("Must have at least 2 stages (Source->Union->Flatmap).")
         sys.exit()
+    num_nodes = num_stages + 1
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     dump_filename = str(args.dump_file)
@@ -300,10 +333,24 @@ if __name__ == "__main__":
         logger.info(message.format(rate, source_rate))
         sys.exit()
 
+    # Start ray
+    internal_config = json.dumps({
+        "initial_reconstruction_timeout_milliseconds": 200,
+        "num_heartbeats_timeout": 20,
+        "object_manager_repeated_push_delay_ms": 1000,
+        "object_manager_pull_timeout_ms": 1000,
+        "gcs_delay_ms": 100,
+        # We will kill all nondeterministic workers, so make sure we can
+        # tolerate that many failures.
+        "lineage_stash_max_failures": num_stages,
+        "node_manager_forward_task_retry_timeout_milliseconds": 100,
+    })
+
     # Start Ray with the specified configuration
-    utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
+    print("NUM NODES", num_nodes)
+    cluster = utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
                     redis_max_memory, num_stages, dataflow_parallelism,
-                    num_sources, pin_processes)
+                    num_sources, pin_processes, internal_config)
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
@@ -314,7 +361,7 @@ if __name__ == "__main__":
                         prefetch_depth, background_flush)
 
     logger.info("== Testing Lineage Stash ==")
-    create_and_run_dataflow(num_nodes,  num_sources, num_redis_shards,
+    create_and_run_dataflow(args, num_nodes,  num_sources, num_redis_shards,
                             redis_max_memory,
                             plasma_memory, rounds, num_stages,
                             dataflow_parallelism, partitioning,
@@ -322,6 +369,6 @@ if __name__ == "__main__":
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, source_rate,
-                            warm_up)
+                            warm_up, cluster, internal_config)
 
     utils.shutdown_ray(sleep=2)

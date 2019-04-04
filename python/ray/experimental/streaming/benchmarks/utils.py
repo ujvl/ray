@@ -48,7 +48,7 @@ def get_cluster_node_ids():
 # instances of a particular stage will run at the same node
 def start_ray(num_nodes, num_redis_shards, plasma_memory,
               redis_max_memory, num_stages, dataflow_parallelism,
-              num_sources, pin, api=True):
+              num_sources, pin, internal_config, api=True):
     # Simulate a cluster on a single machine
     cluster = Cluster()
     # 'num_stages' is the user-defined parameter that does not include sources
@@ -91,18 +91,19 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
             num_gpus=0,
             resources={CLUSTER_NODE_PREFIX + str(i): node_actors},
             object_store_memory=plasma_memory,
-            redis_max_memory=redis_max_memory)
+            redis_max_memory=redis_max_memory,
+            _internal_config=internal_config)
         assigned_actors += node_actors
         logger.info("Added node {} with {} CPUs".format(i, node_actors))
         node_actors = 0
 
-    # Start ray
     ray.init(redis_address=cluster.redis_address)
 
     if pin:  # Pin python processes to CPU cores (Linux only)
         logger.info("Waiting for python processes to come up...")
         time.sleep(5)  # Wait a bit for Ray to start
         pin_processes()
+    return cluster
 
 # Shuts down Ray and (optionally) sleeps for a given number of seconds
 def shutdown_ray(sleep=0):
@@ -127,7 +128,8 @@ class RecordGenerator(object):
     def __init__(self, rounds, record_type="int",
                  record_size=None, sample_period=1,
                  fixed_rate=-1,
-                 warm_up=False):
+                 warm_up=False,
+                 key=None):
 
         assert rounds > 0, rounds
         assert fixed_rate != 0, fixed_rate
@@ -146,8 +148,11 @@ class RecordGenerator(object):
         self.record_type = record_type
         self.record_size = record_size
         self.record = -1
+        self.key = key
         # Set the right function
-        if self.record_type == "int":
+        if self.key is not None:
+            self.__get_next_record = self.__get_next_keyed_int
+        elif self.record_type == "int":
             self.__get_next_record = self.__get_next_int
         elif self.record_type == "string":
             self.__get_next_record = self.__get_next_string
@@ -160,6 +165,11 @@ class RecordGenerator(object):
     def __get_next_int(self):
         self.record += 1
         return self.record
+
+    # Returns the next int
+    def __get_next_keyed_int(self):
+        self.record += 1
+        return (self.key, self.record)
 
     # Returns the next (random) string
     def __get_next_string(self):
