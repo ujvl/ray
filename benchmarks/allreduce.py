@@ -121,6 +121,7 @@ class RingAllReduceWorker(object):
         self.in_place = in_place
         self.log = []
         self.cache = []
+        self.pinned = []
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -273,6 +274,7 @@ class RingAllReduceWorker(object):
             self.finish(self.out_oids, self.final_oid, self.done_oid)
             if self.checkpoint_interval > 0:
                 self.log.append((self.out_oids, self.final_oid, self.done_oid))
+                self.pinned.append(ray.get(self.out_oids))
             else:
                 self.log = [(self.out_oids, self.final_oid, self.done_oid)]
 
@@ -366,6 +368,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
                 #checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
                 #np.save(checkpoint_path, checkpoint)
                 self.log.clear()
+                self.pinned.clear()
 
         # Reset our state once the checkpoint completes.
         self.reset()
@@ -384,6 +387,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         _, lost = ray.wait(out_oids, num_returns=len(out_oids), timeout=0,
                            request_once=True)
         if lost:
+            debug("Objects lost", lost)
             return False
 
         ray.worker.global_worker.task_context.put_index = checkpoint.pop("put_index")
