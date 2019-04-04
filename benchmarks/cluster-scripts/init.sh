@@ -1,4 +1,4 @@
-#!/bin/bash
+#cd ~/ray/python && pip install -e . --verbose!/bin/bash
 
 for host in $(cat ~/workers.txt); do
   ssh-keygen -f "/home/ubuntu/.ssh/known_hosts" -R $host
@@ -10,3 +10,4 @@ for host in $(cat ~/workers.txt); do
 done
 
 parallel-ssh -t 0 -i -P -h ~/workers.txt -O "StrictHostKeyChecking=no" -I < enable_hugepages.sh
+parallel-ssh -t 0 -i -P -h ~/workers.txt -O "StrictHostKeyChecking=no" -I < init_sgd_worker.sh
