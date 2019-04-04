@@ -169,6 +169,7 @@ class RecordGenerator(object):
 
     # Returns the next record (either int or string depending on record_type)
     def get_next(self):
+        # TODO: Add the source ID here.
         if self.total_count == self.total_elements:
             return None  # Exhausted
         record = self.__get_next_record()

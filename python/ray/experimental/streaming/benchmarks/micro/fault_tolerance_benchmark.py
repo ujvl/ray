@@ -96,6 +96,7 @@ class Sink(object):
     # Evicts next record
     def evict(self, record):
         self.state.append(record)
+        # TODO: Override this method.
 
     # Closes the sink
     def close(self):
@@ -106,12 +107,8 @@ class Sink(object):
         return self.state
 
 def compute_elapsed_time(record):
-    generation_time, _ = record
-    if generation_time != -1:
-        # TODO (john): Clock skew might distort elapsed time
-        return [time.time() - generation_time]
-    else:
-        return []
+    #generation_time, _ = record
+    return record
 
 def create_and_run_dataflow(num_nodes,  num_sources,
                             redis_shards, redis_max_memory,
@@ -167,6 +164,7 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     _ = stream.sink(Sink(), name="sink", placement=mapping)
     start = time.time()
     dataflow = env.execute()
+    # TODO: dataflow.print_logical_graph()
     ray.get(dataflow.termination_status())
 
     # Write log files

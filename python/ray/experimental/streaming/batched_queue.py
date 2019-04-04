@@ -123,6 +123,7 @@ class BatchedQueue(object):
         return np.ndarray.tobytes(oid)
 
     def _flush_writes(self):
+        # TODO: This forces a flush.
         if not self.write_buffer:
             return
         if self.task_based:  # Submit a new downstream task

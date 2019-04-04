@@ -91,6 +91,9 @@ class OperatorInstance(object):
                 channel.queue.enable_writes()
         # TODO (john): Add more channel types here
 
+        # TODO: state to save in checkpointing:
+        # - channel index for round robin
+
     # Used for index-based key extraction, e.g. for tuples
     def _index_based_selector(self,record):
         return record[self.key_index]
