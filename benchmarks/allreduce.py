@@ -398,8 +398,8 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
 
         batch_size = 10
         for j in range(0, len(self.log), batch_size):
-            debug("RESTORE batch", j)
-            batch = self.log[j * batch_size : (j+1) * batch_size]
+            batch = self.log[j:j+batch_size]
+            debug("RESTORE batch", j, len(batch))
             all_out_oids = [out_oid for out_oids, _, _ in batch for out_oid in out_oids]
             all_outputs = ray.get(all_out_oids)
 
