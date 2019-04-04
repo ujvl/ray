@@ -235,7 +235,7 @@ class SGDWorker(object):
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         with ray.profiling.profile("restore_checkpoint"):
-            checkpoint_id = available_checkpoints[-1].checkpoint_id
+            checkpoint_id = available_checkpoints[0].checkpoint_id
             logger.info("Restoring checkpoint actor:%s checkpoint:%s", actor_id.hex(), checkpoint_id.hex())
             checkpoint_path = os.path.join(self.checkpoint_dir,
                                            checkpoint_id.hex())
