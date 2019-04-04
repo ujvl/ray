@@ -34,6 +34,9 @@ class SGDWorker(object):
                  plasma_op=False,
                  checkpoint_dir=None,
                  checkpoint_interval=-1):
+        # The second entry in model_creator is just a dummy numpy array.
+        model_creator, _ = model_creator
+
         self.worker_index = worker_index
         self.num_iterations = 0
         self.checkpoint_dir = checkpoint_dir

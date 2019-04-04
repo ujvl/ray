@@ -83,6 +83,8 @@ class DistributedSGD(object):
             pass
         os.mkdir(self.checkpoint_dir)
 
+        self.pinned = []
+
 
         if num_workers == 1 and strategy == "ps":
             logger.warning(
@@ -99,7 +101,11 @@ class DistributedSGD(object):
             raise ValueError("strategy must be one of 'ps', 'simple'")
         self.strategy = strategy
 
-        self.model_creator = model_creator
+        # Pin constructor arguments.
+        model_creator_id = ray.put((model_creator, np.zeros(1)))
+        print("Pinning argument", model_creator_id)
+        self.pinned.append(ray.get(model_creator_id))
+
         if gpu:
             requests = {"num_gpus": devices_per_worker}
         else:
@@ -114,7 +120,7 @@ class DistributedSGD(object):
         RemoteSGDWorker = ray.remote(**requests)(SGDWorker)
         test_worker = RemoteSGDWorker.remote(
                     0,
-                    model_creator,
+                    model_creator_id,
                     num_devices=devices_per_worker,
                     plasma_op=use_plasma_op,
                     gpu=gpu,
@@ -152,7 +158,7 @@ class DistributedSGD(object):
             self.workers.append(
                 RemoteSGDWorker.remote(
                     worker_index,
-                    model_creator,
+                    model_creator_id,
                     num_devices=devices_per_worker,
                     plasma_op=use_plasma_op,
                     gpu=gpu,
@@ -185,6 +191,11 @@ class DistributedSGD(object):
             in_place = False
             for worker_index in range(num_workers):
                 for shard_index, s in enumerate(shard_shapes):
+                    # Pin constructor arguments.
+                    s_id = ray.put((s, np.zeros(1)))
+                    print("Pinning argument", s_id)
+                    self.pinned.append(ray.get(s_id))
+
                     actor_resources = {node_resources[worker_index]: 1}
                     cls = ray.remote(
                         resources=actor_resources,
@@ -192,7 +203,7 @@ class DistributedSGD(object):
                     worker = cls.remote(
                             worker_index,
                             num_workers,
-                            s,
+                            s_id,
                             in_place,
                             self.checkpoint_dir,
                             checkpoint_interval)

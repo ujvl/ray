@@ -113,6 +113,7 @@ class WeightPartition(object):
 
 class RingAllReduceWorker(object):
     def __init__(self, worker_index, num_workers, buffer_size, in_place):
+        buffer_size, _ = buffer_size
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.workers = {}
@@ -589,7 +590,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             resources=actor_resources,
             max_reconstructions=100)(CheckpointableRingAllReduceWorker)
         workers.append(
-            cls.remote(worker_index, num_workers, data_size, in_place,
+            cls.remote(worker_index, num_workers, (data_size, 0), in_place,
                        checkpoint_dir, checkpoint_interval))
 
     # Exchange actor handles.
