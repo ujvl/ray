@@ -2,6 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import logging
 import time
 
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Auction
@@ -10,12 +11,16 @@ from ray.experimental.streaming.benchmarks.macro.nexmark.event import Person
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 # A stream replayer that reads Nexmark events from files and
 # replays them at given rates
 class NexmarkEventGenerator(object):
     def __init__(self, event_file, event_type, event_rate,
-                       sample_period=1000):
+                       max_records=-1, sample_period=1000):
         self.event_file = event_file
+        self.max_records = max_records if max_records > 0 else float("inf")
         self.event_rate = event_rate  if event_rate > 0 else float("inf")
         self.event_type = event_type  # Auction, Bid, Person
         assert event_type in ["Auction","Bid","Person"]
@@ -45,20 +50,26 @@ class NexmarkEventGenerator(object):
     def __wait(self):
         while (self.total_count / (time.time() - self.start) >
                self.event_rate):
-           time.sleep(0.0001)  # 100 us
+           time.sleep(0.00005)  # 50 us
 
     # Load input file
     def init(self):
         # Read all events from the input file
+        logger.info("Loading input file...")
+        records = 0
         with open(self.event_file, "r") as ef:
             for event in ef:
                 self.events.append(self.__create_event(event))
+                records += 1
+                if records == self.max_records:
+                    break
+        logger.info("Done.")
 
     # Returns the next event
     def get_next(self):
         if not self.start:
             self.start = time.time()
-        if not self.events:
+        if (not self.events) or (self.total_count == self.max_records):
             return None  # Exhausted
         event = self.events.pop(0)
         self.total_count += 1
@@ -72,7 +83,7 @@ class NexmarkEventGenerator(object):
         return event
 
     def drain(self):
-        self.event_rate = float("inf")
+        self.event_rate = float("inf")  # Set rate to unbounded
         records = 0
         while self.get_next() is not None:
             records += 1
