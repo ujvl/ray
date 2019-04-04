@@ -396,22 +396,26 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         for handle in self.workers.values():
             handle.reset_handle_id()
 
-        all_out_oids = [out_oid for out_oids, _, _ in self.log for out_oid in out_oids]
-        all_outputs = ray.get(all_out_oids)
+        batch_size = 10
+        for j in range(0, len(self.log), batch_size):
+            debug("RESTORE batch", j)
+            batch = self.log[j * batch_size : (j+1) * batch_size]
+            all_out_oids = [out_oid for out_oids, _, _ in batch for out_oid in out_oids]
+            all_outputs = ray.get(all_out_oids)
 
-        for out_oids, final_oid, done_oid in self.log:
-            with ray.profiling.profile("restore_log"):
-                debug("RESTORE", out_oids, final_oid)
-                #outputs = ray.get(out_oids)
-                outputs = all_outputs[:len(out_oids)]
-                all_outputs = all_outputs[len(out_oids):]
-                # Restore the all-reduced data.
-                for i, output in enumerate(outputs):
-                    self.weight_partition.set_partition(i, output)
-                    self.weight_partition.commit_partition(i)
-                # Restore the final object IDs indicating that this all-reduce has
-                # finished.
-                self.finish(out_oids, final_oid, done_oid)
+            for out_oids, final_oid, done_oid in batch:
+                with ray.profiling.profile("restore_log"):
+                    debug("RESTORE", out_oids, final_oid)
+                    #outputs = ray.get(out_oids)
+                    outputs = all_outputs[:len(out_oids)]
+                    all_outputs = all_outputs[len(out_oids):]
+                    # Restore the all-reduced data.
+                    for i, output in enumerate(outputs):
+                        self.weight_partition.set_partition(i, output)
+                        self.weight_partition.commit_partition(i)
+                    # Restore the final object IDs indicating that this all-reduce has
+                    # finished.
+                    self.finish(out_oids, final_oid, done_oid)
         self.reset()
         self.num_iterations += 1
         self._should_checkpoint = False
