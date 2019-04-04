@@ -22,11 +22,11 @@ ray start --head \
   --resources='{"'$NODE_RESOURCE'": 100}' \
   --plasma-directory=/mnt/hugepages \
   --huge-pages \
-  --object-store-memory 40000000000 \
+  --object-store-memory 160000000000 \
   --internal-config='{
   "initial_reconstruction_timeout_milliseconds": 200,
   "gcs_delay_ms": '$GCS_DELAY_MS',
-  "lineage_stash_max_failures": 2,
+  "lineage_stash_max_failures": 1,
   "num_heartbeats_timeout": 20,
   "async_message_max_buffer_size": 100,
   "object_manager_repeated_push_delay_ms": 1000,

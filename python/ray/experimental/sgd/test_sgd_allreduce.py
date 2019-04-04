@@ -37,6 +37,7 @@ parser.add_argument(
     help='A filename to dump the task timeline')
 parser.add_argument("--checkpoint", action='store_true')
 parser.add_argument("--test-failure", action='store_true')
+parser.add_argument("--fail-at", default=None, type=int)
 
 if __name__ == "__main__":
     args, _ = parser.parse_known_args()
@@ -116,13 +117,16 @@ if __name__ == "__main__":
             cluster.remove_node(node)
             cluster.add_node(**node_kwargs)
         else:
+            # Pick a node that is not the head node to kill.
             nodes = ray.global_state.client_table()
-            node_resource = node_resources[-1]
-            nodes = [node for node in nodes if node_resource in node['Resources']]
-            assert len(nodes) == 1
-            node = nodes[0]
-            worker_ip = node['NodeManagerAddress']
             head_ip, _ = redis_address.split(':')
+            worker_ip = head_ip
+            while worker_ip == head_ip:
+                node_resource = node_resources.pop(-1)
+                nodes = [node for node in nodes if node_resource in node['Resources']]
+                assert len(nodes) == 1
+                node = nodes[0]
+                worker_ip = node['NodeManagerAddress']
             command = [
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
@@ -138,10 +142,13 @@ if __name__ == "__main__":
         start = time.time()
         fetch_stats = i % args.stats_interval == 0
         fail_iteration = False
-        if (test_local and i == args.num_iters // 2 and args.test_failure):
-            fail_iteration = True
-        elif (not test_local and i == args.num_iters // 4 and args.test_failure):
-            fail_iteration = True
+        if args.fail_at is not None:
+            fail_iteration = i == args.fail_at
+        else:
+            if (test_local and i == args.num_iters // 2 and args.test_failure):
+                fail_iteration = True
+            elif (not test_local and i == args.num_iters // 4 and args.test_failure):
+                fail_iteration = True
         print("== Step {} ==".format(i))
         stats = sgd.step(
                 fetch_stats=fetch_stats,
