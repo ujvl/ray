@@ -123,6 +123,7 @@ class RingAllReduceWorker(object):
         self.log = []
         self.cache = []
         self.pinned = []
+        self._restored_checkpoint = False
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -165,6 +166,11 @@ class RingAllReduceWorker(object):
         These object IDs can be retrieved and concatenated to produce the final
         output.
         """
+        if self._restored_checkpoint:
+            debug("Clearing pinned objects", len(self.pinned))
+            self.pinned.clear()
+        self._restored_checkpoint = False
+
         debug("EXECUTE", self.num_iterations, ": worker", self.worker_index, ray.ObjectID(final_oid))
         assert not self.execute_received
 
@@ -417,9 +423,15 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
                     # Restore the final object IDs indicating that this all-reduce has
                     # finished.
                     self.finish(out_oids, final_oid, done_oid)
+                    if final_oid is not None:
+                        final_id = ray.ObjectID(final_oid)
+                        debug("Pinning", final_id)
+                        self.pinned.append(ray.get(final_id))
+
         self.reset()
         self.num_iterations += 1
         self._should_checkpoint = False
+        self._restored_checkpoint = True
 
         debug("Restored", checkpoint_id)
         return True
