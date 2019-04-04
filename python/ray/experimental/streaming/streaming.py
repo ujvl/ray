@@ -474,9 +474,12 @@ class Environment(object):
                                              downstream_channels)
             if handles: # TODO (john): We should not return empty handle lists
                 all_handles.extend(handles)
-            upstream_channels.update(downstream_channels)
-        # self.print_logical_graph()
-        # self.print_physical_graph()
+            # Update upstream channels
+            for destination, channels in downstream_channels.items():
+                value = upstream_channels.setdefault(destination, channels)
+                if value != channels:  # Some channels exist already
+                    value.extend(channels)
+
         # Start and register the monitoring actor to the physical dataflow
         first_node_id = utils.get_cluster_node_ids()[0]
         monitoring_actor = operator_instance.ProgressMonitor._remote(
