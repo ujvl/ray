@@ -9,7 +9,8 @@ SEND_THREADS=8
 RECEIVE_THREADS=8
 
 
-export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+#export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 
 ulimit -c unlimited
 ulimit -n 65536
@@ -19,11 +20,11 @@ echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
 ray start --redis-address=$HEAD_IP:6379 \
-    --num-cpus 2 \
+    --num-cpus 20 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
     --plasma-directory=/mnt/hugepages \
     --huge-pages \
-    --object-store-memory 80000000000 \
+    --object-store-memory 40000000000 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
