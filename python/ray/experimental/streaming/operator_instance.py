@@ -238,7 +238,7 @@ class ReadTextFile(OperatorInstance):
 
 
 # Map actor
-@ray.remote
+@ray.remote(max_reconstructions=100)
 class Map(OperatorInstance):
     """A map operator instance that applies a user-defined
     stream transformation.
@@ -285,7 +285,7 @@ class Map(OperatorInstance):
 
 
 # Flatmap actor
-@ray.remote
+@ray.remote(max_reconstructions=100)
 class FlatMap(OperatorInstance):
     """A map operator instance that applies a user-defined
     stream transformation.
@@ -378,7 +378,7 @@ class Filter(OperatorInstance):
         return records
 
 # Union actor
-@ray.remote
+@ray.remote(max_reconstructions=100)
 class Union(OperatorInstance):
     """A union operator instance that concatenates two or more streams."""
 
@@ -399,6 +399,7 @@ class Union(OperatorInstance):
 
     # Task-based union execution on a set of batches
     def apply(self, batches, channel_id):
+        print("UNION", batches, flush=True)
         records = 0
         for batch in batches:
             for record in batch:

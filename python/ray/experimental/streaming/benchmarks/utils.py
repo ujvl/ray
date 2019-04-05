@@ -97,7 +97,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         logger.info("Added node {} with {} CPUs".format(i, node_actors))
         node_actors = 0
 
-    ray.init(redis_address=cluster.redis_address)
+    ray.init(redis_address=cluster.redis_address, log_to_driver=True)
 
     if pin:  # Pin python processes to CPU cores (Linux only)
         logger.info("Waiting for python processes to come up...")
@@ -137,7 +137,7 @@ class RecordGenerator(object):
         self.warm_up = warm_up
         if self.warm_up:
             rounds += 1
-        self.total_elements = 100000 * rounds
+        self.total_elements = 10000 * rounds
         self.total_count = 0
         self.period = sample_period
         self.fixed_rate = fixed_rate if fixed_rate > 0 else float("inf")
@@ -186,7 +186,7 @@ class RecordGenerator(object):
         self.total_count += 1
         self.rate_count += 1
         # Measure source rate per round
-        if self.rate_count == 100000:
+        if self.rate_count == 100:
             self.rate_count = 0
             self.start = time.time()
             time.sleep(0.001)
@@ -194,8 +194,8 @@ class RecordGenerator(object):
                self.fixed_rate):
             time.sleep(0.01)
         # Do a first round without measuring latency just to warm up
-        if self.warm_up and self.total_count <= 100000:
-            if self.total_count == 100000:
+        if self.warm_up and self.total_count <= 100:
+            if self.total_count == 100:
                 logger.info("Finished warmup.")
             return (-1,record)
         self.count += 1

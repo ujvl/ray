@@ -25,7 +25,7 @@ logger.setLevel("INFO")
 
 # Generates UUIDs
 def _generate_uuid():
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 # Rolling sum's logic
 def _sum(value_1, value_2):
@@ -217,21 +217,19 @@ class Environment(object):
         self.__add_channel(actor_id, input, output)
         # Select actor to construct
         actor_handle = None
+        args = [actor_id, operator, input, output]
         if operator.type == OpType.Source:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             actor_handle = operator_instance.Source._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Map:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             actor_handle = operator_instance.Map._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.FlatMap:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             actor_handle = operator_instance.FlatMap._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
@@ -244,7 +242,6 @@ class Environment(object):
             # recursive references between stream and environment
             del operator.other_inputs[:]
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             actor_handle = operator_instance.Union._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
@@ -262,7 +259,6 @@ class Environment(object):
                                                            self.config)
         elif operator.type == OpType.Sink:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             actor_handle = operator_instance.Sink._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})

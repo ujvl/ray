@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--rounds", default=5,
+parser.add_argument("--rounds", default=1,
                     help="the number of experiment rounds")
 parser.add_argument("--pin-processes", default=False,
                     action='store_true',
@@ -85,6 +85,8 @@ parser.add_argument("--background-flush", default=False,
                     help="whether to flush in the backrgound or not")
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (records/s)")
+parser.add_argument("--test-failure", default=0,
+                    type=int)
 
 # A custom sink used to collect per-record latencies
 # Latencies are kept in memory and they are retrieved
@@ -98,6 +100,7 @@ class Sink(object):
 
     # Evicts next record
     def evict(self, record):
+        print("SINK", record, flush=True)
         _, record = record
         source_key, val = record
         assert self.records[source_key] == val, (source_key, self.records[source_key], val)
@@ -112,7 +115,12 @@ class Sink(object):
         return self.records
 
 def compute_elapsed_time(record):
+    print("FLATMAP", record, flush=True)
     return [record]
+
+def map_record(record):
+    print("MAP", record, flush=True)
+    return record
 
 def create_and_run_dataflow(args, num_nodes,  num_sources,
                             redis_shards, redis_max_memory,
@@ -166,7 +174,7 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
         node_index += 1
         mapping = [node_prefix + str(node_index)] * dataflow_parallelism
         if stage < num_stages - 1:
-            stream = stream.map(lambda record: record, name="map_"+str(stage),
+            stream = stream.map(map_record, name="map_"+str(stage),
                                 placement=mapping)
         else: # Last stage actors should compute the per-record latencies
             stream = stream.flat_map(compute_elapsed_time, name="flatmap",
@@ -179,9 +187,9 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
     dataflow = env.execute()
 
     nodes = cluster.list_all_nodes()
-    node_resources = ["Node{}".format(i) for i in range(num_nodes)]
-    intermediate_nodes = nodes[1:-1]
-    intermediate_resources = node_resources[1:-1]
+    node_resources = ["Node_{}".format(i) for i in range(len(nodes))]
+    intermediate_nodes = nodes[1:1+args.test_failure]
+    intermediate_resources = node_resources[1:1+args.test_failure]
     time.sleep(5)
     print("intermediate nodes", intermediate_resources)
     # Kill and restart all intermediate operators.
@@ -193,6 +201,7 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
     for node in intermediate_nodes:
         cluster.remove_node(node)
     for resource in intermediate_resources:
+        print("Adding another node with resource", resource)
         node_kwargs["resources"] = {resource: 100}
         cluster.add_node(**node_kwargs)
 
