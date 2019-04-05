@@ -125,7 +125,7 @@ class DataInput(object):
         self.records = 0        # Counter
         self.rates = []         # Input rates
         self.start = 0.0        # Start timestamp
-        self.period = 100000    # Measure input rate every 100K records
+        self.period = 10    # Measure input rate every 100K records
 
     # Fetches records from input channels in a round-robin fashion
     # TODO (john): Make sure the instance is not blocked on any of its input
@@ -291,7 +291,7 @@ class DataOutput(object):
         self.records = 0        # Counter
         self.rates = []         # Output rates
         self.start = 0.0        # Start timestamp
-        self.period = 100000    # Compute output rate every 100K records
+        self.period = 10   # Compute output rate every 100K records
 
     # Enables rate logging on output channels
     def enable_logging(self):

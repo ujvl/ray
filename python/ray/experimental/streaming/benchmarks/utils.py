@@ -138,10 +138,11 @@ class RecordGenerator(object):
         assert rounds > 0, rounds
         assert fixed_rate != 0, fixed_rate
 
+        self.records_per_round = 10
         self.warm_up = warm_up
         if self.warm_up:
             rounds += 1
-        self.total_elements = 100000 * rounds
+        self.total_elements = self.records_per_round * rounds
         self.total_count = 0
         self.period = sample_period
         self.fixed_rate = fixed_rate if fixed_rate > 0 else float("inf")
@@ -181,7 +182,7 @@ class RecordGenerator(object):
         self.total_count += 1
         self.rate_count += 1
         # Measure source rate per round
-        if self.rate_count == 100000:
+        if self.rate_count == self.records_per_round:
             self.rate_count = 0
             self.start = time.time()
             time.sleep(0.001)
@@ -189,8 +190,8 @@ class RecordGenerator(object):
                self.fixed_rate):
             time.sleep(0.01)
         # Do a first round without measuring latency just to warm up
-        if self.warm_up and self.total_count <= 100000:
-            if self.total_count == 100000:
+        if self.warm_up and self.total_count <= self.records_per_round:
+            if self.total_count == self.records_per_round:
                 logger.info("Finished warmup.")
             return (-1,record)
         self.count += 1
@@ -262,7 +263,7 @@ def write_log_files(all_parameters, latency_filename,
                      operator_name) + ", " + str(
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
-                     
+
 def compute_elapsed_time(record):
     generation_time = record.system_time
     if generation_time != -1:
