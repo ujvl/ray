@@ -852,7 +852,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers filter operator to the environment
-    def filter(self, filter_fn):
+    def filter(self, filter_fn, name="Filter_"+str(_generate_uuid())):
         """Applies a filter to the stream.
 
         Attributes:
@@ -861,7 +861,7 @@ class DataStream(object):
         op = operator.Operator(
             _generate_uuid(),
             OpType.Filter,
-            "Filter",
+            name,
             filter_fn,
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging)

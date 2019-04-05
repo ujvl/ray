@@ -21,10 +21,16 @@ CLUSTER_NODE_PREFIX = "Node_"
 # Make sure that all python processes are up and running before calling this
 def pin_processes():
     # Pins each python process to a specific core
+    num_cpus = multiprocessing.cpu_count()
     cmd_pids = ["pgrep", "python"]
     result = subprocess.check_output(cmd_pids)
     pids = [pid for pid in str(result.decode("ascii").strip()).split("\n")]
-    print("Found {} python processes with PIDs: {}".format(len(pids), pids))
+    logger.info("Found {} python processes with PIDs: {}".format(len(pids),
+                                                                        pids))
+    if num_cpus < len(pids):
+        logger.error("CPUs are less than python processes.")
+        sys.exit()
+
     cmd_pin = ["taskset", "-p", None, None]
     for i, pid in enumerate(pids):
         cmd_pin[2] = str(hex(i+1))  # Affinity mask
@@ -62,7 +68,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         part_1 = "Dataflow contains {} actors".format(num_actors)
         part_2 = "but only {} available CPUs were found.".format(num_cpus)
         logger.error(part_1 + " " + part_2)
-        # sys.exit()
+        sys.exit()
     # The 'actors_per_stage' list includes only source and map instances
     actors_per_stage = [num_sources]
     actors_per_stage.extend([dataflow_parallelism for _ in range(num_stages)])
@@ -71,7 +77,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
     logger.info(message.format(stages_per_node))
     assigned_actors = 0
     # The monitoring actor runs at the first node
-    node_actors = 1 if api else 0
+    node_actors = 1 if api else 0  # Only in case the streaming API is used
     for i in range(num_nodes):
         remaining_actors = num_actors - assigned_actors
         if remaining_actors == 0:  # No more nodes are needed
@@ -201,3 +207,87 @@ class RecordGenerator(object):
         while self.get_next() is not None:
             records += 1
         return records
+
+# TODO (john): A stream replayer that reads Nexmark events from files and
+# replays them based on at given rates
+class NexmarkEventGenerator(object):
+    def __init__(self, event_file, event_type, event_rate):
+        self.event_file = event_file
+        self.event_rate = event_rate  # -1 for as fast as it gets
+        self.event_type = event_type  # Auction, Bid, Person
+
+    # Returns the next event
+    def get_next(self):
+        pass
+
+    # Closes source
+    def close(self):
+        pass
+
+# Collects sampled latencies and throughputs from
+# actors in the dataflow and writes the log files
+def write_log_files(all_parameters, latency_filename,
+                    throughput_filename,  dump_filename, dataflow):
+
+    # Dump timeline
+    if dump_filename:
+        dump_filename = dump_filename + all_parameters
+        ray.global_state.chrome_tracing_dump(dump_filename)
+
+    # Collect sampled per-record latencies
+    sink_id = dataflow.operator_id("sink")
+    local_states = ray.get(dataflow.state_of(sink_id))
+    latencies = [state for state in local_states if state is not None]
+    latency_filename = latency_filename + all_parameters
+    with open(latency_filename, "w") as tf:
+        for _, latency_values in latencies:
+            if latency_values is not None:
+                for value in latency_values:
+                    tf.write(str(value) + "\n")
+
+    # Collect throughputs from all actors
+    ids = dataflow.operator_ids()
+    rates = []
+    for id in ids:
+        logs = ray.get(dataflow.logs_of(id))
+        rates.extend(logs)
+    throughput_filename = throughput_filename + all_parameters
+    with open(throughput_filename, "w") as tf:
+        for actor_id, in_rate, out_rate in rates:
+            operator_id, instance_id = actor_id
+            operator_name = dataflow.name_of(operator_id)
+            for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
+                tf.write(
+                    str("(" + str(operator_id) + ", " + str(
+                     operator_name) + ", " + str(
+                     instance_id)) + ")" + " | " + str(
+                     i) + " | " + str(o) + "\n")
+                     
+def compute_elapsed_time(record):
+    generation_time = record.system_time
+    if generation_time != -1:
+        # TODO (john): Clock skew might distort elapsed time
+        return [time.time() - generation_time]
+    else:
+        return []
+
+# A custom sink used to measure latency
+class LatencySink(object):
+    def __init__(self):
+        self.state = []
+        self.logic = compute_elapsed_time
+
+    # Evicts next record
+    def evict(self, record):
+        if logic is None:
+            self.state.append(record)
+        else:
+            self.state.append(self.logic(record))
+
+    # Closes the sink
+    def close(self):
+        pass
+
+    # Returns sink's state
+    def get_state(self):
+        return self.state

@@ -16,8 +16,8 @@ import sys
 import time
 
 import ray
-from ray.experimental.streaming.batched_queue import BatchedQueue
 import ray.experimental.streaming.benchmarks.utils as utils
+from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
 
@@ -219,6 +219,7 @@ def write_log_files(all_parameters, latency_filename,
                      i) + " | " + str(o) + "\n")
 
 if __name__ == "__main__":
+    
     args = parser.parse_args()
 
     rounds = int(args.rounds)

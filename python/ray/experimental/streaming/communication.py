@@ -332,7 +332,7 @@ class DataOutput(object):
         # TODO (john): Add more channel types
 
         if self.logging:  # Log rate
-            self.__log(force=close)
+            self.__log(force=close)  # force=True only on termination
 
     # Returns all destination actor ids
     def _destination_actor_ids(self):
@@ -398,16 +398,6 @@ class DataOutput(object):
         else:  # TODO (john): Add support for custom partitioning
             pass
 
-        # TODO (john): This must be done by a separate thread
-        # Flush all channels if timeout expired
-        if not self.last_flush_time:  # Set the timer
-            self.last_flush_time = time.time()
-        if self.flush_timeout >= 0:
-            delay = time.time() - self.last_flush_time
-            if delay >= self.flush_timeout:
-                self._flush()  # Flush all output channels
-                self.last_flush_time = time.time()
-
         if self.logging:  # Log rate
             self.__log(batch_size=1)
 
@@ -432,7 +422,6 @@ class DataOutput(object):
                     channel_index += 1
                     channel_index %= len(channels)
                     self.round_robin_indexes[i] = channel_index
-                    self.last_flush_time = time.time()
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
@@ -459,15 +448,6 @@ class DataOutput(object):
                     channel.queue.put_next(record)
         else:  # TODO (john): Add support for custom partitioning
             pass
-
-        # TODO (john): This must be done by a separate thread
-        # Flush channels if timeout expired
-        if not self.last_flush_time:  # Set the timer
-            self.last_flush_time = time.time()
-        delay = time.time() - self.last_flush_time
-        if delay >= self.flush_timeout:
-            self._flush()  # Flush all output channels
-            self.last_flush_time = time.time()
 
         if self.logging:  # Log rate
             self.__log(batch_size=len(records))
