@@ -485,11 +485,9 @@ def get_worker_node_ips(config_file, override_cluster_name):
     provider = get_node_provider(config["provider"], config["cluster_name"])
     try:
         nodes = provider.non_terminated_nodes({TAG_RAY_NODE_TYPE: "worker"})
-
-        if config.get("provider", {}).get("use_internal_ips", False) is True:
-            return [provider.internal_ip(node) for node in nodes]
-        else:
-            return [provider.external_ip(node) for node in nodes]
+        head_node = _get_head_node(config, config_file, override_cluster_name)
+        nodes = [head_node] + nodes
+        return [provider.internal_ip(node) for node in nodes]
     finally:
         provider.cleanup()
 
