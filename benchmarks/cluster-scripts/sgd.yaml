@@ -48,6 +48,15 @@ head_node:
               VolumeSize: 100
 
     # Additional options in the boto docs.
+    InstanceMarketOptions:
+        MarketType: spot
+        # Additional options can be found in the boto docs, e.g.
+        #   SpotOptions:
+        #       MaxPrice: MAX_HOURLY_PRICE
+
+    Placement:
+      GroupName: ray-sgd
+
 
 # Provider-specific config for worker nodes, e.g. instance type. By default
 # Ray will auto-configure unspecified fields such as SubnetId and KeyName.
@@ -70,12 +79,15 @@ worker_nodes:
         #   SpotOptions:
         #       MaxPrice: MAX_HOURLY_PRICE
 
+    Placement:
+      GroupName: ray-sgd
+
     # Additional options in the boto docs.
 
 # Files or directories to copy to the head and worker nodes. The format is a
 # dictionary from REMOTE_PATH: LOCAL_PATH, e.g.
 file_mounts: {
-#    "/path1/on/remote/machine": "/path1/on/local/machine",
+    "/home/ubuntu/tf-benchmarks": "~/tf-benchmarks",
 #    "/path2/on/remote/machine": "/path2/on/local/machine",
 }
 
