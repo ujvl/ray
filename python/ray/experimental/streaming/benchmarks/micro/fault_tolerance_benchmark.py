@@ -15,6 +15,7 @@ import string
 import sys
 import time
 import json
+import os
 
 import ray
 from ray.experimental.streaming.batched_queue import BatchedQueue
@@ -22,6 +23,8 @@ import ray.experimental.streaming.benchmarks.utils as utils
 from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
 
+
+CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -134,8 +137,17 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
 
     assert num_stages >= 0, (num_stages)
 
+    # Create the checkpoint directory.
+    checkpoint_dir = os.path.join(
+        CHECKPOINT_DIR, ray.worker.global_worker.task_driver_id.hex())
+    try:
+        os.makedirs(checkpoint_dir)
+    except FileExistsError:
+        pass
+
+
     # Create streaming environment, construct and run dataflow
-    env = Environment()
+    env = Environment(checkpoint_dir=checkpoint_dir)
     env.set_queue_config(queue_config)
     env.set_parallelism(dataflow_parallelism)
     env.enable_logging()

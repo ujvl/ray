@@ -188,7 +188,7 @@ class Environment(object):
          the streaming dataflow.
     """
 
-    def __init__(self, config=Config()):
+    def __init__(self, checkpoint_dir=None, config=Config()):
         self.logical_topo = nx.DiGraph()  # DAG
         self.physical_topo = nx.DiGraph()  # DAG
         self.operators = {}  # operator id --> operator object
@@ -196,6 +196,7 @@ class Environment(object):
         self.topo_cleaned = False
         # A handle to the running dataflow
         self.physical_dataflow = PhysicalDataflow()
+        self.checkpoint_dir = checkpoint_dir
 
     # Constructs and deploys a Ray actor of a specific type
     # TODO (john): Actor placement information should be specified in
@@ -217,7 +218,7 @@ class Environment(object):
         self.__add_channel(actor_id, input, output)
         # Select actor to construct
         actor_handle = None
-        args = [actor_id, operator, input, output]
+        args = [actor_id, operator, input, output, self.checkpoint_dir]
         if operator.type == OpType.Source:
             node_id = operator.placement[instance_id]
             actor_handle = operator_instance.Source._remote(args=args,

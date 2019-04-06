@@ -293,6 +293,20 @@ class DataOutput(object):
         self.start = 0.0        # Start timestamp
         self.period = 100000    # Compute output rate every 100K records
 
+    def set_checkpoint_epoch(self, checkpoint_epoch):
+        self.checkpoint_epoch = checkpoint_epoch
+        for channel in self.forward_channels:
+            channel.queue.set_checkpoint_epoch(checkpoint_epoch)
+        for channels in self.shuffle_channels:
+            for channel in channels:
+                channel.queue.set_checkpoint_epoch(checkpoint_epoch)
+        for channels in self.shuffle_key_channels:
+            for channel in channels:
+                channel.queue.set_checkpoint_epoch(checkpoint_epoch)
+        for channels in self.round_robin_channels:
+            for channel in channels:
+                channel.queue.set_checkpoint_epoch(checkpoint_epoch)
+
     # Enables rate logging on output channels
     def enable_logging(self):
         self.logging = True

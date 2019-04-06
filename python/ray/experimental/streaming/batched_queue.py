@@ -106,6 +106,9 @@ class BatchedQueue(object):
         self.records_sent = 0
         self.records_per_task = {}
 
+    def set_checkpoint_epoch(self, checkpoint_epoch):
+        self.checkpoint_epoch = checkpoint_epoch
+
     def __getstate__(self):
         state = dict(self.__dict__)
         del state["write_buffer"]
@@ -128,7 +131,8 @@ class BatchedQueue(object):
             return
         if self.task_based:  # Submit a new downstream task
             obj_id = self.destination_actor.apply.remote(
-                                [self.write_buffer], self.channel_id)
+                                [self.write_buffer], self.channel_id,
+                                self.checkpoint_epoch)
             num_records = len(self.write_buffer)
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
