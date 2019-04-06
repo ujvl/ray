@@ -385,6 +385,13 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         debug("Trying to restore", checkpoint_id)
         checkpoint_path = os.path.join(self.checkpoint_dir,
                                        checkpoint_id.hex())
+        try:
+            debug("Checkpoint not found!", checkpoint_id)
+            os.stat(checkpoint_path)
+        except:
+            # We did not manage to save this checkpoint.
+            return False
+
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
 
