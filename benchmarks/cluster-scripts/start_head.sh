@@ -1,9 +1,10 @@
 #!/bin/bash
 
 NUM_REDIS_SHARDS=$1
-GCS_DELAY_MS=$2
-NODE_RESOURCE=${3:-'Node'$RANDOM}
-SLEEP_TIME=${4:-$(( $RANDOM % 5 ))}
+USE_GCS_ONLY=$2
+GCS_DELAY_MS=$3
+NODE_RESOURCE=${4:-'Node'$RANDOM}
+SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 
 SEND_THREADS=8
 RECEIVE_THREADS=8
@@ -26,6 +27,7 @@ ray start --head \
   --internal-config='{
   "initial_reconstruction_timeout_milliseconds": 200,
   "gcs_delay_ms": '$GCS_DELAY_MS',
+  "use_gcs_only": '$USE_GCS_ONLY',
   "lineage_stash_max_failures": 1,
   "num_heartbeats_timeout": 20,
   "async_message_max_buffer_size": 100,
