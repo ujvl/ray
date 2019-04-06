@@ -2054,10 +2054,19 @@ void NodeManager::ResubmitTask(const Task &task) {
   if (task.GetTaskSpecification().IsActorTask()) {
     const auto &actor_id = task.GetTaskSpecification().ActorId();
     const auto it = actor_registry_.find(actor_id);
-    if (it != actor_registry_.end() && it->second.GetState() == ActorState::ALIVE && it->second.GetActorVersion() == 0) {
-      // Do not resubmit tasks for actors that have not reconstructed yet.
-      RAY_LOG(DEBUG) << "Actor task " << task.GetTaskSpecification().TaskId() << " resubmitted, but its actor has not been reconstructed";
-      return;
+    const auto task_it = num_times_resubmitted_.find(task.GetTaskSpecification().TaskId());
+    int64_t num_times_resubmitted = 0;
+    if (task_it != num_times_resubmitted_.end()) {
+      num_times_resubmitted = task_it->second;
+    }
+    if (it != actor_registry_.end() && it->second.GetState() == ActorState::ALIVE) {
+      if (it->second.GetActorVersion() <= num_times_resubmitted) {
+        // Do not resubmit tasks for actors that have not reconstructed yet.
+        RAY_LOG(DEBUG) << "Actor task " << task.GetTaskSpecification().TaskId() << " resubmitted "
+            << num_times_resubmitted
+            << " times, but its actor has only been reconstructed " << it->second.GetActorVersion() << " times";
+        return;
+      }
     }
   }
 
@@ -2080,6 +2089,7 @@ void NodeManager::ResubmitTask(const Task &task) {
 
   RAY_LOG(INFO) << "Resubmitting task " << task.GetTaskSpecification().TaskId()
                 << " on client " << gcs_client_->client_table().GetLocalClientId();
+  num_times_resubmitted_[task.GetTaskSpecification().TaskId()]++;
   // The task may be reconstructed. Submit it with an empty lineage, since any
   // uncommitted lineage must already be in the lineage cache. At this point,
   // the task should not yet exist in the local scheduling queue. If it does,
