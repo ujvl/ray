@@ -38,6 +38,13 @@ parser.add_argument(
 parser.add_argument("--checkpoint", action='store_true')
 parser.add_argument("--test-failure", action='store_true')
 parser.add_argument("--fail-at", default=None, type=int)
+parser.add_argument(
+    '--gcs-delay-ms',
+    default=-1,
+    help='Delay when writing back to GCS. The default is to use the lineage stash.')
+parser.add_argument(
+    '--gcs-only',
+    action='store_true')
 
 if __name__ == "__main__":
     args, _ = parser.parse_known_args()
@@ -47,7 +54,8 @@ if __name__ == "__main__":
         "num_heartbeats_timeout": 20,
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
-        "gcs_delay_ms": -1,
+        "gcs_delay_ms": args.gcs_delay_ms,
+        "use_gcs_only": int(args.gcs_only),
         "lineage_stash_max_failures": 1,
     })
     plasma_store_memory_gb = 5
@@ -131,10 +139,11 @@ if __name__ == "__main__":
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
-                    #str(args.gcs_delay_ms),
-                    str(-1),
+                    str(int(args.gcs_only)),
+                    str(args.gcs_delay_ms),
                     node_resource,
                     ]
+            print("KILL COMMAND", ' '.join(command), flush=True)
             subprocess.Popen(command)
 
     num_failed = 0
