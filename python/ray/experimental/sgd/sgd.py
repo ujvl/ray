@@ -116,6 +116,7 @@ class DistributedSGD(object):
             "Creating SGD workers ({} total, {} devices per worker)".format(
                 num_workers, devices_per_worker))
 
+        start = time.time()
         logger.info("Waiting for gradient configuration")
         RemoteSGDWorker = ray.remote(**requests)(SGDWorker)
         test_worker = RemoteSGDWorker.remote(
@@ -129,6 +130,7 @@ class DistributedSGD(object):
                     checkpoint_dir=self.checkpoint_dir,
                     checkpoint_interval=checkpoint_interval)
         shard_shapes = ray.get(test_worker.shard_shapes.remote())
+        logger.info("Got gradient configuration after %f", time.time() - start)
         del test_worker
 
         # ps_compute_apply returns the loss, then one return
@@ -167,8 +169,10 @@ class DistributedSGD(object):
                     checkpoint_dir=self.checkpoint_dir,
                     checkpoint_interval=checkpoint_interval))
 
+        start = time.time()
         logger.info("Waiting for actors to start")
         ray.get([w.shard_shapes.remote() for w in self.workers])
+        logger.info("Actors started after %f", time.time() - start)
 
         if strategy == "ps":
             logger.info("Starting parameter servers ({} shards)".format(
