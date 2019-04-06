@@ -188,10 +188,10 @@ class RingAllReduceWorker(object):
             index, aggregate, batch_buffer, batch_id = self.receives.pop(0)
             self.receive(index, aggregate, batch_buffer, batch_id)
 
-        # We no longer need the input, so delete it.
-        input_id = ray.worker.global_worker.get_argument_id(input_data)
-        input_id = ray.pyarrow.plasma.ObjectID(input_id.binary())
-        ray.worker.global_worker.plasma_client.delete([input_id])
+        ## We no longer need the input, so delete it.
+        #input_id = ray.worker.global_worker.get_argument_id(input_data)
+        #input_id = ray.pyarrow.plasma.ObjectID(input_id.binary())
+        #ray.worker.global_worker.plasma_client.delete([input_id])
 
     def send(self, index, aggregate, batch_id=None):
         debug("SEND", self.num_iterations, ": worker", self.worker_index,
@@ -255,12 +255,12 @@ class RingAllReduceWorker(object):
             # The sent or received chunk was fully reduced, so remember it.
             self.out_oids[index] = batch_id
             self.weight_partition.commit_partition(index)
-        else:
-            if batch_id is not None:
-                # Try to evict old messages to leave space for the allreduce output.
-                self.cache.append(ray.pyarrow.plasma.ObjectID(batch_id.binary()))
-                if len(self.cache) > self.num_workers:
-                    ray.worker.global_worker.plasma_client.delete([self.cache.pop(0)])
+        #else:
+        #    if batch_id is not None:
+        #        # Try to evict old messages to leave space for the allreduce output.
+        #        self.cache.append(ray.pyarrow.plasma.ObjectID(batch_id.binary()))
+        #        if len(self.cache) > self.num_workers:
+        #            ray.worker.global_worker.plasma_client.delete([self.cache.pop(0)])
 
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(
