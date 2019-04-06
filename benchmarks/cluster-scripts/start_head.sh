@@ -1,7 +1,8 @@
 #!/bin/bash
 
 NUM_REDIS_SHARDS=$1
-GCS_DELAY_MS=$2
+USE_GCS_ONLY=$2
+GCS_DELAY_MS=$3
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
 
@@ -15,9 +16,10 @@ ray start --head \
   --plasma-directory=/mnt/hugepages \
   --huge-pages \
   --internal-config='{
-    "initial_reconstruction_timeout_milliseconds": 200,
-    "gcs_delay_ms": '$GCS_DELAY_MS',
-    "lineage_stash_max_failures": 1,
-    "num_heartbeats_timeout": 20,
-    "object_manager_repeated_push_delay_ms": 1000,
-    "object_manager_pull_timeout_ms": 1000}'
+  "initial_reconstruction_timeout_milliseconds": 200,
+  "gcs_delay_ms": '$GCS_DELAY_MS',
+  "use_gcs_only": '$USE_GCS_ONLY',
+  "lineage_stash_max_failures": 1,
+  "num_heartbeats_timeout": 20,
+  "object_manager_repeated_push_delay_ms": 1000,
+  "object_manager_pull_timeout_ms": 1000}'

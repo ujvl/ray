@@ -635,6 +635,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
+                    str(int(use_gcs_only)),
                     str(args.gcs_delay_ms),
                     node_resource,
                     ]
