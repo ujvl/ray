@@ -362,9 +362,9 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         with ray.profiling.profile("save_physical_checkpoint"):
             debug("Length of log is", len(self.log), self.checkpoint_interval, len(self.log) == self.checkpoint_interval)
             if len(self.log) == self.checkpoint_interval:
-                #checkpoint = self.weight_partition.get_weights()
-                #checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
-                #np.save(checkpoint_path, checkpoint)
+                checkpoint = self.weight_partition.get_weights()
+                checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
+                np.save(checkpoint_path, checkpoint)
                 self.log.clear()
 
         # Reset our state once the checkpoint completes.
@@ -507,7 +507,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval):
+         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval,
+         fail_at):
     if record_latency and latency_file is None:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
                 data_size * 4 // 1e6,
@@ -634,13 +635,16 @@ def main(redis_address, test_single_node, num_workers, data_size,
         log.info("Starting iteration %d", i)
 
         fail_iteration = False
-        if (test_local and i == num_iterations // 2 and test_failure):
-            fail_iteration = True
-        elif (not test_local and i == num_iterations // 4 and test_failure):
-            fail_iteration = True
+        if fail_at is not None:
+            fail_iteration = fail_at == i
+        else:
+            if (test_local and i == num_iterations // 2 and test_failure):
+                fail_iteration = True
+            elif (not test_local and i == num_iterations // 4 and test_failure):
+                fail_iteration = True
         latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed, checkpoint_interval)
         latencies.append(latency)
-        time.sleep(1)
+        #time.sleep(1)
 
     if latency_file is not None:
         with open(latency_file, 'w+') as f:
@@ -706,6 +710,11 @@ if __name__ == "__main__":
         action='store_true',
         help='Whether or not to test worker failure')
     parser.add_argument(
+        '--fail-at',
+        type=int,
+        default=None,
+        help='The step at which to kill a worker')
+    parser.add_argument(
         '--gcs-delay-ms',
         default=-1,
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
@@ -723,4 +732,5 @@ if __name__ == "__main__":
          args.size, args.num_iterations, args.check_results, args.dump,
          args.test_failure, args.record_latency, args.gcs_delay_ms,
          args.gcs_only,
-         args.latency_file, args.checkpoint_interval)
+         args.latency_file, args.checkpoint_interval,
+         args.fail_at)
