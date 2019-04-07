@@ -6,8 +6,8 @@ GCS_DELAY_MS=$3
 NODE_RESOURCE=${4:-'Node'$RANDOM}
 SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 
-SEND_THREADS=8
-RECEIVE_THREADS=8
+SEND_THREADS=4
+RECEIVE_THREADS=4
 
 
 #export PATH=/home/ubuntu/anaconda3/bin/:$PATH
@@ -20,6 +20,7 @@ ulimit -a
 echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
+export RAY_BACKEND_LOG_LEVEL=debug
 ray start --redis-address=$HEAD_IP:6379 \
     --num-cpus 20 \
     --resources='{"'$NODE_RESOURCE'": 100}' \

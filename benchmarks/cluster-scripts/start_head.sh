@@ -6,15 +6,21 @@ GCS_DELAY_MS=$3
 NODE_RESOURCE=${4:-'Node'$RANDOM}
 SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 
-SEND_THREADS=8
-RECEIVE_THREADS=8
+SEND_THREADS=4
+RECEIVE_THREADS=4
 
 #export PATH=/home/ubuntu/anaconda3/bin/:$PATH
 export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 
+#export RAYLET_PERFTOOLS_PATH=1
+#export PERFTOOLS_PATH="/usr/lib/libprofiler.so"
+#export PERFTOOLS_LOGFILE="/tmp/pprof.out"
+
 ulimit -c unlimited
 ulimit -n 65536
 ulimit -a
+
+export RAY_BACKEND_LOG_LEVEL=debug
 ray start --head \
   --redis-port=6379 \
   --num-redis-shards \

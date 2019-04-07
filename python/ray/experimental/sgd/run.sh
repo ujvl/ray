@@ -14,7 +14,7 @@ NUM_REDIS_SHARDS=1
 LOG_FILE=$NUM_RAYLETS"-workers-"$BATCH_SIZE"-batch-"$SHARD_SIZE"-shard-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-failure-`date +%y-%m-%d-%H-%M-%S`.out"
 echo "Logging to file $LOG_FILE"
 
-cmd="python test_sgd_allreduce.py --redis-address $REDIS_ADDRESS:6379 --batch-size $BATCH_SIZE --num-workers $NUM_RAYLETS --devices-per-worker 4 --gpu --grad-shard-bytes "$SHARD_SIZE"000000 --checkpoint --stats-interval 640 --num-iters 2000 --test-failure --fail-at 1200 --gcs-delay-ms $GCS_DELAY_MS"
+cmd="python test_sgd_allreduce.py --redis-address $REDIS_ADDRESS:6379 --batch-size $BATCH_SIZE --num-workers $NUM_RAYLETS --devices-per-worker 4 --gpu --grad-shard-bytes "$SHARD_SIZE"000000 --checkpoint --stats-interval 640 --num-iters 1500 --test-failure --fail-at 1200 --gcs-delay-ms $GCS_DELAY_MS"
 
 if [ $USE_GCS_ONLY -eq 1 ]
 then
