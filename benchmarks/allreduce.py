@@ -191,9 +191,13 @@ class RingAllReduceWorker(object):
 
         # Resend any buffered data that was received before the allreduce
         # started.
+        i = 0
         while self.receives:
             index, aggregate, batch_buffer, batch_id = self.receives.pop(0)
             self.receive(index, aggregate, batch_buffer, batch_id)
+            i += 1
+            if i == (self.num_workers - 1) * 2:
+                break
 
         ## We no longer need the input, so delete it.
         #input_id = ray.worker.global_worker.get_argument_id(input_data)
