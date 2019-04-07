@@ -67,6 +67,13 @@ parser.add_argument("--source-rate", default=-1,
                     type=lambda x: float(x) or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
+parser.add_argument("--sources", default=1,
+                    # TODO (john): Add check
+                    help="number of sources")
+parser.add_argument("--records-per-round", default=100000,
+                    type=lambda x: float(x) or
+                            parser.error("Records per round cannot be zero."),
+                    help="total number of records per experiment round")
 parser.add_argument("--warm-up", default=False,
                     action='store_true',
                     help="whether to use a first round of data to warmup")
@@ -120,7 +127,7 @@ def create_and_run_dataflow(num_nodes,  num_sources,
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based, source_rate,
-                            warm_up):
+                            warm_up, num_records_per_round):
 
     assert num_stages >= 0, (num_stages)
 
@@ -138,7 +145,7 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     node_id = node_prefix + str(id)
     stream = env.source(utils.RecordGenerator(rounds, record_type,
                                     record_size, sample_period, source_rate,
-                                    warm_up),
+                                    warm_up, num_records_per_round),
                                     name="source",
                                     placement=[node_id] * num_sources)
     # TODO (john): Use custom partitioning here to shuffle by key
@@ -184,6 +191,8 @@ def create_and_run_dataflow(num_nodes,  num_sources,
 def write_log_files(all_parameters, latency_filename,
                     throughput_filename,  dump_filename, dataflow):
 
+    time.sleep(2)
+
     # Dump timeline
     if dump_filename:
         dump_filename = dump_filename + all_parameters
@@ -219,7 +228,7 @@ def write_log_files(all_parameters, latency_filename,
                      i) + " | " + str(o) + "\n")
 
 if __name__ == "__main__":
-    
+
     args = parser.parse_args()
 
     rounds = int(args.rounds)
@@ -243,11 +252,15 @@ if __name__ == "__main__":
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
     source_rate = float(args.source_rate)
+    num_sources = int(args.sources)
+    num_records_per_round = int(args.records_per_round)
     warm_up = bool(args.warm_up)
     pin_processes = bool(args.pin_processes)
 
+
     logger.info("== Parameters ==")
     logger.info("Rounds: {}".format(rounds))
+    logger.info("Records per round: {}".format(num_records_per_round))
     logger.info("Number of nodes: {}".format(num_nodes))
     logger.info("Number of Redis shards: {}".format(num_redis_shards))
     logger.info("Max memory per Redis shard: {}".format(redis_max_memory))
@@ -270,22 +283,31 @@ if __name__ == "__main__":
     logger.info("Background flush: {}".format(background_flush))
     message = (" (as fast as it gets)") if source_rate < 0 else ""
     logger.info("Source rate: {}".format(source_rate) + message)
+    logger.info("Number of sources: {}".format(num_sources))
     logger.info("Warm_up: {}".format(warm_up))
     logger.info("Pin processes: {}".format(pin_processes))
 
     # Estimate the ideal output rate of a single source instance
     # when it is not backpressured by downstream operators in the chain
     source = utils.RecordGenerator(rounds, record_type, record_size,
-                                   sample_period)
+                                   sample_period,
+                                   warm_up=False,
+                                   records_per_round=num_records_per_round)
     start = time.time()
-    records = source.drain()
-    rate = records / (time.time() - start)
+    records = source.drain(True)  # Drain it as fast as possible
+    elapsed_time = time.time() - start
+    rate = records / elapsed_time if elapsed_time > 1 else records
     logger.info("Ideal rate (per source instance): {}".format(rate))
+    message = "Total number of records the source gives: {}"
+    logger.info(message.format(source.total_elements))
+    info_message = "To get more records, increase the number of rounds or "
+    info_message += "the number of records per round"
+    logger.info(info_message)
 
-    # This estimation makes sense only if source(s) live at the
-    # same machine with this script (true for micro-benchmarks)
-    num_sources = math.trunc(
-                   math.ceil(source_rate / rate)) if rate < source_rate else 1
+    if rate * num_sources < source_rate:
+        message = "Requested source rate cannot be reached with {} sources."
+        logger.warning(message.format(num_sources))
+        sys.exit()
 
     # Start Ray with the specified configuration
     utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
@@ -309,6 +331,6 @@ if __name__ == "__main__":
                             queue_config, sample_period,
                             latency_filename, throughput_filename,
                             dump_filename, task_based, source_rate,
-                            warm_up)
+                            warm_up, num_records_per_round)
 
     utils.shutdown_ray(sleep=2)

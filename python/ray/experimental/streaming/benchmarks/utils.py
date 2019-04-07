@@ -9,8 +9,14 @@ import subprocess
 import sys
 import time
 
+try:
+    from itertools import zip_longest as zip_longest
+except:
+    from itertools import izip_longest as zip_longest
+
 import ray
 from ray.tests.cluster_utils import Cluster
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -68,7 +74,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         part_1 = "Dataflow contains {} actors".format(num_actors)
         part_2 = "but only {} available CPUs were found.".format(num_cpus)
         logger.error(part_1 + " " + part_2)
-        sys.exit()
+        # sys.exit()
     # The 'actors_per_stage' list includes only source and map instances
     actors_per_stage = [num_sources]
     actors_per_stage.extend([dataflow_parallelism for _ in range(num_stages)])
@@ -133,16 +139,17 @@ class RecordGenerator(object):
     def __init__(self, rounds, record_type="int",
                  record_size=None, sample_period=1,
                  fixed_rate=-1,
-                 warm_up=False):
+                 warm_up=False,
+                 records_per_round=100000):
 
         assert rounds > 0, rounds
         assert fixed_rate != 0, fixed_rate
 
-        self.records_per_round = 10
         self.warm_up = warm_up
         if self.warm_up:
             rounds += 1
-        self.total_elements = self.records_per_round * rounds
+        self.records_per_round = records_per_round
+        self.total_elements = records_per_round * rounds
         self.total_count = 0
         self.period = sample_period
         self.fixed_rate = fixed_rate if fixed_rate > 0 else float("inf")
@@ -174,6 +181,12 @@ class RecordGenerator(object):
                 string.ascii_letters + string.digits) for _ in range(
                                                             self.record_size))
 
+    # Waits
+    def __wait(self):
+        while (self.rate_count / (time.time() - self.start) >
+               self.fixed_rate):
+           time.sleep(0.0001)  # 100 us
+
     # Returns the next record (either int or string depending on record_type)
     def get_next(self):
         if self.total_count == self.total_elements:
@@ -181,14 +194,13 @@ class RecordGenerator(object):
         record = self.__get_next_record()
         self.total_count += 1
         self.rate_count += 1
+        # Wait if needed
+        self.__wait()
         # Measure source rate per round
         if self.rate_count == self.records_per_round:
             self.rate_count = 0
             self.start = time.time()
-            time.sleep(0.001)
-        while (self.rate_count / (time.time() - self.start) >
-               self.fixed_rate):
-            time.sleep(0.01)
+            time.sleep(0.0001)  # 100 us
         # Do a first round without measuring latency just to warm up
         if self.warm_up and self.total_count <= self.records_per_round:
             if self.total_count == self.records_per_round:
@@ -203,27 +215,13 @@ class RecordGenerator(object):
             return(-1,record)
 
     # Drains the generator and returns the total number of records produced
-    def drain(self):
+    def drain(self, no_wait=False):
+        if no_wait:
+            self.fixed_rate = float("inf")
         records = 0
         while self.get_next() is not None:
             records += 1
         return records
-
-# TODO (john): A stream replayer that reads Nexmark events from files and
-# replays them based on at given rates
-class NexmarkEventGenerator(object):
-    def __init__(self, event_file, event_type, event_rate):
-        self.event_file = event_file
-        self.event_rate = event_rate  # -1 for as fast as it gets
-        self.event_type = event_type  # Auction, Bid, Person
-
-    # Returns the next event
-    def get_next(self):
-        pass
-
-    # Closes source
-    def close(self):
-        pass
 
 # Collects sampled latencies and throughputs from
 # actors in the dataflow and writes the log files
@@ -263,32 +261,3 @@ def write_log_files(all_parameters, latency_filename,
                      operator_name) + ", " + str(
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
-
-def compute_elapsed_time(record):
-    generation_time = record.system_time
-    if generation_time != -1:
-        # TODO (john): Clock skew might distort elapsed time
-        return [time.time() - generation_time]
-    else:
-        return []
-
-# A custom sink used to measure latency
-class LatencySink(object):
-    def __init__(self):
-        self.state = []
-        self.logic = compute_elapsed_time
-
-    # Evicts next record
-    def evict(self, record):
-        if logic is None:
-            self.state.append(record)
-        else:
-            self.state.append(self.logic(record))
-
-    # Closes the sink
-    def close(self):
-        pass
-
-    # Returns sink's state
-    def get_state(self):
-        return self.state

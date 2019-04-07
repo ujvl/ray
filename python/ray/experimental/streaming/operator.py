@@ -46,6 +46,7 @@ class OpType(enum.Enum):
     Sum = 11
     Union = 12
     WriteTextFile = 13
+    Join = 14
     # ...
 
 
@@ -72,6 +73,8 @@ class Operator(object):
         # [0..num_instances) to cluster nodes ids
         self.placement = placement
         # TODO (john): Allow partial mappings of instances to nodes
+        # Do not allow empty placements for now
+        assert(self.placement is not None), (self.placement)
         if self.placement is None:  # Set default mapping (node 0)
             self.placement = ["0"] * num_instances
 
@@ -168,6 +171,32 @@ class UnionOperator(Operator):
                           logging,
                           placement)
         self.other_inputs = other_inputs
+
+
+class JoinOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 right_input,
+                 join_logic,
+                 left_input_operator_id,
+                 right_input_operator_id,
+                 name="",
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          join_logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.right_input = right_input
+        # Will be used in actor construction to distinguish left from right
+        self.left_input_operator_id = left_input_operator_id
+        self.right_input_operator_id = right_input_operator_id
 
 
 class TimeWindowOperator(Operator):

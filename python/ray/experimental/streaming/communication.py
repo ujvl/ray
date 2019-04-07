@@ -13,11 +13,13 @@ from ray.experimental.streaming.operator import PStrategy
 from ray.experimental.streaming.batched_queue import BatchedQueue
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
+logger.setLevel("DEBUG")
+
+LOGGING_PERIOD = 100000  # Log throughput every 100K records
 
 # Generates UUIDs
 def _generate_uuid():
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 # Forward and broadcast stream partitioning strategies
 forward_broadcast_strategies = [PStrategy.Forward, PStrategy.Broadcast]
@@ -112,27 +114,48 @@ class DataInput(object):
     """
 
     def __init__(self, channels):
+        self.multiple_inputs = False
         self.input_channels = channels
         self.channel_index = 0
         self.max_index = len(channels)
         self.closed = [False] * len(
             self.input_channels)  # Tracks the channels that have been closed
         self.all_closed = False
-        self.closed_channels = []  # Used for task-based execution
+        self.closed_channels = [] # Used to terminate a task-based execution
 
         # Logging-related attributes
         self.logging = False    # Default
         self.records = 0        # Counter
         self.rates = []         # Input rates
         self.start = 0.0        # Start timestamp
-        self.period = 10    # Measure input rate every 100K records
+        # Measure input rate every RECORDS_PER_ROUND
+        self.period = LOGGING_PERIOD
+
+    # Groups input channels per logical stream so that the operator can
+    # distinguish between inputs and pull from channels of a particular stream
+    # TODO (john): Make this to work for queue-based execution
+    def _group_channels_per_stream(self, source_operator_ids):
+        self.multiple_inputs = True
+        temp_channels = [[None]] * len(source_operator_ids)
+        for channel in self.input_channels:
+            index = source_operator_ids.index(channel.src_operator_id)
+            temp_channels[index].append(channel)
+        # Set flags
+        self.closed = [None] * len(source_operator_ids)
+        for i, channels in enumerate(temp_channels):
+            flags = [False] * len(channels)
+            self.closed[i] = flags
+        # Set input channels
+        self.input_channels = temp_channels
 
     # Fetches records from input channels in a round-robin fashion
     # TODO (john): Make sure the instance is not blocked on any of its input
     # channels
     # TODO (john): In case of input skew, it might be better to pull from
     # the largest queue more often
-    def _pull(self):
+    def _pull(self, index):
+        # TODO (john): Multi-input operators do not work with queues for now
+        assert(self.multiple_inputs is False), (self.multiple_inputs)
         while True:
             if self.max_index == 0:
                 # TODO (john): We should detect this earlier
@@ -211,12 +234,7 @@ class DataOutput(object):
     """
 
     def __init__(self, channels, partitioning_schemes):
-
-        # All output channels of the instance are flushed using the same timer
-        self.last_flush_time = 0.0
-        self.flush_timeout = channels[
-                        0].queue.max_batch_time if channels else float("inf")
-
+        self.custom_partitioning_functions = None
         self.channel_index = 0
         self.key_selector = None
         self.partitioning_schemes = partitioning_schemes
@@ -225,7 +243,7 @@ class DataOutput(object):
         self.forward_channels = []  # Forward and broadcast channels
         slots = sum(1 for scheme in self.partitioning_schemes.values()
                     if scheme.strategy in round_robin_strategies)
-        self.round_robin_channels = [list()] * slots    # RoundRobin channels
+        self.round_robin_channels = [[]] * slots    # RoundRobin channels
         self.round_robin_indexes = [0] * slots
         slots = sum(1 for scheme in self.partitioning_schemes.values()
                     if scheme.strategy == PStrategy.Shuffle)
@@ -237,15 +255,29 @@ class DataOutput(object):
         # Flag used to avoid hashing when there is no shuffling by key
         self.shuffle_key_exists = slots > 0
         self.shuffle_key_channels = [[]] * slots  # Shuffle by key channels
+        slots = sum(1 for scheme in self.partitioning_schemes.values()
+                    if scheme.strategy == PStrategy.Custom)
+        # Flag denoting whether there is a custom defined
+        self.custom_partitioning_exists = slots > 0
+        # Custom partitioning channels
+        self.custom_partitioning_channels = [[]] * slots
+        # Custom partitioning functions
+        self.custom_partitioning_functions = [
+        scheme.partition_fn for scheme in self.partitioning_schemes.values()
+                                    if scheme.strategy == PStrategy.Custom]
+
         # Distinct shuffle destinations
         shuffle_destinations = {}
         # Distinct shuffle by key destinations
         shuffle_by_key_destinations = {}
         # Distinct round robin destinations
         round_robin_destinations = {}
+        # Distinct custom partitioning destinations
+        custom_partitioning_destinations = {}
         index_1 = 0
         index_2 = 0
         index_3 = 0
+        index_4 = 0
         for channel in channels:
             p_scheme = self.partitioning_schemes[channel.dst_operator_id]
             strategy = p_scheme.strategy
@@ -269,7 +301,14 @@ class DataOutput(object):
                 self.round_robin_channels[pos].append(channel)
                 if pos == index_3:
                     index_3 += 1
-            else:  # TODO (john): Add support for custom partitioning
+            elif strategy == PStrategy.Custom:  # User-defined partitioning
+                pos = custom_partitioning_destinations.setdefault(
+                                                    channel.dst_operator_id,
+                                                    index_4)
+                self.custom_partitioning_channels[pos].append(channel)
+                if pos == index_4:
+                    index_4 += 1
+            else:
                 sys.exit("Unrecognized or unsupported partitioning strategy.")
 
         # Change round robin to simple forward if there is only one channel
@@ -291,7 +330,8 @@ class DataOutput(object):
         self.records = 0        # Counter
         self.rates = []         # Output rates
         self.start = 0.0        # Start timestamp
-        self.period = 10   # Compute output rate every 100K records
+        # Measure input rate every RECORDS_PER_ROUND
+        self.period = LOGGING_PERIOD
 
     # Enables rate logging on output channels
     def enable_logging(self):
@@ -329,7 +369,11 @@ class DataOutput(object):
                 if close is True:
                     channel.queue.put_next(None)
                 channel.queue._flush_writes()
-        # TODO (john): Add more channel types
+        for channels in self.custom_partitioning_channels:
+            for channel in channels:
+                if close is True:
+                    channel.queue.put_next(None)
+                channel.queue._flush_writes()
 
         if self.logging:  # Log rate
             self.__log(force=close)  # force=True only on termination
@@ -352,7 +396,10 @@ class DataOutput(object):
             for channel in channels:
                 destinations.append((channel.dst_operator_id,
                                      channel.dst_instance_id))
-        # TODO (john): Add more channel types
+        for channels in self.custom_partitioning_channels:
+            for channel in channels:
+                destinations.append((channel.dst_operator_id,
+                                     channel.dst_instance_id))
         return destinations
 
     # Pushes the record to the output
@@ -395,8 +442,19 @@ class DataOutput(object):
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
                 channel.queue.put_next(record)
-        else:  # TODO (john): Add support for custom partitioning
-            pass
+        elif self.custom_partitioning_exists:
+            for i, channels in enumerate(self.custom_partitioning_channels):
+                # Set the right function. In general, there might be multiple
+                # destinations, each one with a different custom partitioning
+                partitioning_fn = self.custom_partitioning_functions[i]
+                h = partitioning_fn(record)
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.put_next(record)
 
         if self.logging:  # Log rate
             self.__log(batch_size=1)
@@ -446,8 +504,22 @@ class DataOutput(object):
                     #     channel.src_operator_id, channel.src_instance_id,
                     #     record, channel))
                     channel.queue.put_next(record)
-        else:  # TODO (john): Add support for custom partitioning
-            pass
+        elif self.custom_partitioning_exists:
+            for record in records:
+                for i, channels in enumerate(
+                                    self.custom_partitioning_channels):
+                    # Set the right function. In general, there might be
+                    # multiple destinations, each one with a different custom
+                    # partitioning
+                    partitioning_fn = self.custom_partitioning_functions[i]
+                    h = partitioning_fn(record)
+                    num_instances = len(channels)  # Downstream instances
+                    channel = channels[h % num_instances]
+                    # logger.debug(
+                    #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    #     channel.src_operator_id, channel.src_instance_id,
+                    #     record, channel))
+                    channel.queue.put_next(record)
 
         if self.logging:  # Log rate
             self.__log(batch_size=len(records))
@@ -481,10 +553,10 @@ class QueueConfig(object):
     """
 
     def __init__(self,
-                 max_size=999999,
-                 max_batch_size=99999,
-                 max_batch_time=0.01,
-                 prefetch_depth=10,
+                 max_size=1000,
+                 max_batch_size=100,
+                 max_batch_time=0.1,
+                 prefetch_depth=1,
                  background_flush=False):
         self.max_size = max_size
         self.max_batch_size = max_batch_size

@@ -89,7 +89,9 @@ class OperatorInstance(object):
         for channels in self.output.round_robin_channels:
             for channel in channels:
                 channel.queue.enable_writes()
-        # TODO (john): Add more channel types here
+        for channels in self.output.custom_partitioning_channels:
+            for channel in channels:
+                channel.queue.enable_writes()
 
     # Used for index-based key extraction, e.g. for tuples
     def _index_based_selector(self,record):
@@ -124,7 +126,11 @@ class OperatorInstance(object):
                 if channel.id == channel_id:
                     channel.register_destination_actor(actor_handle)
                     return
-        # TODO (john): Add more channel types here
+        for channels in self.output.custom_partitioning_channels:
+            for channel in channels:
+                if channel.id == channel_id:
+                    channel.register_destination_actor(actor_handle)
+                    return
 
     # Used to periodically stop spinning and reschedule an actor
     # in order to call other methods on it from the outside world
@@ -182,8 +188,9 @@ class ProgressMonitor(object):
             # Block until the ActorExit signal has been
             # received from each actor executing the dataflow
             signals = signal.receive(self.running_actors)
-            if len(signals) > 0:
-                self.exit_signals.extend(signals)
+            for _, received_signal in signals:
+                if isinstance(received_signal, ActorExit):
+                    self.exit_signals.append(received_signal)
             if len(self.exit_signals) == len(self.running_actors):
                 return
 
@@ -193,8 +200,9 @@ class ProgressMonitor(object):
             # Block until the ActorStart signal has been
             # received from each actor in the given list
             signals = signal.receive(actor_handles)
-            if len(signals) > 0:
-                self.start_signals.extend(signals)
+            for _, received_signal in signals:
+                if isinstance(received_signal, ActorStart):
+                    self.start_signals.append(received_signal)
             if len(self.start_signals) == len(actor_handles):
                 return
 
@@ -266,7 +274,7 @@ class Map(OperatorInstance):
             self.output._push(self.map_fn(record))
 
     # Task-based map execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -300,7 +308,7 @@ class FlatMap(OperatorInstance):
                                   operator_metadata, input_gate, output_gate)
         self.flatmap_fn = operator_metadata.logic
 
-    # Applies the splitter to the records of the input stream(s)
+    # Applies the flatmap logic to the records of the input stream(s)
     # and pushes resulting records to the output stream(s)
     def start(self):
         signal.send(ActorStart(self.instance_id))
@@ -313,7 +321,7 @@ class FlatMap(OperatorInstance):
             self.output._push_all(self.flatmap_fn(record))
 
     # Task-based flatmap execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -359,7 +367,7 @@ class Filter(OperatorInstance):
                 self.output._push(record)
 
     # Task-based filter execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -395,7 +403,7 @@ class Union(OperatorInstance):
             self.output._push(record)
 
     # Task-based union execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -408,6 +416,48 @@ class Union(OperatorInstance):
                 self.output._push(record)
             records += len(batch)
         return records
+
+# Join actor
+@ray.remote
+class Join(OperatorInstance):
+    """A join operator instance that joins two streams."""
+
+    def __init__(self, instance_id, operator_metadata, input_gate,
+                 output_gate):
+        OperatorInstance.__init__(self, instance_id,
+                                  operator_metadata, input_gate, output_gate)
+        self.join_logic = operator_metadata.logic
+        assert(self.join_logic is not None), (self.join_logic)
+        self.left = operator_metadata.left_input_operator_id
+        self.right = operator_metadata.right_input_operator_id
+        self.process_logic = None
+
+    # Repeatedly pulls and joins records from both inputs
+    def start(self):
+        sys.exit("Queue-based join is not supported yet.")
+
+    # Task-based union execution on a set of batches
+    def apply(self, batches, channel_id, source_operator_id):
+        # Distringuish between left and right input and set the right logic
+        # We expect this to be as cheap as setting a pointer
+        if source_operator_id == self.left:
+            self.process_logic = self.join_logic.process_left
+        else:
+            assert source_operator_id == self.right
+            self.process_logic = self.join_logic.process_right
+        records = 0
+        for batch in batches:
+            for record in batch:
+                if record is None:
+                    if self.input._close_channel(channel_id):
+                        self.output._flush(close=True)
+                        signal.send(ActorExit(self.instance_id))
+                        records += len(batch)
+                    return records    
+                self.output._push_all(self.process_logic(record))
+            records += len(batch)
+        return records
+
 
 # Inspect actor
 @ray.remote
@@ -440,7 +490,7 @@ class Inspect(OperatorInstance):
             self.output._push(record)
 
     # Task-based inspect execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -520,7 +570,7 @@ class Reduce(OperatorInstance):
         return self.state
 
     # Task-based reduce execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -582,7 +632,7 @@ class KeyBy(OperatorInstance):
             self.output._push((key,record))
 
     # Task-based keyby execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -606,7 +656,6 @@ class Source(OperatorInstance):
                                   operator_metadata, input_gate, output_gate)
         # The user-defined source with a get_next() method
         self.source = operator_metadata.source
-
     # Starts the source by calling get_next() repeatedly
     def start(self):
         signal.send(ActorStart(self.instance_id))
@@ -641,7 +690,7 @@ class Sink(OperatorInstance):
             self.sink.evict(record)
 
     # Task-based sink execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -699,7 +748,7 @@ class WriteTextFile(OperatorInstance):
             self._put_next(record)
 
     # Task-based sink execution on a set of batches
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         records = 0
         for batch in batches:
             for record in batch:
@@ -743,5 +792,5 @@ class TimeWindow(OperatorInstance):
                 self.start = time.time()
 
     # Task-based time window execution
-    def apply(self, batches, channel_id):
+    def apply(self, batches, channel_id, _source_operator_id):
         sys.exit("Task-based time window execution not supported yet.")
