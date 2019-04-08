@@ -1,24 +1,18 @@
 #!/bin/bash
 
 HEAD_IP=$1
-NUM_ITERATIONS=100
 
-for NUM_RAYLETS in 48 24 12; do
-    for SIZE in 2500000 25000000 250000000; do
-        for GCS_DELAY_MS in -1 0 1; do
-            for NUM_SHARDS in 2 4 8; do
-                bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $SIZE $GCS_DELAY_MS $NUM_SHARDS $HEAD_IP
-            done
-        done
-    done
-done
+NUM_RAYLETS=64
+SIZE=25000000
+GCS_DELAY_MS=0
+bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $SIZE 0 $GCS_DELAY_MS 1 1
+bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $SIZE 1 $GCS_DELAY_MS 1 1
 
-for NUM_RAYLETS in 48 24 12; do
+for NUM_RAYLETS in 64; do
     for SIZE in 2500000 25000000 250000000; do
-        for GCS_DELAY_MS in -1 0 1; do
-            for NUM_SHARDS in 2 4 8; do
-                bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $SIZE $GCS_DELAY_MS $NUM_SHARDS $HEAD_IP 1
-            done
+        for GCS_DELAY_MS in 0 1 5; do
+            bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $SIZE 0 $GCS_DELAY_MS
+            bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $SIZE 1 $GCS_DELAY_MS
         done
     done
 done

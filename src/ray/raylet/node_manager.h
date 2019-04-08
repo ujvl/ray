@@ -496,6 +496,8 @@ class NodeManager {
   /// This map stores actor ID to the ID of the checkpoint that will be used to
   /// restore the actor.
   std::unordered_map<ActorID, ActorCheckpointID> checkpoint_id_to_restore_;
+
+  std::unordered_map<TaskID, int64_t> num_times_resubmitted_;
 };
 
 }  // namespace raylet

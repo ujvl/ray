@@ -184,14 +184,18 @@ class RingAllReduceWorker(object):
 
         # Resend any buffered data that was received before the allreduce
         # started.
+        i = 0
         while self.receives:
             index, aggregate, batch_buffer, batch_id = self.receives.pop(0)
             self.receive(index, aggregate, batch_buffer, batch_id)
+            i += 1
+            if i == (self.num_workers - 1) * 2:
+                break
 
-        # We no longer need the input, so delete it.
-        input_id = ray.worker.global_worker.get_argument_id(input_data)
-        input_id = ray.pyarrow.plasma.ObjectID(input_id.binary())
-        ray.worker.global_worker.plasma_client.delete([input_id])
+        ## We no longer need the input, so delete it.
+        #input_id = ray.worker.global_worker.get_argument_id(input_data)
+        #input_id = ray.pyarrow.plasma.ObjectID(input_id.binary())
+        #ray.worker.global_worker.plasma_client.delete([input_id])
 
     def send(self, index, aggregate, batch_id=None):
         debug("SEND", self.num_iterations, ": worker", self.worker_index,
@@ -255,12 +259,12 @@ class RingAllReduceWorker(object):
             # The sent or received chunk was fully reduced, so remember it.
             self.out_oids[index] = batch_id
             self.weight_partition.commit_partition(index)
-        else:
-            if batch_id is not None:
-                # Try to evict old messages to leave space for the allreduce output.
-                self.cache.append(ray.pyarrow.plasma.ObjectID(batch_id.binary()))
-                if len(self.cache) > self.num_workers:
-                    ray.worker.global_worker.plasma_client.delete([self.cache.pop(0)])
+        #else:
+        #    if batch_id is not None:
+        #        # Try to evict old messages to leave space for the allreduce output.
+        #        self.cache.append(ray.pyarrow.plasma.ObjectID(batch_id.binary()))
+        #        if len(self.cache) > self.num_workers:
+        #            ray.worker.global_worker.plasma_client.delete([self.cache.pop(0)])
 
         # We've received all of the reduced chunks. Finish the allreduce.
         if len(self.aggregate_received) + len(
@@ -364,9 +368,9 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         with ray.profiling.profile("save_physical_checkpoint"):
             debug("Length of log is", len(self.log), self.checkpoint_interval, len(self.log) == self.checkpoint_interval)
             if len(self.log) == self.checkpoint_interval:
-                #checkpoint = self.weight_partition.get_weights()
-                #checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
-                #np.save(checkpoint_path, checkpoint)
+                checkpoint = self.weight_partition.get_weights()
+                checkpoint_path = os.path.join(self.checkpoint_dir, "{}-{}.npy".format(actor_id.hex(), self.num_iterations))
+                np.save(checkpoint_path, checkpoint)
                 self.log.clear()
                 self.pinned.clear()
 
@@ -378,6 +382,13 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         debug("Trying to restore", checkpoint_id)
         checkpoint_path = os.path.join(self.checkpoint_dir,
                                        checkpoint_id.hex())
+        try:
+            debug("Checkpoint not found!", checkpoint_id)
+            os.stat(checkpoint_path)
+        except:
+            # We did not manage to save this checkpoint.
+            return False
+
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
 
@@ -462,10 +473,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
     for i, worker in enumerate(workers):
         done_oid = np.random.bytes(20)
         done_oids.append(done_oid)
-        if checkpoint_interval > 0:
-            out_oid = None
-        else:
-            out_oid = np.random.bytes(20)
+        out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
         worker.execute.remote(weight_ids[i], done_oid, out_oid)
 
@@ -515,7 +523,8 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval):
+         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval,
+         fail_at):
     if record_latency and latency_file is None:
         latency_file = "latency-{}-mb-{}-workers-{}.txt".format(
                 data_size * 4 // 1e6,
@@ -627,6 +636,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
+                    str(int(use_gcs_only)),
                     str(args.gcs_delay_ms),
                     node_resource,
                     ]
@@ -642,16 +652,19 @@ def main(redis_address, test_single_node, num_workers, data_size,
         log.info("Starting iteration %d", i)
 
         fail_iteration = False
-        if (test_local and i == num_iterations // 2 and test_failure):
-            fail_iteration = True
-        elif (not test_local and i == num_iterations // 4 and test_failure):
-            fail_iteration = True
+        if fail_at is not None:
+            fail_iteration = fail_at == i
+        else:
+            if (test_local and i == num_iterations // 2 and test_failure):
+                fail_iteration = True
+            elif (not test_local and i == num_iterations // 4 and test_failure):
+                fail_iteration = True
         latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed, checkpoint_interval)
         latencies.append(latency)
-        time.sleep(1)
+        time.sleep(0.1)
 
     if latency_file is not None:
-        with open(latency_file, 'w+') as f:
+        with open(latency_file, 'a+') as f:
             for latency in latencies:
                 f.write('{}\n'.format(latency))
 
@@ -714,6 +727,11 @@ if __name__ == "__main__":
         action='store_true',
         help='Whether or not to test worker failure')
     parser.add_argument(
+        '--fail-at',
+        type=int,
+        default=None,
+        help='The step at which to kill a worker')
+    parser.add_argument(
         '--gcs-delay-ms',
         default=-1,
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
@@ -731,4 +749,5 @@ if __name__ == "__main__":
          args.size, args.num_iterations, args.check_results, args.dump,
          args.test_failure, args.record_latency, args.gcs_delay_ms,
          args.gcs_only,
-         args.latency_file, args.checkpoint_interval)
+         args.latency_file, args.checkpoint_interval,
+         args.fail_at)
