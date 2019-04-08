@@ -28,8 +28,9 @@ ray start --head \
   --num-cpus 20 \
   --resources='{"'$NODE_RESOURCE'": 100}' \
   --plasma-directory=/mnt/hugepages \
+  --plasma-eviction-fraction=100 \
   --huge-pages \
-  --object-store-memory 160000000000 \
+  --object-store-memory 200000000000 \
   --internal-config='{
   "initial_reconstruction_timeout_milliseconds": 200,
   "gcs_delay_ms": '$GCS_DELAY_MS',
