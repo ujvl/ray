@@ -158,7 +158,7 @@ if __name__ == "__main__":
                 fail_iteration = True
             elif (not test_local and i == args.num_iters // 4 and args.test_failure):
                 fail_iteration = True
-        print("== Step {} ==".format(i))
+        print("== Step {} ==".format(i), flush=True)
         stats = sgd.step(
                 fetch_stats=fetch_stats,
                 test_failure=fail_iteration,
@@ -167,10 +167,10 @@ if __name__ == "__main__":
         num_failed = stats.pop("num_failed")
         ips = ((args.batch_size * args.num_workers * args.devices_per_worker) /
                (time.time() - start))
-        print("Iteration time", time.time() - start, "Images per second", ips)
+        print("Iteration time", time.time() - start, "Images per second", ips, flush=True)
         t.append(ips)
         if fetch_stats:
-            print("Current loss", stats)
+            print("Current loss", stats, flush=True)
 
     print("Peak throughput", max(sum(t[i:i + 5]) / 5 for i in range(len(t))))
 
