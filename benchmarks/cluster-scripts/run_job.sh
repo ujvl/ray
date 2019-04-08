@@ -12,6 +12,10 @@ NUM_SHARDS=${6:-1}
 FAILURE=${7:-0}
 FAILURE_ARG=""
 
+if [[ $SIZE -gt 25000000 ]]; then
+  NUM_ITERATIONS=20
+fi
+
 latency_prefix="latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$SIZE"-bytes-"
 if [[ $FAILURE -ne 0 ]]
 then
