@@ -661,7 +661,6 @@ def main(redis_address, test_single_node, num_workers, data_size,
                 fail_iteration = True
         latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed, checkpoint_interval)
         latencies.append(latency)
-        time.sleep(0.1)
 
     if latency_file is not None:
         with open(latency_file, 'a+') as f:

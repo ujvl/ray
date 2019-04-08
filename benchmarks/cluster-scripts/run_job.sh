@@ -27,7 +27,7 @@ fi
 if ls $latency_prefix* 1> /dev/null 2>&1
 then
     echo "Latency file with prefix $latency_prefix already found, skipping..."
-    continue
+    exit
 fi
 latency_file=$latency_prefix`date +%y-%m-%d-%H-%M-%S`.txt
 
