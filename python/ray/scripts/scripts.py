@@ -116,6 +116,11 @@ def cli(logging_level, logging_format):
     help="The amount of memory (in bytes) to start the object store with. "
     "By default, this is capped at 20GB but can be set higher.")
 @click.option(
+    "--plasma-eviction-fraction",
+    required=False,
+    type=int,
+    help="The fraction of plasma store memory to evict.")
+@click.option(
     "--redis-max-memory",
     required=False,
     type=int,
@@ -216,6 +221,7 @@ def cli(logging_level, logging_format):
 def start(node_ip_address, redis_address, redis_port, num_redis_shards,
           redis_max_clients, redis_password, redis_shard_ports,
           object_manager_port, node_manager_port, object_store_memory,
+          plasma_eviction_fraction,
           redis_max_memory, num_cpus, num_gpus, resources, head, no_ui, block,
           plasma_directory, huge_pages, autoscaling_config,
           no_redirect_worker_output, no_redirect_output,
@@ -256,7 +262,8 @@ def start(node_ip_address, redis_address, redis_port, num_redis_shards,
         include_java=include_java,
         java_worker_options=java_worker_options,
         load_code_from_local=load_code_from_local,
-        _internal_config=internal_config)
+        _internal_config=internal_config,
+        plasma_eviction_fraction=plasma_eviction_fraction)
 
     if head:
         # Start Ray on the head node.
