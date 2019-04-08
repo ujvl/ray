@@ -23,6 +23,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     --num-cpus 2 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
     --plasma-directory=/mnt/hugepages \
+    --plasma-eviction-fraction 100 \
     --huge-pages \
     --object-store-memory 18000000000 \
     --internal-config='{
