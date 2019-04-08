@@ -8,6 +8,7 @@
 #include "ray/id.h"
 #include "ray/raylet/format/node_manager_generated.h"
 
+class FlatBufferBuilder;
 namespace {
 
 #define RAY_CHECK_ENUM(x, y) \
@@ -804,7 +805,8 @@ void NodeManager::ProcessGetTasksMessage(
   RAY_CHECK(worker);
   // If the worker was assigned a task, mark it as finished.
   if (!worker->GetAssignedTaskIds().empty()) {
-    FinishAssignedTasks(*worker);
+    auto &task_ids = worker->GetAssignedTaskIds();
+    FinishAssignedTasks(*worker, task_ids.back());
   }
   // Return the worker to the idle pool.
   worker_pool_.PushWorker(std::move(worker));
@@ -1047,16 +1049,18 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
   auto message =
       flatbuffers::GetRoot<protocol::PrepareActorCheckpointRequest>(message_data);
   ActorID actor_id = from_flatbuf(*message->actor_id());
-  RAY_LOG(DEBUG) << "Preparing checkpoint for actor " << actor_id;
+  TaskID task_id = from_flatbuf(*message->task_id());
+  RAY_LOG(DEBUG) << "Preparing checkpoint for actor " << actor_id
+                 << " after executing task " << task_id;
   const auto &actor_entry = actor_registry_.find(actor_id);
   RAY_CHECK(actor_entry != actor_registry_.end());
 
   std::shared_ptr<Worker> worker = worker_pool_.GetRegisteredWorker(client);
   RAY_CHECK(worker && worker->GetActorId() == actor_id);
-
+  // Finish tasks so far in batch.
+  FinishAssignedTasks(*worker, task_id);
   // Find the task that is running on this actor.
-  const auto &task_ids = worker->GetAssignedTaskIds();
-  const Task &task = local_queues_.GetTaskOfState(task_ids.front(), TaskState::RUNNING);
+  const Task &task = local_queues_.GetTaskOfState(task_id, TaskState::RUNNING);
   // Generate checkpoint id and data.
   ActorCheckpointID checkpoint_id = UniqueID::from_random();
   auto checkpoint_data =
@@ -1725,8 +1729,8 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
   }
 
   auto message = protocol::CreateGetTasksReply(fbb,
-                                              fbb.CreateVector(tasks_flatbuf),
-                                              fbb.CreateVector(resource_id_set_flatbuf));
+                                               fbb.CreateVector(tasks_flatbuf),
+                                               fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
 
   // Give the callback a copy of the batch of tasks so it can modify them.
@@ -1820,10 +1824,10 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
   return true;
 }
 
-void NodeManager::FinishAssignedTasks(Worker &worker) {
+void NodeManager::FinishAssignedTasks(Worker &worker, const TaskID &last_exec_task_id) {
   auto &task_ids = worker.GetAssignedTaskIds();
   auto &first_task = local_queues_.GetTaskOfState(task_ids.front(), TaskState::RUNNING);
-  // Only actor tasks are batched currently; all tasks belong to the same actor.
+  // Only actor tasks are batched currently; all tasks in batch belong to the same actor.
   bool is_actor_batch = first_task.GetTaskSpecification().IsActorTask();
   // Actor creation tasks are not batched with any other tasks.
   bool is_actor_creation_task = first_task.GetTaskSpecification().IsActorCreationTask();
@@ -1839,19 +1843,30 @@ void NodeManager::FinishAssignedTasks(Worker &worker) {
     }
     // Notify the task dependency manager that this task has finished execution.
     task_dependency_manager_.TaskCanceled(task_id);
+    if (task_id == last_exec_task_id) {
+      break;
+    }
   }
-  // Release task's resources. The worker's lifetime resources are still held.
-  auto const &task_resources = worker.GetTaskResourceIds();
-  local_available_resources_.Release(task_resources);
-  RAY_CHECK(cluster_resource_map_[gcs_client_->client_table().GetLocalClientId()].Release(
-      task_resources.ToResourceSet()));
-  worker.ResetTaskResourceIds();
 
-  // Unset the worker's assigned tasks.
-  worker.ClearTaskIds();
-  // Unset the worker's assigned driver Id if this is not an actor.
-  if (!is_actor_batch && !is_actor_creation_task) {
-    worker.AssignDriverId(DriverID::nil());
+  if (last_exec_task_id == task_ids.back()) {
+    // If batch is done executing completely, release resources.
+    // The worker's lifetime resources are still held.
+    auto const &task_resources = worker.GetTaskResourceIds();
+    local_available_resources_.Release(task_resources);
+    RAY_CHECK(
+        cluster_resource_map_[gcs_client_->client_table().GetLocalClientId()].Release(
+            task_resources.ToResourceSet())
+    );
+    worker.ResetTaskResourceIds();
+    // Unset the worker's assigned tasks.
+    worker.ClearTaskIds();
+    // Unset the worker's assigned driver Id if this is not an actor.
+    if (!is_actor_batch && !is_actor_creation_task) {
+      worker.AssignDriverId(DriverID::nil());
+    }
+  } else {
+    // Unset the worker's assigned tasks that have been completed so far.
+    worker.ClearTaskIdsUpTo(last_exec_task_id);
   }
 }
 

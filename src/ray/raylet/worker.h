@@ -30,6 +30,7 @@ class Worker {
   pid_t Pid() const;
   Language GetLanguage() const;
   void ClearTaskIds();
+  void ClearTaskIdsUpTo(const TaskID &task_id);
   void AssignTaskIds(const std::vector<TaskID> &task_id);
   bool IsAssignedTaskId(const TaskID &task_id);
   const TaskID &GetAssignedTaskId() const;

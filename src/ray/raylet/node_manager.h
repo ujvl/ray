@@ -190,11 +190,12 @@ class NodeManager {
   bool AssignActorTaskBatch(const ActorID &actor_id,
                             const ResourceSet &resource_set,
                             const std::vector<Task> &tasks);
-  /// Handle a worker finishing its assigned task.
+  /// Handle a worker finishing some or all of its assigned tasks.
   ///
-  /// \param worker The worker that finished the task.
+  /// \param worker The worker that finished the tasks.
+  /// \param last_exec_task_id The ID of the last executed task.
   /// \return Void.
-  void FinishAssignedTasks(Worker &worker);
+  void FinishAssignedTasks(Worker &worker, const TaskID &last_exec_task_id);
   /// Helper function to produce actor table data for a newly created actor.
   ///
   /// \param task The actor creation task that created the actor.

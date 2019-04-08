@@ -365,10 +365,13 @@ ray::Status RayletClient::FreeObjects(const std::vector<ray::ObjectID> &object_i
 }
 
 ray::Status RayletClient::PrepareActorCheckpoint(const ActorID &actor_id,
+                                                 const TaskID &task_id,
                                                  ActorCheckpointID &checkpoint_id) {
   flatbuffers::FlatBufferBuilder fbb;
   auto message =
-      ray::protocol::CreatePrepareActorCheckpointRequest(fbb, to_flatbuf(fbb, actor_id));
+      ray::protocol::CreatePrepareActorCheckpointRequest(fbb,
+                                                         to_flatbuf(fbb, actor_id),
+                                                         to_flatbuf(fbb, task_id));
   fbb.Finish(message);
 
   std::unique_ptr<uint8_t[]> reply;

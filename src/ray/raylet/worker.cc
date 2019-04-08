@@ -36,6 +36,12 @@ void Worker::ClearTaskIds() {
   assigned_task_ids_.clear();
 }
 
+void Worker::ClearTaskIdsUpTo(const TaskID &task_id) {
+  auto it = std::find(assigned_task_ids_.begin(), assigned_task_ids_.end(), task_id);
+  RAY_CHECK(it != assigned_task_ids_.end());
+  assigned_task_ids_.erase(assigned_task_ids_.begin(), it + 1);
+}
+
 void Worker::AssignTaskIds(const std::vector<TaskID> &task_ids) {
   assigned_task_ids_ = task_ids;
 }

@@ -904,10 +904,10 @@ class Worker(object):
         ray_signal.send(ray_signal.ErrorSignal(str(failure_object)))
 
     def _wait_for_and_process_tasks(self, tasks):
-        """Wait for a task to be ready and process the task.
+        """Wait for tasks to be ready and process the tasks.
 
         Args:
-            task: The task to execute.
+            tasks: The tasks to execute.
         """
         for task in tasks:
             function_descriptor = FunctionDescriptor.from_bytes_list(
