@@ -473,10 +473,7 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
     for i, worker in enumerate(workers):
         done_oid = np.random.bytes(20)
         done_oids.append(done_oid)
-        if checkpoint_interval > 0:
-            out_oid = None
-        else:
-            out_oid = np.random.bytes(20)
+        out_oid = np.random.bytes(20)
         out_oids.append(out_oid)
         worker.execute.remote(weight_ids[i], done_oid, out_oid)
 
@@ -664,10 +661,10 @@ def main(redis_address, test_single_node, num_workers, data_size,
                 fail_iteration = True
         latency, num_failed = allreduce(workers, fail_iteration, check_results, kill_node, num_failed, checkpoint_interval)
         latencies.append(latency)
-        #time.sleep(1)
+        time.sleep(0.1)
 
     if latency_file is not None:
-        with open(latency_file, 'w+') as f:
+        with open(latency_file, 'a+') as f:
             for latency in latencies:
                 f.write('{}\n'.format(latency))
 
