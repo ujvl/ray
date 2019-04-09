@@ -11,6 +11,7 @@ RECEIVE_THREADS=4
 
 
 #export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+source activate tensorflow_p36
 export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 
 ulimit -c unlimited
@@ -27,7 +28,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     --plasma-directory=/mnt/hugepages \
     --plasma-eviction-fraction=100 \
     --huge-pages \
-    --object-store-memory 200000000000 \
+    --object-store-memory 160000000000 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',

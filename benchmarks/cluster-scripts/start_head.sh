@@ -10,6 +10,7 @@ SEND_THREADS=4
 RECEIVE_THREADS=4
 
 #export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+source activate tensorflow_p36
 export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 
 #export RAYLET_PERFTOOLS_PATH=1
@@ -30,7 +31,7 @@ ray start --head \
   --plasma-directory=/mnt/hugepages \
   --plasma-eviction-fraction=100 \
   --huge-pages \
-  --object-store-memory 200000000000 \
+  --object-store-memory 160000000000 \
   --internal-config='{
   "initial_reconstruction_timeout_milliseconds": 200,
   "gcs_delay_ms": '$GCS_DELAY_MS',

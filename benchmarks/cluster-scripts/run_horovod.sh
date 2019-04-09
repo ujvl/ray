@@ -20,14 +20,14 @@ parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home
 parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" "pkill -9 python"
 parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" "pkill -9 python"
 
-LOG_FILE="horovod-"$NUM_RAYLETS"-workers-"$BATCH_SIZE"-batch-failure-`date +%y-%m-%d-%H-%M-%S`.out"
+LOG_FILE="horovod-"$NUM_WORKERS"-workers-"$BATCH_SIZE"-batch-failure-`date +%y-%m-%d-%H-%M-%S`.out"
 NUM_ITERATIONS=100
 CHECKPOINT_INTERVAL=100
 if [[ $FAILURE -eq 1 ]]; then
     LOG_FILE=failure-$LOG_FILE
-    NUM_ITERATIONS=150
-    FAIL_AT=15
-    CHECKPOINT_INTERVAL=10
+    NUM_ITERATIONS=1500
+    FAIL_AT=1200
+    CHECKPOINT_INTERVAL=640
 fi
 echo "Logging to file $LOG_FILE"
 
@@ -35,6 +35,7 @@ echo "Logging to log file $LOG_FILE"
 echo "Killing worker $WORKER_TO_KILL"
 
 cmd="horovodrun -np $(( $NUM_WORKERS * $NUM_GPUS_PER_WORKER )) -H ${servers:0:-1} /home/ubuntu/anaconda3/envs/tensorflow_p36/bin/python /home/ubuntu/tf-benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --model resnet101 --batch_size $BATCH_SIZE --variable_update horovod --display_every 1 --num_warmup_batches 0 --train_dir /tmp/horovod-checkpoints --save_model_steps $CHECKPOINT_INTERVAL --num_batches $NUM_ITERATIONS"
+#cmd="mpirun -np $(( $NUM_WORKERS * $NUM_GPUS_PER_WORKER )) -H ${servers:0:-1}  -bind-to none -map-by slot -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -mca pml ob1 -mca btl self,tcp -mca btl_tcp_if_include ens3 -mca plm_rsh_no_tree_spawn 1  /home/ubuntu/anaconda3/envs/tensorflow_p36/bin/python /home/ubuntu/tf-benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --model resnet101 --batch_size $BATCH_SIZE --variable_update horovod --display_every 1 --num_warmup_batches 0 --train_dir /tmp/horovod-checkpoints --save_model_steps $CHECKPOINT_INTERVAL --num_batches $NUM_ITERATIONS"
 
 if [[ $FAILURE -eq 1 ]]
 then
