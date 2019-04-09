@@ -184,8 +184,8 @@ class NodeManager {
   ///
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
-  bool AssignTask(const Task &task);
-  void AssignTaskToWorker(Task &task, std::shared_ptr<Worker> worker);
+  bool AssignTask(Task &task);
+  void AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> worker);
   void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback);
   /// Handle a worker finishing its assigned task.
   ///

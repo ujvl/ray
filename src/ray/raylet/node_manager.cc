@@ -634,7 +634,7 @@ void NodeManager::DispatchTasks(
   for (const auto &it : tasks_with_resources) {
     const auto &task_resources = it.first;
     for (const auto &task_id : it.second) {
-      const auto &task = local_queues_.GetTaskOfState(task_id, TaskState::READY);
+      auto &task = local_queues_.GetTaskOfState(task_id, TaskState::READY);
       if (!local_available_resources_.Contains(task_resources)) {
         // All the tasks in it.second have the same resource shape, so
         // once the first task is not feasible, we can break out of this loop
@@ -1648,7 +1648,7 @@ void NodeManager::FlushTask(const Task &task, const gcs::raylet::TaskTable::Writ
                                  task.GetTaskSpecification().TaskId(), task_data, task_callback));
 }
 
-void NodeManager::AssignTaskToWorker(Task &assigned_task, std::shared_ptr<Worker> worker) {
+void NodeManager::AssignTaskToWorker(const Task &assigned_task, std::shared_ptr<Worker> worker) {
   const auto &spec = assigned_task.GetTaskSpecification();
   RAY_LOG(DEBUG) << "Assigning task " << spec.TaskId() << " to worker with pid "
                  << worker->Pid();
@@ -1664,7 +1664,7 @@ void NodeManager::AssignTaskToWorker(Task &assigned_task, std::shared_ptr<Worker
 
   worker->Connection()->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
-      fbb.GetBufferPointer(), [this, worker, assigned_task](ray::Status status) mutable {
+      fbb.GetBufferPointer(), [this, worker, assigned_task](ray::Status status) {
         if (status.ok()) {
           auto spec = assigned_task.GetTaskSpecification();
           // We successfully assigned the task to the worker.
@@ -1722,7 +1722,7 @@ void NodeManager::AssignTaskToWorker(Task &assigned_task, std::shared_ptr<Worker
 
 }
 
-bool NodeManager::AssignTask(const Task &task) {
+bool NodeManager::AssignTask(Task &task) {
   const TaskSpecification &spec = task.GetTaskSpecification();
 
   // If this is an actor task, check that the new task has the correct counter.
@@ -1776,7 +1776,7 @@ bool NodeManager::AssignTask(const Task &task) {
 
   // Make a copy of the task so that we can update it.
   Task assigned_task(task);
-  if (spec.IsActorTask() && task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
+  if (spec.IsActorTask()) {
     // Must log the order of execution for actor tasks that are running for
     // the first time.
     const auto actor_entry = actor_registry_.find(spec.ActorId());
@@ -1798,18 +1798,26 @@ bool NodeManager::AssignTask(const Task &task) {
     // (SetExecutionDependencies takes a non-const so copy task in a
     //  on-const variable.)
     assigned_task.SetExecutionDependencies({execution_dependency});
-    assigned_task.IncrementNumExecutions();
+    if (task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
+      assigned_task.IncrementNumExecutions();
+    }
   }
 
   if (use_gcs_only_) {
-    gcs::raylet::TaskTable::WriteCallback task_callback = [this, assigned_task, worker](
-        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) mutable {
+    if (RayConfig::instance().log_nondeterminism()) {
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this, assigned_task, worker](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) mutable {
+        AssignTaskToWorker(assigned_task, worker);
+      };
+      lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
+    } else {
       AssignTaskToWorker(assigned_task, worker);
-    };
-    lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
+    }
   } else {
-    // We started running the task, so the task is ready to write to GCS.
-    RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+    if (RayConfig::instance().log_nondeterminism()) {
+      // We started running the task, so the task is ready to write to GCS.
+      RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+    }
     AssignTaskToWorker(assigned_task, worker);
   }
   return true;

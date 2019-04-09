@@ -90,6 +90,12 @@ const Task &TaskQueue::GetTask(const TaskID &task_id) const {
   return *it->second;
 }
 
+Task &TaskQueue::GetMutableTask(const TaskID &task_id) const {
+  auto it = task_map_.find(task_id);
+  RAY_CHECK(it != task_map_.end()) << "Failed to find task " << task_id;
+  return *it->second;
+}
+
 const ResourceSet &TaskQueue::GetCurrentResourceLoad() const {
   return current_resource_load_;
 }
@@ -124,10 +130,10 @@ const std::unordered_map<ResourceSet, ordered_set<TaskID>>
   return ready_queue_->GetTasksWithResources();
 }
 
-const Task &SchedulingQueue::GetTaskOfState(const TaskID &task_id,
+Task &SchedulingQueue::GetTaskOfState(const TaskID &task_id,
                                             TaskState task_state) const {
   const auto &queue = GetTaskQueue(task_state);
-  return queue->GetTask(task_id);
+  return queue->GetMutableTask(task_id);
 }
 
 ResourceSet SchedulingQueue::GetResourceLoad() const {
