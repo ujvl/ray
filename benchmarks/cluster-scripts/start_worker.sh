@@ -3,8 +3,9 @@
 HEAD_IP=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
-NODE_RESOURCE=${4:-'Node'$RANDOM}
-SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
+NONDETERMINISM=$4
+NODE_RESOURCE=${5:-'Node'$RANDOM}
+SLEEP_TIME=${6:-$(( $RANDOM % 5 ))}
 
 SEND_THREADS=4
 RECEIVE_THREADS=4
@@ -19,6 +20,12 @@ ulimit -a
 echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
+MAX_FAILURES=1
+if [[ $NONDETERMINISM -eq 1 ]]
+then
+  MAX_FAILURES=-1
+fi
+
 ray start --redis-address=$HEAD_IP:6379 \
     --num-cpus 2 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
@@ -30,7 +37,8 @@ ray start --redis-address=$HEAD_IP:6379 \
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
     "use_gcs_only": '$USE_GCS_ONLY',
-    "lineage_stash_max_failures": 1,
+    "lineage_stash_max_failures": '$MAX_FAILURES',
+    "log_nondeterminism": '$NONDETERMINISM',
     "num_heartbeats_timeout": 20,
     "async_message_max_buffer_size": 100,
     "object_manager_repeated_push_delay_ms": 1000,
