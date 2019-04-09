@@ -1334,27 +1334,6 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded, bool push) {
-  if (!forwarded && use_gcs_only_) {
-    gcs::raylet::TaskTable::WriteCallback task_callback = [this, task, forwarded, push](
-        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-      _SubmitTask(task, Lineage(), forwarded, push);
-    };
-    if (gcs_delay_ms_ == 0) {
-      FlushTask(task, task_callback);
-    } else {
-      auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
-      auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
-      gcs_timer->async_wait([this, gcs_timer, task, task_callback](const boost::system::error_code &error) {
-        FlushTask(task, task_callback);
-      });
-    }
-  } else {
-    _SubmitTask(task, uncommitted_lineage, forwarded, push);
-  }
-}
-
-void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
-                             bool forwarded, bool push) {
   const TaskSpecification &spec = task.GetTaskSpecification();
   const TaskExecutionSpecification &exec_spec = task.GetTaskExecutionSpec();
   const TaskID &task_id = spec.TaskId();
@@ -1376,21 +1355,40 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
     return;
   }
 
-  if (!forwarded) {
-    // We started running the task, so the task is ready to write to GCS.
-    if (!lineage_cache_.AddReadyTask(task)) {
-      RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
-                       << " This is most likely due to reconstruction.";
+  if (use_gcs_only_) {
+    if (!forwarded) {
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this, task, forwarded, push](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+        _SubmitTask(task, Lineage(), forwarded, push);
+      };
+      lineage_cache_.FlushTask(task, task_callback, gcs_delay_ms_);
+    } else {
+      _SubmitTask(task, uncommitted_lineage, forwarded, push);
     }
   } else {
-    // Add the task and its uncommitted lineage to the lineage cache.
-    if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
-      RAY_LOG(WARNING)
-          << "Task " << task_id
-          << " already in lineage cache. This is most likely due to reconstruction.";
+    if (!forwarded) {
+      // We started running the task, so the task is ready to write to GCS.
+      if (!lineage_cache_.AddReadyTask(task)) {
+        RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
+                         << " This is most likely due to reconstruction.";
+      }
+    } else {
+      // Add the task and its uncommitted lineage to the lineage cache.
+      if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
+        RAY_LOG(WARNING)
+            << "Task " << task_id
+            << " already in lineage cache. This is most likely due to reconstruction.";
+      }
+      lineage_cache_.RemoveWaitingTask(task_id);
     }
-    lineage_cache_.RemoveWaitingTask(task_id);
+
+    _SubmitTask(task, uncommitted_lineage, forwarded, push);
   }
+}
+
+void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
+                             bool forwarded, bool push) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
 
   if (spec.IsActorTask()) {
     // Check whether we know the location of the actor.

@@ -316,6 +316,8 @@ class LineageCache {
 
   bool Disabled() const;
 
+  void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback, int64_t gcs_delay_ms);
+
  private:
   FRIEND_TEST(LineageCacheTest, BarReturnsZeroOnNull);
   /// Flush a task that is in UNCOMMITTED_READY state.
