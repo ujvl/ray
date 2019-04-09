@@ -1648,8 +1648,8 @@ void NodeManager::FlushTask(const Task &task, const gcs::raylet::TaskTable::Writ
                                  task.GetTaskSpecification().TaskId(), task_data, task_callback));
 }
 
-void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> worker) {
-  const auto &spec = task.GetTaskSpecification();
+void NodeManager::AssignTaskToWorker(Task &assigned_task, std::shared_ptr<Worker> worker) {
+  const auto &spec = assigned_task.GetTaskSpecification();
   RAY_LOG(DEBUG) << "Assigning task " << spec.TaskId() << " to worker with pid "
                  << worker->Pid();
   flatbuffers::FlatBufferBuilder fbb;
@@ -1662,7 +1662,6 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
                                               fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
 
-  Task assigned_task(task);
   worker->Connection()->WriteMessageAsync(
       static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
       fbb.GetBufferPointer(), [this, worker, assigned_task](ray::Status status) mutable {
@@ -1673,7 +1672,7 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
           worker->AssignDriverId(spec.DriverId());
           // Actor tasks require extra accounting to track the actor's state.
           if (spec.IsActorTask()) {
-            auto actor_entry = actor_registry_.find(spec.ActorId());
+            const auto actor_entry = actor_registry_.find(spec.ActorId());
             RAY_CHECK(actor_entry != actor_registry_.end());
             // Process any new actor handles that were created since the
             // previous task on this handle was executed. The first task
@@ -1718,9 +1717,14 @@ void NodeManager::AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> w
             RAY_CHECK(spec.NewActorHandles().empty());
           }
 
-          assigned_task.IncrementNumExecutions();
-          // We started running the task, so the task is ready to write to GCS.
-          RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+          // If the lineage stash is enabled and we are logging nondeterminism,
+          // then update the task's version now and flush it to the GCS.
+          if (!use_gcs_only_ && RayConfig::instance().log_nondeterminism()) {
+            assigned_task.IncrementNumExecutions();
+            // We started running the task, so the task is ready to write to GCS.
+            RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+          }
+
           // Remove the task from the SWAP queue.
           local_queues_.RemoveTask(spec.TaskId());
           // Mark the task as running.
@@ -1792,11 +1796,46 @@ bool NodeManager::AssignTask(const Task &task) {
     worker->SetTaskResourceIds(acquired_resources);
   }
 
-  AssignTaskToWorker(task, worker);
-
-  // We assigned this task to a worker.
+  // Assign this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
+
+  // Make a copy of the task so that we can update it.
+  Task assigned_task(task);
+  if (use_gcs_only_) {
+    if (spec.IsActorTask() && task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
+      // Must log the order of execution for actor tasks that are running for
+      // the first time.
+      const auto actor_entry = actor_registry_.find(spec.ActorId());
+      RAY_CHECK(actor_entry != actor_registry_.end());
+      // If the task was an actor task, then record this execution to
+      // guarantee consistency in the case of reconstruction.
+      auto execution_dependency = actor_entry->second.GetExecutionDependency();
+      // The execution dependency is initialized to the actor creation task's
+      // return value, and is subsequently updated to the assigned tasks'
+      // return values, so it should never be nil.
+      RAY_CHECK(!execution_dependency.is_nil());
+      // Update the task's execution dependencies to reflect the actual
+      // execution order, to support deterministic reconstruction.
+      // NOTE(swang): The update of an actor task's execution dependencies is
+      // performed asynchronously. This means that if this node manager dies,
+      // we may lose updates that are in flight to the task table. We only
+      // guarantee deterministic reconstruction ordering for tasks whose
+      // updates are reflected in the task table.
+      // (SetExecutionDependencies takes a non-const so copy task in a
+      //  on-const variable.)
+      assigned_task.SetExecutionDependencies({execution_dependency});
+      assigned_task.IncrementNumExecutions();
+
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this, assigned_task, worker](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) mutable {
+        AssignTaskToWorker(assigned_task, worker);
+      };
+      lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
+      return true;
+    }
+  }
+  AssignTaskToWorker(assigned_task, worker);
   return true;
 }
 

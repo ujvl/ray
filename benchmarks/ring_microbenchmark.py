@@ -135,7 +135,8 @@ def main(args):
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": args.gcs_delay_ms,
         "use_gcs_only": int(args.gcs_only),
-        "lineage_stash_max_failures": 1,
+        "lineage_stash_max_failures": -1 if args.nondeterminism else 1,
+        "log_nondeterminism": int(args.nondeterminism),
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.
@@ -267,6 +268,9 @@ if __name__ == "__main__":
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
     parser.add_argument(
         '--gcs-only',
+        action='store_true')
+    parser.add_argument(
+        '--nondeterminism',
         action='store_true')
     args = parser.parse_args()
 
