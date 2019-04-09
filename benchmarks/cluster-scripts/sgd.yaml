@@ -1,5 +1,5 @@
 # An unique identifier for the head node and workers of this cluster.
-cluster_name: sgd
+cluster_name: sgd-west
 
 # The minimum number of workers nodes to launch in addition to the head
 # node. This number should be >= 0.
@@ -47,16 +47,6 @@ head_node:
           Ebs:
               VolumeSize: 100
 
-    # Additional options in the boto docs.
-    InstanceMarketOptions:
-        MarketType: spot
-        # Additional options can be found in the boto docs, e.g.
-        #   SpotOptions:
-        #       MaxPrice: MAX_HOURLY_PRICE
-
-    Placement:
-      GroupName: ray-sgd
-
 
 # Provider-specific config for worker nodes, e.g. instance type. By default
 # Ray will auto-configure unspecified fields such as SubnetId and KeyName.
@@ -73,14 +63,11 @@ worker_nodes:
               VolumeSize: 100
 
     # Run workers on spot by default. Comment this out to use on-demand.
-    InstanceMarketOptions:
-        MarketType: spot
+    #InstanceMarketOptions:
+    #    MarketType: spot
         # Additional options can be found in the boto docs, e.g.
         #   SpotOptions:
         #       MaxPrice: MAX_HOURLY_PRICE
-
-    Placement:
-      GroupName: ray-sgd
 
     # Additional options in the boto docs.
 
