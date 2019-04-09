@@ -207,9 +207,9 @@ def main(args):
 
     if latency_file is not None:
         with open(latency_file, 'a+') as f:
-            for latency in latencies:
+            for i, latency in enumerate(latencies):
                 for l in latency:
-                    f.write('{}\n'.format(l))
+                    f.write('{},{}\n'.format(i, l))
 
     if args.dump is not None:
         events = ray.global_state.chrome_tracing_dump()

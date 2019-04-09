@@ -21,7 +21,9 @@ ray start --head \
   --num-redis-shards \
   $NUM_REDIS_SHARDS \
   --plasma-directory=/mnt/hugepages \
+  --plasma-eviction-fraction 100 \
   --huge-pages \
+  --object-store-memory 1000000000 \
   --internal-config='{
   "initial_reconstruction_timeout_milliseconds": 200,
   "gcs_delay_ms": '$GCS_DELAY_MS',
