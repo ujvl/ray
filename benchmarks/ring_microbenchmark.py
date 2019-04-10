@@ -55,6 +55,9 @@ class RingWorker(object):
     def send(self, token, num_tasks_remaining, timestamp):
         debug("send", token, num_tasks_remaining, timestamp)
 
+        if self.task_duration > 0:
+            time.sleep(self.task_duration)
+
         if token == self.token:
             num_tasks_remaining -= 1
             now = time.time()
@@ -62,10 +65,10 @@ class RingWorker(object):
             timestamp = now
 
         if num_tasks_remaining > 0:
-            if self.task_duration > 0:
-                time.sleep(self.task_duration)
+            # Forward the token to the next actor in the ring.
             self.receiver.send.remote(token, num_tasks_remaining, timestamp)
-        else:
+        elif token == self.token:
+            # We received our token back for the last task in this round.
             self.iteration += 1
             _internal_kv_put(self.token, self.iteration, overwrite=True)
             debug("DONE", self.token, self.iteration)
@@ -95,7 +98,7 @@ class ProgressTracker(object):
     def get_num_iterations(self):
         return self.num_iterations
 
-def step(iteration, workers, tokens, num_tasks):
+def step(iteration, workers, tokens, num_tasks, task_duration):
     tasks = []
     for worker, token in zip(workers, tokens):
         tasks.append(worker.send.remote(token, num_tasks, time.time()))
@@ -115,6 +118,7 @@ def step(iteration, workers, tokens, num_tasks):
 
     latencies = ray.get([worker.get_latencies.remote() for worker in workers])
     latencies = np.array(latencies)
+    latencies -= task_duration * (len(workers))
     latencies /= len(workers)
     latencies = np.reshape(latencies, (num_tasks - 1) * len(workers))
     print("Mean latency, round", iteration, ":", np.mean(latencies))
@@ -202,7 +206,7 @@ def main(args):
     for i in range(args.num_iterations):
         log.info("Starting iteration %d", i)
 
-        results = step(i, workers, tokens, args.num_tasks)
+        results = step(i, workers, tokens, args.num_tasks, args.task_duration)
         latencies.append(results)
 
     if latency_file is not None:
@@ -243,7 +247,7 @@ if __name__ == "__main__":
         '--task-duration',
         default=0,
         type=float,
-        help='Duration of each task.')
+        help='Duration of each task in seconds.')
     parser.add_argument(
         '--redis-address',
         default=None,
