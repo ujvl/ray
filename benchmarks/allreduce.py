@@ -124,6 +124,7 @@ class RingAllReduceWorker(object):
         self.cache = []
         self.pinned = []
         self._restored_checkpoint = False
+        self.receives = []
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -150,7 +151,6 @@ class RingAllReduceWorker(object):
         self.broadcast_received = []
 
         self.execute_received = False
-        self.receives = []
 
     def get_receiver(self):
         return self.workers[(self.worker_index + 1) % self.num_workers]
