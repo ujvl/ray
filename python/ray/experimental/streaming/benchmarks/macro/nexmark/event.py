@@ -9,6 +9,12 @@ class Record(object):
     def __init__(self, **kwds):
         self.__dict__.update(kwds)
 
+# An abstract record
+class Watermark(object):
+    def __init__(self, event_time, system_time):
+        self.event_time = event_time
+        self.system_time = system_time
+
 # An event with an event and a system time. The latter denotes when the
 # event enters the system, i.e. when it exits the data source
 class Event(object):
@@ -16,6 +22,7 @@ class Event(object):
         self.system_time = system_time
         self.dateTime = event_time
         self.extra = extra
+        self.type = "d"
 
 # An Auction event log
 class Auction(Event):

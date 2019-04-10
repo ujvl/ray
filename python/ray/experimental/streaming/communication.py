@@ -11,6 +11,8 @@ import uuid
 
 from ray.experimental.streaming.operator import PStrategy
 from ray.experimental.streaming.batched_queue import BatchedQueue
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -234,6 +236,10 @@ class DataOutput(object):
     """
 
     def __init__(self, channels, partitioning_schemes):
+        self.input_channels = {}  # Channel id -> Watermark
+        # TODO (john): Should be equal to the offset
+        self.last_emitted_watermark = 0
+
         self.custom_partitioning_functions = None
         self.channel_index = 0
         self.key_selector = None
@@ -405,7 +411,10 @@ class DataOutput(object):
     # Pushes the record to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
-    def _push(self, record):
+    def _push(self, record, input_channel_id=None):
+        if isinstance(record, Watermark):
+            self.__forward_watermark(record, input_channel_id)
+            return
         # Simple forwarding
         for channel in self.forward_channels:
             # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
@@ -459,13 +468,53 @@ class DataOutput(object):
         if self.logging:  # Log rate
             self.__log(batch_size=1)
 
+    # Maintains the last received watermark per input channel
+    def __forward_watermark(self, watermark, input_channel_id):
+        # logger.info("Previous watermark: {}".format(
+        #             self.last_emitted_watermark))
+        if input_channel_id is None: # Must be a source
+            self.last_emitted_watermark = watermark.event_time
+            # logger.info("Source watermark: {}".format(
+            #             self.last_emitted_watermark))
+            self.__broadcast(watermark)
+        else:  # It is an operator with at least one input
+            self.input_channels[input_channel_id] = watermark.event_time
+            # Find minimum watermark
+            minimum_watermark = min(w for w in self.input_channels.values())
+            if minimum_watermark > self.last_emitted_watermark:  # Forward
+                self.last_emitted_watermark = minimum_watermark
+                watermark.event_time = minimum_watermark
+                # logger.info("Emitting watermark: {}".format(
+                #             self.last_emitted_watermark))
+                self.__broadcast(watermark)
+
+    # Broadcasts a watermark to all output channels
+    def __broadcast(self, watermark):
+        for channel in self.forward_channels:
+            channel.queue.put_next(watermark)
+        for channels in self.shuffle_channels:
+            for channel in channels:
+                channel.queue.put_next(watermark)
+        for channels in self.shuffle_key_channels:
+            for channel in channels:
+                channel.queue.put_next(watermark)
+        for channels in self.round_robin_channels:
+            for channel in channels:
+                channel.queue.put_next(watermark)
+        for channels in self.custom_partitioning_channels:
+            for channel in channels:
+                channel.queue.put_next(watermark)
+
     # Pushes a list of records to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on the configured batch size and timeout
-    def _push_all(self, records):
+    def _push_all(self, records, input_channel_id=None):
         assert isinstance(records, list)
         # Forward records
         for record in records:
+            if isinstance(record, Watermark):
+                self.__forward_watermark(record, input_channel_id)
+                return
             for channel in self.forward_channels:
                 # logger.debug(
                 #     "Actor ({},{}) pushed '{}' to channel {}.".format(
@@ -483,6 +532,9 @@ class DataOutput(object):
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
                 key, _ = record
                 h = _hash(key)
                 for channels in self.shuffle_channels:
@@ -495,6 +547,9 @@ class DataOutput(object):
                     channel.queue.put_next(record)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
                 h = _hash(record)
                 for channels in self.shuffle_channels:
                     num_instances = len(channels)  # Downstream instances
@@ -506,6 +561,9 @@ class DataOutput(object):
                     channel.queue.put_next(record)
         elif self.custom_partitioning_exists:
             for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
                 for i, channels in enumerate(
                                     self.custom_partitioning_channels):
                     # Set the right function. In general, there might be

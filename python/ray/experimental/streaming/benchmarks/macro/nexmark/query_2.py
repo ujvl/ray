@@ -11,7 +11,7 @@ import time
 
 import ray
 import ray.experimental.streaming.benchmarks.utils as utils
-import ray.experimental.streaming.benchmarks.macro.nexmark.DataGenerator as dg
+import ray.experimental.streaming.benchmarks.macro.nexmark.data_generator as dg
 from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Bid
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record

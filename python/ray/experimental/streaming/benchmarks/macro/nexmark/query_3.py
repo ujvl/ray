@@ -11,7 +11,7 @@ import time
 
 import ray
 import ray.experimental.streaming.benchmarks.utils as utils
-import ray.experimental.streaming.benchmarks.macro.nexmark.DataGenerator as dg
+import ray.experimental.streaming.benchmarks.macro.nexmark.data_generator as dg
 from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Person
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Auction
@@ -92,11 +92,11 @@ class JoinLogic(object):
             entry = self.auctions.setdefault(auction.seller, [])
             entry.append(auction)
         else:  # Found a join; emit and do not store auction
-            print("Found a join {} - {}".format(auction, person))
+            # print("Found a join {} - {}".format(auction, person))
             p_time = person.system_time
             a_time = auction.system_time
-            # This is just to measure end-to-end latency by considering the
-            # time we have seen both input tuples
+            # This is just to measure end-to-end latency by considering as
+            # start time the time we have seen both input tuples
             s_time = p_time if a_time <=p_time else a_time  # Max
             record = Record(name=person.name, city=person.city,
                             state=person.state, auction=auction.id,
@@ -110,12 +110,12 @@ class JoinLogic(object):
         auctions = self.auctions.pop(person.id, None)
         if auctions is not None:
             for auction in auctions:
-                print("Found a join {} - {}".format(auction, person))
+                # print("Found a join {} - {}".format(auction, person))
                 # Remove entry
                 p_time = person.system_time
                 a_time = auction.system_time
-                # This is just to measure end-to-end latency by considering
-                # the time we have seen both input tuples
+                # This is just to measure end-to-end latency by considering as
+                # start time the time we have seen both input tuples
                 s_time = p_time if a_time <=p_time else a_time  # Max
                 record = Record(name=person.name, city=person.city,
                                 state=person.state, auction=auction.id,
@@ -179,7 +179,7 @@ if __name__ == "__main__":
                     redis_max_memory, 1, dataflow_parallelism,
                     2, pin_processes)
 
-    # We just have a source and a (stateful) join
+    # We just have a source stage followed by a (stateful) join
     stages_per_node = math.trunc(math.ceil(2 / num_nodes))
 
     # Use pickle for BatchedQueue
@@ -218,7 +218,7 @@ if __name__ == "__main__":
     mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * dataflow_parallelism
     # Add the filter
     output = auctions.join(persons,
-                           JoinLogic(),  # The custom join logic
+                           JoinLogic(),  # The custom join logic (see above)
                            name="Join Auctions with Persons",
                            placement=mapping)
     # Add a final custom sink to measure latency if logging is enabled

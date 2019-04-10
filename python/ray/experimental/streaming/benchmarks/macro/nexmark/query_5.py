@@ -19,7 +19,7 @@ from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
+logger.setLevel("DEBUG")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--pin-processes", default=False,
@@ -52,7 +52,7 @@ parser.add_argument("--dump-file", default="",
                     help="a prefix for the chrome dump file")
 parser.add_argument("--sample-period", default=100,
                     help="every how many input records latency is measured.")
-parser.add_argument("--source-rate", default=-1,
+parser.add_argument("--bids-rate", default=-1,
                     type=lambda x: float(x) or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
@@ -70,15 +70,29 @@ parser.add_argument("--background-flush", default=False,
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (records/s)")
 
-def dollar_to_euro(price_in_dollars):
-    return price_in_dollars * 0.9
+# Used to count number of bids per auction
+class AggregationLogic(object):
+    def __init__(self):
+        pass
 
-def map_function(bid):
-    bid.price = dollar_to_euro(bid.price)
-    record = Record(auction=bid.auction, bidder=bid.bidder,
-               price=bid.price, date_time=bid.dateTime,
-               system_time=bid.system_time)
-    return record
+    # Initializes bid counter
+    def initialize(self, bid):
+        return (bid.auction, 1)
+
+    # Updates number of bids per auction with the given record
+    def update(self, old_state, bid):
+        updated_state = None  # Tuples are immutable, so create a new one
+        for i, state_object in enumerate(old_state):
+            auction, old_value = state_object
+            if auction == bid.auction:
+                # logger.info("Old count: {}:{}".format(auction,old_value))
+                updated_state = (auction, old_value+1)
+                break
+        old_state.pop(i)  # Remove old
+        assert updated_state is not None
+        # logger.info("New count: {}:{}".format(updated_state[0],
+        #                                       updated_state[1]))
+        old_state.append(updated_state)
 
 if __name__ == "__main__":
 
@@ -92,16 +106,16 @@ if __name__ == "__main__":
     latency_filename = str(args.latency_file)
     throughput_filename = str(args.throughput_file)
     dump_filename = str(args.dump_file)
+    logging = bool(args.enable_logging)
     sample_period = int(args.sample_period)
     task_based = not bool(args.queue_based)
-    logging = bool(args.enable_logging)
     dataflow_parallelism = int(args.dataflow_parallelism)
     max_queue_size = int(args.queue_size)
     max_batch_size = int(args.batch_size)
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
-    source_rate = float(args.source_rate)
+    bids_rate = float(args.bids_rate)
     pin_processes = bool(args.pin_processes)
 
     logger.info("== Parameters ==")
@@ -122,8 +136,8 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
-    message = (" (as fast as it gets)") if source_rate < 0 else ""
-    logger.info("Source rate: {}".format(source_rate) + message)
+    message = (" (as fast as it gets)") if bids_rate < 0 else ""
+    logger.info("Bids rate: {}".format(bids_rate) + message)
     logger.info("Pin processes: {}".format(pin_processes))
 
     # Start Ray with the specified configuration
@@ -131,7 +145,7 @@ if __name__ == "__main__":
                     redis_max_memory, 1, dataflow_parallelism,
                     1, pin_processes)
 
-    # We just have a source and a map
+    # We just have a source stage followed by a sliding window
     stages_per_node = math.trunc(math.ceil(2 / num_nodes))
 
     # Use pickle for BatchedQueue
@@ -151,15 +165,25 @@ if __name__ == "__main__":
     if task_based:
         env.enable_tasks()
 
-    # Add the bid source
-    bid_source = env.source(dg.NexmarkEventGenerator(bids_file, "Bid",
-                                source_rate, sample_period),
+    watermark_interval = 1000  # 1s
+
+    # Add the bids source
+    bids_source = env.source(dg.NexmarkEventGenerator(bids_file,
+                                "Bid",
+                                bids_rate, sample_period),
+                                watermark_interval=watermark_interval,
+                                name="Bids Source",
                                 placement=[utils.CLUSTER_NODE_PREFIX + "0"])
-    # Add the mapper
+    bids = bids_source.partition(lambda bid: bid.auction)
+    # Add the join
     id = 1 // stages_per_node
     mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * dataflow_parallelism
-    output = bid_source.map(map_function, name="Dollars to Euros",
-                            placement=mapping)
+    # Add the filter
+    output = bids.event_time_window(3600000, 60000,  # 60' window, 1' slide
+                        # The custom aggregation logic (see above)
+                        aggregation_logic=AggregationLogic(),
+                        name="Cound Bids per Auction per Window",
+                        placement=mapping)
     # Add a final custom sink to measure latency if logging is enabled
     output.sink(dg.LatencySink(), name="sink", placement=mapping)
 
@@ -173,9 +197,9 @@ if __name__ == "__main__":
     batch_timeout = queue_config.max_batch_time
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
-    input_rate = source_rate if source_rate > 0 else "inf"
-    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, input_rate,
+    bids_rate = bids_rate if bids_rate > 0 else "inf"
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, bids_rate,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,

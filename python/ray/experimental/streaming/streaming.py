@@ -258,6 +258,13 @@ class Environment(object):
         elif operator.type == OpType.Reduce:
             actor_handle = operator_instance.Reduce.remote(actor_id, operator,
                                                     input, output)
+        elif operator.type == OpType.EventTimeWindow:
+                node_id = operator.placement[instance_id]
+                args = [actor_id, operator, input, output]
+                actor_handle = operator_instance.EventTimeWindow._remote(
+                                                    args=args,
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.TimeWindow:
             sys.exit("Time window operator not supported yet.")
         elif operator.type == OpType.KeyBy:
@@ -437,13 +444,15 @@ class Environment(object):
     # TODO (john): There should be different types of sources, e.g. sources
     # reading from Kafka, text files, etc.
     # TODO (john): Handle case where environment parallelism is set
-    def source(self, source_object, name="Source_"+_generate_uuid(),
+    def source(self, source_object, watermark_interval=0,
+               name="Source_"+_generate_uuid(),
                placement=None):
         source_id = _generate_uuid()
         source_stream = DataStream(self, source_id)
         self.operators[source_id] = operator.CustomSourceOperator(source_id,
                                              OpType.Source,
                                              source_object,
+                                             watermark_interval,
                                              name,
                                              logging=self.config.logging,
                                              placement=placement)
@@ -867,6 +876,28 @@ class DataStream(object):
             self.src_operator_id,           # Will be used later on to
             right_stream.src_operator_id,   # distinuigh left from right
             name,
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging,
+            placement=placement)
+        return self.__register(op)
+
+    def event_time_window(self, window_length_ms, slide_ms,
+                          aggregation_logic=None, offset=0,
+                          name="EventTimeWindow_"+_generate_uuid(),
+                          placement=None):
+        """Applies a system time window to the stream.
+
+        Attributes:
+             window_width_ms (int): The length of the window in ms.
+        """
+        op = operator.EventTimeWindowOperator(
+            _generate_uuid(),
+            OpType.EventTimeWindow,
+            window_length_ms,
+            slide_ms,
+            aggregation_logic,
+            offset,
+            "EventTimeWindow",
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging,
             placement=placement)

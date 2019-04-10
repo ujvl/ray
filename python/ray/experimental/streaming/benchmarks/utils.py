@@ -109,6 +109,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         node_actors = 0
 
     # Start ray
+    # localhost:6379
     ray.init(redis_address=cluster.redis_address)
 
     if pin:  # Pin python processes to CPU cores (Linux only)

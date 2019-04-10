@@ -7,6 +7,8 @@ import time
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Auction
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Bid
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Person
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
 
 # A stream replayer that reads Nexmark events from files and
 # replays them at given rates
@@ -53,38 +55,17 @@ class NexmarkEventGenerator(object):
 
     # Parses a nexmark event log and creates an event object
     def create_event(self, event):
+        obj = Bid() if self.event_type == "Bid" else Person(
+                            ) if self.event_type == "Person" else Auction()
         event = event.strip()[1:-1]  # Trim spaces and brackets
-        if self.event_type == "Bid":
-            bid = Bid()
-            raw_attributes = event.split(",")
-            attribute_value = []
-            for attribute in raw_attributes:
-                k_v = attribute.split(":")
-                key = k_v[0][1:-1]
-                value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
-                setattr(bid, key, value)
-            return bid
-        elif self.event_type == "Person":
-            person = Person()
-            raw_attributes = event.split(",")
-            attribute_value = []
-            for attribute in raw_attributes:
-                k_v = attribute.split(":")
-                key = k_v[0][1:-1]
-                value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
-                setattr(person, key, value)
-            return person
-        else:
-            assert self.event_type == "Auction", (event_type, "Auction")
-            auction = Auction()
-            raw_attributes = event.split(",")
-            attribute_value = []
-            for attribute in raw_attributes:
-                k_v = attribute.split(":")
-                key = k_v[0][1:-1]
-                value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
-                setattr(auction, key, value)
-            return auction
+        raw_attributes = event.split(",")
+        attribute_value = []
+        for attribute in raw_attributes:
+            k_v = attribute.split(":")
+            key = k_v[0][1:-1]
+            value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
+            setattr(obj, key, value)
+        return obj
 
 # Used to measure per-record processing time in nexmark queries
 def compute_elapsed_time(record):
@@ -103,6 +84,8 @@ class LatencySink(object):
 
     # Evicts next record
     def evict(self, record):
+        if isinstance(record, Watermark):
+            return  # Ignore watermarks
         self.state.extend(self.logic(record))
 
     # Closes the sink

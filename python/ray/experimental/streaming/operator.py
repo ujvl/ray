@@ -47,6 +47,7 @@ class OpType(enum.Enum):
     Union = 12
     WriteTextFile = 13
     Join = 14
+    EventTimeWindow = 15
     # ...
 
 
@@ -151,6 +152,31 @@ class SumOperator(Operator):
                           logging)
         self.attribute_selector = attribute_selector
 
+class EventTimeWindowOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 window_length_ms,
+                 slide_ms,
+                 aggregation_logic=None,
+                 offset=0,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.window_length_ms = window_length_ms
+        self.slide_ms = slide_ms
+        self.aggregation_logic = aggregation_logic
+        self.offset = offset
 
 class UnionOperator(Operator):
     def __init__(self,
@@ -223,6 +249,7 @@ class CustomSourceOperator(Operator):
                  id,
                  type,
                  source_object,
+                 watermark_interval=0,
                  name="",
                  logic=None,
                  num_instances=1,
@@ -237,6 +264,7 @@ class CustomSourceOperator(Operator):
                           logging,
                           placement)
         self.source = source_object
+        self.watermark_interval = watermark_interval
 
 
 class ReadTextFileOperator(Operator):
