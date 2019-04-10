@@ -21,6 +21,7 @@ from ray.experimental.internal_kv import _internal_kv_get, _internal_kv_put
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 DEBUG = True
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -110,18 +111,22 @@ def step(iteration, workers, tokens, num_tasks, task_duration):
             worker_iteration = _internal_kv_get(token)
             if int(worker_iteration) != next_iteration:
                 time.sleep(1)
-                print("Waiting for token", token)
+                log.debug("Waiting for token %s", token)
+
+                clients = ray.global_state.client_table()
+                failed = len([client for client in clients if not client['IsInsertion']]) > 0
+                assert failed == 0, "Client failed {}".format(failed[0]['NodeManagerAddress'])
             else:
                 break
 
-    print("Round done", iteration)
+    log.debug("Round %d done", iteration)
 
     latencies = ray.get([worker.get_latencies.remote() for worker in workers])
     latencies = np.array(latencies)
     latencies -= task_duration * (len(workers))
     latencies /= len(workers)
     latencies = np.reshape(latencies, (num_tasks - 1) * len(workers))
-    print("Mean latency, round", iteration, ":", np.mean(latencies))
+    log.info("Mean latency round %d: %f", iteration, np.mean(latencies))
     return latencies
 
 def main(args):
@@ -175,11 +180,15 @@ def main(args):
                 if 'Node' in resource:
                     node_resources.append(resource)
         node_resources = node_resources[:args.num_workers]
-    assert len(node_resources) == args.num_workers
+    assert len(node_resources) == args.num_workers, "Only found {} nodes".format(len(node_resources))
 
     # Create workers.
     token_str = list(string.ascii_letters)
-    tokens = token_str[:args.num_workers]
+    tokens = []
+    for token1 in token_str:
+        for token2 in token_str:
+            tokens.append('{}{}'.format(token1, token2))
+    tokens = tokens[:args.num_workers]
     assert len(tokens) == args.num_workers, "Need more tokens"
 
     workers = []
@@ -191,10 +200,14 @@ def main(args):
             cls.remote(worker_index, args.num_workers, token, args.task_duration))
 
     # Exchange actor handles.
+    waits = []
     for i in range(args.num_workers):
         receiver_index = (i + 1) % args.num_workers
-        ray.get(workers[i].add_remote_worker.remote(workers[receiver_index]))
-        print("added worker", i, receiver_index)
+        waits.append(workers[i].add_remote_worker.remote(workers[receiver_index]))
+        log.debug("added worker %d %d", i, receiver_index)
+    log.debug("Waiting for add_remote_worker tasks to finish")
+    ray.get(waits)
+    log.debug("add_remote_worker tasks done")
 
     # Ensure workers are assigned to unique nodes.
     if not test_local:
