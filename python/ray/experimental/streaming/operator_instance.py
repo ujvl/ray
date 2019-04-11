@@ -374,37 +374,38 @@ class OperatorInstance(ray.actor.Checkpointable):
         return should_checkpoint
 
     def save_checkpoint(self, actor_id, checkpoint_id):
-        logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
-        assert len(self.checkpoints_pending) == 0
-        checkpoint = {
-                "this_actor": self.this_actor,
-                "destination_actors": self.destination_actors,
-                "_ray_upstream_actor_handle_ids": self._ray_upstream_actor_handle_ids,
-                "channel_state": self.output.save(),
-                "checkpoint_id": checkpoint_id,
-                "checkpoint_epoch": self.checkpoint_epoch,
-                "buffer": self.checkpoint_buffer,
-                "num_records_seen": self.num_records_seen,
-                }
-        checkpoint = pickle.dumps(checkpoint)
-        # NOTE: The default behavior is to register a random actor handle
-        # whenever a handle is pickled, so that the execution dependency is
-        # never removed and anytime the handle is unpickled, we will be able to
-        # submit tasks.  However, we do not need to do this since we are only
-        # going to unpickle the handle once, when the actor recovers from the
-        # checkpoint.
-        #self.handle._ray_new_actor_handles.clear()
-        checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
-        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
-        with open(checkpoint_path, 'wb+') as f:
-            f.write(checkpoint)
+        with ray.profiling.profile("save_checkpoint"):
+            logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
+            assert len(self.checkpoints_pending) == 0
+            checkpoint = {
+                    "this_actor": self.this_actor,
+                    "destination_actors": self.destination_actors,
+                    "_ray_upstream_actor_handle_ids": self._ray_upstream_actor_handle_ids,
+                    "channel_state": self.output.save(),
+                    "checkpoint_id": checkpoint_id,
+                    "checkpoint_epoch": self.checkpoint_epoch,
+                    "buffer": self.checkpoint_buffer,
+                    "num_records_seen": self.num_records_seen,
+                    }
+            checkpoint = pickle.dumps(checkpoint)
+            # NOTE: The default behavior is to register a random actor handle
+            # whenever a handle is pickled, so that the execution dependency is
+            # never removed and anytime the handle is unpickled, we will be able to
+            # submit tasks.  However, we do not need to do this since we are only
+            # going to unpickle the handle once, when the actor recovers from the
+            # checkpoint.
+            #self.handle._ray_new_actor_handles.clear()
+            checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+            with open(checkpoint_path, 'wb+') as f:
+                f.write(checkpoint)
 
-        self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
-        self.flush_checkpoint_buffer = True
-        self.this_actor.push_checkpoint_buffer.remote()
-        if self.checkpoint_tracker is not None:
-            self.checkpoint_tracker.notify_checkpoint_complete.remote(
-                    self.instance_id, self.checkpoint_epoch)
+            self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+            self.flush_checkpoint_buffer = True
+            self.this_actor.push_checkpoint_buffer.remote()
+            if self.checkpoint_tracker is not None:
+                self.checkpoint_tracker.notify_checkpoint_complete.remote(
+                        self.instance_id, self.checkpoint_epoch)
 
     def push_checkpoint_buffer(self, submit_log=None):
         if not self.flush_checkpoint_buffer:
@@ -424,39 +425,40 @@ class OperatorInstance(ray.actor.Checkpointable):
         logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
-        logger.debug("Available checkpoints %s", ','.join(
-            [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
+        with ray.profiling.profile("load_checkpoint"):
+            logger.debug("Available checkpoints %s", ','.join(
+                [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
 
-        ## Get the latest checkpoint that completed.
-        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
-        latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote()) - 1
-        assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
-        # Read the latest checkpoint from disk.
-        checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
-        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
-        with open(checkpoint_path, 'rb') as f:
-            checkpoint = pickle.loads(f.read())
-        self.this_actor = checkpoint["this_actor"]
-        self.this_actor.reset_handle_id()
-        destination_actors = checkpoint["destination_actors"]
-        for destination_actor, channel_id in destination_actors:
-            destination_actor.reset_handle_id()
-            self._register_destination_handle(destination_actor, channel_id)
-        upstream_actor_handle_ids = checkpoint["_ray_upstream_actor_handle_ids"]
-        self.register_upstream_actor_handle_ids(upstream_actor_handle_ids)
-        self.output.load(checkpoint["channel_state"])
-        self.num_records_seen = checkpoint["num_records_seen"]
+            ## Get the latest checkpoint that completed.
+            checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+            latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote()) - 1
+            assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
+            # Read the latest checkpoint from disk.
+            checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint = pickle.loads(f.read())
+            self.this_actor = checkpoint["this_actor"]
+            self.this_actor.reset_handle_id()
+            destination_actors = checkpoint["destination_actors"]
+            for destination_actor, channel_id in destination_actors:
+                destination_actor.reset_handle_id()
+                self._register_destination_handle(destination_actor, channel_id)
+            upstream_actor_handle_ids = checkpoint["_ray_upstream_actor_handle_ids"]
+            self.register_upstream_actor_handle_ids(upstream_actor_handle_ids)
+            self.output.load(checkpoint["channel_state"])
+            self.num_records_seen = checkpoint["num_records_seen"]
 
-        self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
-        assert self.checkpoint_epoch == latest_checkpoint_interval
-        self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
-        # Try to process the records that were in the buffer.
-        self.checkpoint_buffer = checkpoint["buffer"]
-        self.flush_checkpoint_buffer = True
+            self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
+            assert self.checkpoint_epoch == latest_checkpoint_interval
+            self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+            # Try to process the records that were in the buffer.
+            self.checkpoint_buffer = checkpoint["buffer"]
+            self.flush_checkpoint_buffer = True
 
-        checkpoint_id = checkpoint["checkpoint_id"]
-        logger.debug("Reloaded checkpoint %d ID:%s", latest_checkpoint_interval, checkpoint_id.hex())
-        return checkpoint_id
+            checkpoint_id = checkpoint["checkpoint_id"]
+            logger.debug("Reloaded checkpoint %d ID:%s", latest_checkpoint_interval, checkpoint_id.hex())
+            return checkpoint_id
 
     def checkpoint_expired(self, actor_id, checkpoint_id):
         return
