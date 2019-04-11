@@ -118,11 +118,11 @@ class Sink(object):
         return self.records
 
 def compute_elapsed_time(record):
-    print("FLATMAP", record, flush=True)
+    logger.debug("FLATMAP %s", record)
     return [record]
 
 def map_record(record):
-    print("MAP", record, flush=True)
+    logger.debug("MAP %s", record)
     return record
 
 def create_and_run_dataflow(args, num_nodes,  num_sources,

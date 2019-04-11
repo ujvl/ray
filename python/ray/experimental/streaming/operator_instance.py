@@ -202,8 +202,10 @@ class OperatorInstance(ray.actor.Checkpointable):
     def apply(self, batches, channel_id, _source_operator_id, checkpoint_epoch):
         logger.debug("APPLY %s %s", channel_id, self.operator_id)
 
-        process_records = self.checkpoint(channel_id, checkpoint_epoch)
+        if self.flush_checkpoint_buffer:
+            self.push_checkpoint_buffer()
 
+        process_records = self.checkpoint(channel_id, checkpoint_epoch)
         records = 0
         if process_records:
             for batch in batches:
@@ -220,8 +222,11 @@ class OperatorInstance(ray.actor.Checkpointable):
                     self._apply(record)
 
                 records += len(batch)
+
+            if self._should_checkpoint:
+                self.output._flush()
         else:
-            self.checkpoint_buffer.append((batches, channel_id, checkpoint_epoch))
+            self.checkpoint_buffer.append((batches, channel_id, _source_operator_id, checkpoint_epoch))
         return records
 
     def _apply(self, record):
@@ -230,6 +235,7 @@ class OperatorInstance(ray.actor.Checkpointable):
     def checkpoint(self, upstream_id, checkpoint_epoch):
         if checkpoint_epoch > self.checkpoint_epoch:
             assert self.checkpoint_epoch + 1 == checkpoint_epoch, "Checkpoints too close together {} {}".format(self.checkpoint_epoch, checkpoint_epoch)
+            assert not self.flush_checkpoint_buffer, "Received checkpoint marker, but still need to flush buffer from previous checkpoint {}".format(self.checkpoint_epoch)
             # This is the first checkpoint marker for the new checkpoint
             # interval that we've received so far.
             if len(self.checkpoints_pending) == 0:
@@ -239,7 +245,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             # operator_id.
             logger.debug("Received checkpoint marker %d from %s", checkpoint_epoch, upstream_id)
             self.checkpoints_pending.discard(upstream_id)
-            print("XXX PENDING", self.checkpoints_pending)
+            logger.debug("XXX PENDING %s", self.checkpoints_pending)
             # If we've received all checkpoint markers from all upstream
             # actors, then take the checkpoint.
             if len(self.checkpoints_pending) == 0:
@@ -280,16 +286,16 @@ class OperatorInstance(ray.actor.Checkpointable):
 
         self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
         self.flush_checkpoint_buffer = True
+        self.this_actor.push_checkpoint_buffer.remote()
 
     def push_checkpoint_buffer(self, submit_log=None):
         logger.debug("Pushing checkpoint buffer %d", self.checkpoint_epoch)
-        self.flush_checkpoint_buffer = False
 
         # Make a copy of the checkpoint buffer and try to process them again.
         checkpoint_buffer = self.checkpoint_buffer[:]
         self.checkpoint_buffer.clear()
-        for batches, channel_id, checkpoint_epoch in checkpoint_buffer:
-            self.apply(batches, channel_id, checkpoint_epoch)
+        for batches, channel_id, _source_operator_id, checkpoint_epoch in checkpoint_buffer:
+            self.apply(batches, channel_id, _source_operator_id, checkpoint_epoch)
         #if submit_log is not None:
         #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
         #        self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
@@ -297,10 +303,11 @@ class OperatorInstance(ray.actor.Checkpointable):
         #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
         #        self.log_push(upstream_id, records, checkpoint_epoch)
         logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
+        self.flush_checkpoint_buffer = False
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         logger.debug("Available checkpoints %s", ','.join(
-            [checkpoint.hex() for checkpoint in available_checkpoints]))
+            [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
 
         ## Get the latest checkpoint that completed.
         #checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
@@ -478,6 +485,7 @@ class FlatMap(OperatorInstance):
 
     # Task-based flatmap execution on a set of batches
     def _apply(self, record):
+        logger.debug("FLATMAP %s", record)
         self.output._push_all(self.flatmap_fn(record))
 
 # Filter actor
@@ -534,6 +542,7 @@ class Union(OperatorInstance):
 
     # Task-based union execution on a set of batches
     def _apply(self, record):
+        logger.debug("UNION %s", record)
         self.output._push(record)
 
 # Join actor
@@ -898,6 +907,7 @@ class Source(OperatorInstance):
         signal.send(ActorStart(self.instance_id))
         while True:
             record = self.source.get_next()
+            logger.debug("SOURCE %s", record)
             if record is None:
                 self.output._flush(close=True)
                 signal.send(ActorExit(self.instance_id))
@@ -936,6 +946,7 @@ class Sink(OperatorInstance):
 
     # Task-based sink execution on a set of batches
     def _apply(self, record):
+        logger.debug("SINK %s", record)
         self.sink.evict(record)
 
     # Returns the sink's state
