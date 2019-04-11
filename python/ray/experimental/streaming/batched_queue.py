@@ -131,7 +131,7 @@ class BatchedQueue(object):
             return
         if self.task_based:  # Submit a new downstream task
             obj_id = self.destination_actor.apply.remote(
-                                [self.write_buffer], self.channel_id,
+                                [self.write_buffer], self.src_operator_id,
                                 self.checkpoint_epoch)
             num_records = len(self.write_buffer)
             self.records_sent += num_records

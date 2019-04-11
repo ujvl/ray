@@ -10,12 +10,13 @@ import os
 
 import ray
 import ray.experimental.signal as signal
+import ray.cloudpickle as pickle
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
+logger.setLevel("DEBUG")
 
 # TODO: Set this in the Source args.
-CHECKPOINT_INTERVAL = 100
+CHECKPOINT_INTERVAL = 1000
 
 #
 # Each Ray actor corresponds to an operator instance in the physical dataflow
@@ -38,7 +39,7 @@ class ActorStart(signal.Signal):
     def __init__(self, value=None):
         self.value = value
 
-class OperatorInstance(object):
+class OperatorInstance(ray.actor.Checkpointable):
     """A streaming operator instance.
 
     Attributes:
@@ -191,26 +192,133 @@ class OperatorInstance(object):
     # Applies the actor's logic once (implemented by the subclasses)
     def apply(self, batches, channel_id, checkpoint_epoch):
         logger.debug("APPLY %s %s", channel_id, self.operator_id)
+
+        process_records = self.checkpoint(channel_id, checkpoint_epoch)
+
         records = 0
-        for batch in batches:
-            for record in batch:
-                if record is None:
-                    if self.input._close_channel(channel_id):
-                        self.output._flush(close=True)
-                        signal.send(ActorExit(self.instance_id))
-                        records += len(batch)
-                    return records
+        if process_records:
+            for batch in batches:
+                for record in batch:
+                    if record is None:
+                        if self.input._close_channel(channel_id):
+                            self.output._flush(close=True)
+                            signal.send(ActorExit(self.instance_id))
+                            records += len(batch)
+                        return records
 
-                # Apply the operator-specific logic. This may or may not _push
-                # a record to the downstream actors.
-                self._apply(record)
+                    # Apply the operator-specific logic. This may or may not _push
+                    # a record to the downstream actors.
+                    self._apply(record)
 
-            records += len(batch)
+                records += len(batch)
+        else:
+            self.checkpoint_buffer.append((batches, channel_id, checkpoint_epoch))
         return records
-
 
     def _apply(self, record):
         raise Exception("OperatorInstances must implement _apply")
+
+    def checkpoint(self, upstream_id, checkpoint_epoch):
+        if checkpoint_epoch > self.checkpoint_epoch:
+            assert self.checkpoint_epoch + 1 == checkpoint_epoch, "Checkpoints too close together {} {}".format(self.checkpoint_epoch, checkpoint_epoch)
+            # This is the first checkpoint marker for the new checkpoint
+            # interval that we've received so far.
+            if len(self.checkpoints_pending) == 0:
+                logger.debug("Starting checkpoint %d", self.checkpoint_epoch)
+                self.checkpoints_pending = set(self.upstream_ids)
+            # Record the checkpoint marker received from this upstream actor's
+            # operator_id.
+            logger.debug("Received checkpoint marker %d from %s", checkpoint_epoch, upstream_id)
+            self.checkpoints_pending.discard(upstream_id)
+            print("XXX PENDING", self.checkpoints_pending)
+            # If we've received all checkpoint markers from all upstream
+            # actors, then take the checkpoint.
+            if len(self.checkpoints_pending) == 0:
+                logger.debug("Received all checkpoint markers, taking checkpoint for interval %d", self.checkpoint_epoch)
+                self._should_checkpoint = True
+            process_record = False
+        else:
+            process_record = True
+        return process_record
+
+    def should_checkpoint(self, checkpoint_context):
+        should_checkpoint = self._should_checkpoint
+        self._should_checkpoint = False
+        return should_checkpoint
+
+    def save_checkpoint(self, actor_id, checkpoint_id):
+        logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
+        assert len(self.checkpoints_pending) == 0
+        checkpoint = {
+                #"handle": self.handle,
+                #"checkpoint_id": checkpoint_id,
+                #"checkpoint_epoch": self.checkpoint_epoch,
+                "buffer": self.checkpoint_buffer,
+                "num_records_seen": self.num_records_seen,
+                }
+        checkpoint = pickle.dumps(checkpoint)
+        # NOTE: The default behavior is to register a random actor handle
+        # whenever a handle is pickled, so that the execution dependency is
+        # never removed and anytime the handle is unpickled, we will be able to
+        # submit tasks.  However, we do not need to do this since we are only
+        # going to unpickle the handle once, when the actor recovers from the
+        # checkpoint.
+        #self.handle._ray_new_actor_handles.clear()
+        checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
+        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+        with open(checkpoint_path, 'wb+') as f:
+            f.write(checkpoint)
+
+        self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+        self.flush_checkpoint_buffer = True
+
+    def push_checkpoint_buffer(self, submit_log=None):
+        logger.debug("Pushing checkpoint buffer %d", self.checkpoint_epoch)
+        self.flush_checkpoint_buffer = False
+
+        # Make a copy of the checkpoint buffer and try to process them again.
+        checkpoint_buffer = self.checkpoint_buffer[:]
+        self.checkpoint_buffer.clear()
+        for batches, channel_id, checkpoint_epoch in checkpoint_buffer:
+            self.apply(batches, channel_id, checkpoint_epoch)
+        #if submit_log is not None:
+        #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+        #        self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
+        #else:
+        #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+        #        self.log_push(upstream_id, records, checkpoint_epoch)
+        logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
+
+    def load_checkpoint(self, actor_id, available_checkpoints):
+        logger.debug("Available checkpoints %s", ','.join(
+            [checkpoint.hex() for checkpoint in available_checkpoints]))
+
+        ## Get the latest checkpoint that completed.
+        #checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        #latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
+        #assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
+        # Read the latest checkpoint from disk.
+        checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
+        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+        with open(checkpoint_path, 'rb') as f:
+            checkpoint = pickle.loads(f.read())
+        #self.handle = checkpoint["handle"]
+        #self.handle.reset_handle_id()
+        self.num_records_seen = checkpoint["num_records_seen"]
+
+        self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
+        assert self.checkpoint_epoch == latest_checkpoint_interval
+        self.checkpoint_epoch += 1
+        # Try to process the records that were in the buffer.
+        self.checkpoint_buffer = checkpoint["buffer"]
+        self.flush_checkpoint_buffer = True
+
+        checkpoint_id = checkpoint["checkpoint_id"]
+        logger.debug("Reloaded checkpoint %d ID:%s", latest_checkpoint_interval, checkpoint_id.hex())
+        return checkpoint_id
+
+    def checkpoint_expired(self, actor_id, checkpoint_id):
+        return
 
 
 # A monitoring actor used to keep track of the execution's progress
@@ -597,7 +705,7 @@ class Source(OperatorInstance):
             self.output._push(record)
 
             self.num_records_seen += 1
-            if self.num_records_seen % CHECKPOINT_INTERVAL:
+            if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
                 self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
 
 
