@@ -11,7 +11,7 @@ import ray
 from ray.experimental import internal_kv
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
+logger.setLevel("DEBUG")
 
 
 def plasma_prefetch(object_id):
@@ -141,6 +141,7 @@ class BatchedQueue(object):
                                 [self.write_buffer], self.src_operator_id,
                                 self.src_operator_id,
                                 self.checkpoint_epoch)
+            logger.debug("Flushed task %s %d", obj_id.hex(), self.checkpoint_epoch)
             num_records = len(self.write_buffer)
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records

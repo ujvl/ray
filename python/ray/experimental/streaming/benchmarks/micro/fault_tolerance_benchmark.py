@@ -22,6 +22,8 @@ from ray.experimental.streaming.batched_queue import BatchedQueue
 import ray.experimental.streaming.benchmarks.utils as utils
 from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
+from ray.experimental import named_actors
+from ray.experimental.streaming.operator_instance import CheckpointTracker
 
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -161,9 +163,6 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
 
     operator_ids = list(string.ascii_uppercase)
     source_keys = [operator_ids.pop(0) for _ in range(num_sources)]
-    intermediate_keys = [operator_ids.pop(0) for _ in range(num_stages - 1)]
-    # One sink.
-    sink_key = operator_ids.pop(0)
 
     for i in range(num_sources):
         stream = env.source(utils.RecordGenerator(rounds, record_type,
@@ -196,8 +195,18 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
         if partitioning == "shuffle":
             stream = stream.shuffle()
     mapping = [node_prefix + str(node_index)] * dataflow_parallelism
-    _ = stream.sink(Sink(source_keys), name="sink", placement=mapping)
+    sink = stream.sink(Sink(source_keys), name="sink", placement=mapping)
     start = time.time()
+
+    num_sinks = env.operators[sink.src_operator_id].num_instances
+    checkpoint_tracker = CheckpointTracker._remote(
+            args=[num_sinks],
+            kwargs={},
+            num_cpus=0,
+            resources={"Node_0": 1})
+    ray.get(checkpoint_tracker.get_current_epoch.remote())
+    named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
+
     dataflow = env.execute()
 
     nodes = cluster.list_all_nodes()

@@ -101,7 +101,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
             num_redis_shards=num_redis_shards if i == 0 else None,
             num_cpus=node_actors,
             num_gpus=0,
-            resources={CLUSTER_NODE_PREFIX + str(i): node_actors},
+            resources={CLUSTER_NODE_PREFIX + str(i): 100},
             object_store_memory=plasma_memory,
             redis_max_memory=redis_max_memory,
             _internal_config=internal_config)

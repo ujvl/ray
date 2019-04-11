@@ -14,6 +14,7 @@ import ray.experimental.signal as signal
 import ray.cloudpickle as pickle
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
+from ray.experimental import named_actors
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -120,6 +121,7 @@ class OperatorInstance(ray.actor.Checkpointable):
         self.checkpoints_pending = set()
         self._should_checkpoint = False
         self.flush_checkpoint_buffer = False
+        self.checkpoint_tracker = None
 
         # Create the checkpoint directory.
         if self.checkpoint_dir is not None:
@@ -127,6 +129,8 @@ class OperatorInstance(ray.actor.Checkpointable):
                 os.makedirs(self.checkpoint_dir)
             except FileExistsError:
                 pass
+
+        self.destination_actors = []
 
     def set_checkpoint_epoch(self, checkpoint_epoch):
         self.checkpoint_epoch = checkpoint_epoch
@@ -146,6 +150,7 @@ class OperatorInstance(ray.actor.Checkpointable):
 
     # Used to register the handle of a destination actor to a channel
     def _register_destination_handle(self, actor_handle, channel_id):
+        self.destination_actors.append((actor_handle, channel_id))
         for channel in self.output.forward_channels:
             if channel.id == channel_id:
                 channel.register_destination_actor(actor_handle)
@@ -200,7 +205,9 @@ class OperatorInstance(ray.actor.Checkpointable):
         pass
 
     def apply(self, batches, channel_id, _source_operator_id, checkpoint_epoch):
-        logger.debug("APPLY %s %s", channel_id, self.operator_id)
+        logger.debug("APPLY %s checkpoint:%d task:%s", self.operator_id,
+            checkpoint_epoch,
+            ray.worker.global_worker.current_task_id.hex())
 
         if self.flush_checkpoint_buffer:
             self.push_checkpoint_buffer()
@@ -212,6 +219,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                 for record in batch:
                     if record is None:
                         if self.input._close_channel(channel_id):
+                            logger.debug("Closing channel %s", channel_id)
                             self.output._flush(close=True)
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
@@ -265,9 +273,10 @@ class OperatorInstance(ray.actor.Checkpointable):
         logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
         assert len(self.checkpoints_pending) == 0
         checkpoint = {
-                #"handle": self.handle,
-                #"checkpoint_id": checkpoint_id,
-                #"checkpoint_epoch": self.checkpoint_epoch,
+                "this_actor": self.this_actor,
+                "destination_actors": self.destination_actors,
+                "checkpoint_id": checkpoint_id,
+                "checkpoint_epoch": self.checkpoint_epoch,
                 "buffer": self.checkpoint_buffer,
                 "num_records_seen": self.num_records_seen,
                 }
@@ -287,8 +296,14 @@ class OperatorInstance(ray.actor.Checkpointable):
         self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
         self.flush_checkpoint_buffer = True
         self.this_actor.push_checkpoint_buffer.remote()
+        if self.checkpoint_tracker is not None:
+            self.checkpoint_tracker.notify_checkpoint_complete.remote(
+                    self.instance_id, self.checkpoint_epoch)
 
     def push_checkpoint_buffer(self, submit_log=None):
+        if not self.flush_checkpoint_buffer:
+            return
+        self.flush_checkpoint_buffer = False
         logger.debug("Pushing checkpoint buffer %d", self.checkpoint_epoch)
 
         # Make a copy of the checkpoint buffer and try to process them again.
@@ -303,28 +318,31 @@ class OperatorInstance(ray.actor.Checkpointable):
         #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
         #        self.log_push(upstream_id, records, checkpoint_epoch)
         logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
-        self.flush_checkpoint_buffer = False
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         logger.debug("Available checkpoints %s", ','.join(
             [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
 
         ## Get the latest checkpoint that completed.
-        #checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
-        #latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
-        #assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
+        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote()) - 1
+        assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
         # Read the latest checkpoint from disk.
         checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
-        #self.handle = checkpoint["handle"]
-        #self.handle.reset_handle_id()
+        self.this_actor = checkpoint["this_actor"]
+        self.this_actor.reset_handle_id()
+        destination_actors = checkpoint["destination_actors"]
+        for destination_actor, channel_id in destination_actors:
+            destination_actor.reset_handle_id()
+            self._register_destination_handle(destination_actor, channel_id)
         self.num_records_seen = checkpoint["num_records_seen"]
 
         self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
         assert self.checkpoint_epoch == latest_checkpoint_interval
-        self.checkpoint_epoch += 1
+        self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
         # Try to process the records that were in the buffer.
         self.checkpoint_buffer = checkpoint["buffer"]
         self.flush_checkpoint_buffer = True
@@ -932,6 +950,7 @@ class Sink(OperatorInstance):
                                   checkpoint_dir)
         # The user-defined sink with an evict() method
         self.sink = operator_metadata.sink
+        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
 
     # Starts the sink by calling process() repeatedly
     def start(self):
@@ -1031,3 +1050,26 @@ class TimeWindow(OperatorInstance):
     # Task-based time window execution
     def apply(self, batches, channel_id, _source_operator_id):
         sys.exit("Task-based time window execution not supported yet.")
+
+@ray.remote
+class CheckpointTracker(object):
+    def __init__(self, num_sinks):
+        self.num_sinks = num_sinks
+        self.sinks_pending = set()
+        self.checkpoint_epoch = 0
+        logger.debug("CheckpointTracker: expects notifications from %d sinks", self.num_sinks)
+
+    def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
+        logger.debug("CheckpointTracker: Checkpoint %d complete from %s", checkpoint_epoch, sink_key)
+        assert checkpoint_epoch == self.checkpoint_epoch + 1
+        assert sink_key not in self.sinks_pending, (sink_key, self.sinks_pending)
+
+        self.sinks_pending.add(sink_key)
+        # If we have received the checkpoint interval from all sinks, then the
+        # checkpoint is complete.
+        if len(self.sinks_pending) == self.num_sinks:
+            self.checkpoint_epoch += 1
+            self.sinks_pending.clear()
+
+    def get_current_epoch(self):
+        return self.checkpoint_epoch
