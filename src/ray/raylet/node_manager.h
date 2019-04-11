@@ -498,6 +498,11 @@ class NodeManager {
   std::unordered_map<ActorID, ActorCheckpointID> checkpoint_id_to_restore_;
 
   std::unordered_map<TaskID, int64_t> num_times_resubmitted_;
+
+  std::unordered_map<TaskID, bool> gcs_submit_tasks_committed_;
+  std::list<std::pair<TaskID, bool>> gcs_submit_task_queue_;
+  std::unordered_map<TaskID, bool> gcs_assign_tasks_committed_;
+  std::list<std::pair<Task, std::shared_ptr<Worker>>> gcs_assign_task_queue_;
 };
 
 }  // namespace raylet

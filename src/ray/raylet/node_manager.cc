@@ -1357,10 +1357,29 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
 
   if (use_gcs_only_) {
     if (!forwarded) {
-      gcs::raylet::TaskTable::WriteCallback task_callback = [this, task, forwarded, push](
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
           ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-        _SubmitTask(task, Lineage(), forwarded, push);
+        gcs_submit_tasks_committed_[id] = true;
+        // Loop through the tasks that we have flushed so far. Pop the longest
+        // prefix of tasks in the queue that have been committed, and submit
+        // them.
+        while (!gcs_submit_task_queue_.empty()) {
+          const TaskID &task_id = gcs_submit_task_queue_.front().first;
+          if (gcs_submit_tasks_committed_[task_id]) {
+            const auto task = local_queues_.RemoveTask(task_id);
+            bool push = gcs_submit_task_queue_.front().second;
+            _SubmitTask(task, Lineage(), /*forwarded=*/false, push);
+            gcs_submit_task_queue_.pop_front();
+            gcs_submit_tasks_committed_.erase(task_id);
+          } else {
+            break;
+          }
+        }
       };
+      local_queues_.QueueTasks({task}, TaskState::SWAP);
+      gcs_submit_tasks_committed_[task_id] = false;
+      gcs_submit_task_queue_.push_back({task_id, push});
+
       lineage_cache_.FlushTask(task, task_callback, gcs_delay_ms_);
     } else {
       _SubmitTask(task, uncommitted_lineage, forwarded, push);
@@ -1805,10 +1824,28 @@ bool NodeManager::AssignTask(Task &task) {
 
   if (use_gcs_only_) {
     if (RayConfig::instance().log_nondeterminism()) {
-      gcs::raylet::TaskTable::WriteCallback task_callback = [this, assigned_task, worker](
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
           ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) mutable {
-        AssignTaskToWorker(assigned_task, worker);
+        gcs_assign_tasks_committed_[id] = true;
+        // Loop through the tasks that we have flushed so far. Pop the longest
+        // prefix of tasks in the queue that have been committed, and assign
+        // them.
+        while (!gcs_assign_task_queue_.empty()) {
+          const Task &task = gcs_assign_task_queue_.front().first;
+          const TaskID &task_id = task.GetTaskSpecification().TaskId();
+          if (gcs_assign_tasks_committed_[task_id]) {
+            std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
+            AssignTaskToWorker(task, worker);
+            gcs_assign_task_queue_.pop_front();
+            gcs_assign_tasks_committed_.erase(task_id);
+          } else {
+            break;
+          }
+        }
       };
+      gcs_assign_tasks_committed_[spec.TaskId()] = false;
+      gcs_assign_task_queue_.push_back({assigned_task, worker});
+
       lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
     } else {
       AssignTaskToWorker(assigned_task, worker);
