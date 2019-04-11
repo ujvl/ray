@@ -4,15 +4,16 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 NUM_RAYLETS=$1
 HEAD_IP=$2
-USE_GCS_ONLY=$4
-GCS_DELAY_MS=$5
-NONDETERMINISM=$6
+USE_GCS_ONLY=$3
+GCS_DELAY_MS=$4
+NONDETERMINISM=$5
+NUM_SHARDS=$6
+TASK_DURATION=${7:-0}
 
-NUM_SHARDS=4
-NUM_TASKS=100
-NUM_ITERATIONS=2
+NUM_TASKS=1000
+NUM_ITERATIONS=1
 
-if [[ $# -eq 6 ]]
+if [[ $# -eq 7 || $# -eq 6 ]]
 then
     echo "Running with $NUM_RAYLETS workers, use gcs only? $USE_GCS_ONLY, $GCS_DELAY_MS ms GCS delay, nondeterminism? $NONDETERMINISM"
 else
@@ -31,22 +32,30 @@ latency_prefix=$latency_prefix`date +%y-%m-%d-%H-%M-%S`
 latency_file=$latency_prefix.txt
 raylet_log_file=$latency_prefix.out
 
-bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM
+exit_code=1
+while [[ $exit_code -ne 0 ]]
+do
 
-echo "Logging to file $latency_file..."
-cmd="python $DIR/../ring_microbenchmark.py --num-workers $NUM_RAYLETS --num-tasks $NUM_TASKS --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --gcs-delay $GCS_DELAY_MS --latency-file $latency_file"
+    bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM
 
-if [[ $NONDETERMINISM -eq 1 ]]
-then
-  cmd=$cmd" --nondeterminism"
-fi
-if [[ $USE_GCS_ONLY -eq 1 ]]
-then
-  cmd=$cmd" --gcs-only"
-fi
+    echo "Logging to file $latency_file..."
+    cmd="python $DIR/../ring_microbenchmark.py --num-workers $NUM_RAYLETS --num-tasks $NUM_TASKS --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --gcs-delay $GCS_DELAY_MS --latency-file $latency_file --task-duration $TASK_DURATION"
 
-echo $cmd | tee $latency_file
-$cmd 2>&1 | tee -a $latency_file
+    if [[ $NONDETERMINISM -eq 1 ]]
+    then
+      cmd=$cmd" --nondeterminism"
+    fi
+    if [[ $USE_GCS_ONLY -eq 1 ]]
+    then
+      cmd=$cmd" --gcs-only"
+    fi
+
+    echo $cmd | tee $latency_file
+    $cmd 2>&1 | tee -a $latency_file
+
+    exit_code=${PIPESTATUS[0]}
+    exit
+done
 
 
 echo "UNCOMMITTED LINEAGE" >> $latency_file

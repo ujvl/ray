@@ -4,6 +4,8 @@ HEAD_IP=$1
 
 NUM_RAYLETS=64
 
+NUM_SHARDS=$2
+
 for NUM_RAYLETS in 64; do
   #for GCS_DELAY_MS in 0 1 2 4 8 16; do
   for GCS_DELAY_MS in 0; do

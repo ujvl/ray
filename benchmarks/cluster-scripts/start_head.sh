@@ -16,10 +16,12 @@ fi
 ulimit -c unlimited
 ulimit -n 65536
 ulimit -a
+
+export RAY_BACKEND_LOG_LEVEL=debug
 ray start --head \
   --redis-port=6379 \
-  --num-redis-shards \
-  $NUM_REDIS_SHARDS \
+  --num-cpus 1 \
+  --num-redis-shards $NUM_REDIS_SHARDS \
   --plasma-directory=/mnt/hugepages \
   --plasma-eviction-fraction 100 \
   --huge-pages \

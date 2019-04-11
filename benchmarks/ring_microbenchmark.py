@@ -114,8 +114,8 @@ def step(iteration, workers, tokens, num_tasks, task_duration):
                 log.debug("Waiting for token %s", token)
 
                 clients = ray.global_state.client_table()
-                failed = len([client for client in clients if not client['IsInsertion']]) > 0
-                assert failed == 0, "Client failed {}".format(failed[0]['NodeManagerAddress'])
+                failed_clients = [client for client in clients if not client['IsInsertion']]
+                assert len(failed_clients) == 0, "Client failed {}".format(failed_clients[0]['NodeManagerAddress'])
             else:
                 break
 
@@ -127,6 +127,8 @@ def step(iteration, workers, tokens, num_tasks, task_duration):
     latencies /= len(workers)
     latencies = np.reshape(latencies, (num_tasks - 1) * len(workers))
     log.info("Mean latency round %d: %f", iteration, np.mean(latencies))
+    log.info("Max latency round %d: %f", iteration, np.max(latencies))
+    log.info("Stddev latency round %d: %f", iteration, np.std(latencies))
     return latencies
 
 def main(args):
@@ -207,6 +209,7 @@ def main(args):
         log.debug("added worker %d %d", i, receiver_index)
     log.debug("Waiting for add_remote_worker tasks to finish")
     ray.get(waits)
+    time.sleep(1)
     log.debug("add_remote_worker tasks done")
 
     # Ensure workers are assigned to unique nodes.
