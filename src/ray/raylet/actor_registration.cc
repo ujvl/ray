@@ -38,21 +38,19 @@ ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data,
     AddDownstreamActorId(downstream_actor_id);
   }
 
-  if (!checkpoint_data.downstream_actor_ids.empty()) {
-    for (const auto &handle : frontier_) {
-      // Do not include the creator of the actor. This is specific to stream
-      // processing, where the driver is the original creator and does not call
-      // any tasks on the actor.
-      if (!handle.first.is_nil()) {
-        RAY_LOG(DEBUG) << "Adding handle " << handle.first << " to recovery frontier";
-        // We don't know what the latest task submitted by this handle was, so
-        // set the counter to the max.
-        recovery_frontier_[handle.first] = INT64_MAX;
-      }
+  recovered_ = true;
+  for (const auto &upstream_actor_handle_string : checkpoint_data.upstream_actor_handle_ids) {
+    const ActorHandleID upstream_actor_handle_id = ActorID::from_binary(upstream_actor_handle_string);
+    // Do not include the creator of the actor. This is specific to stream
+    // processing, where the driver is the original creator and does not call
+    // any tasks on the actor.
+    if (!upstream_actor_handle_id.is_nil()) {
+      RAY_LOG(DEBUG) << "Adding handle " << upstream_actor_handle_id << " to recovery frontier";
+      // We don't know what the latest task submitted by this handle was, so
+      // set the counter to the max.
+      recovery_frontier_[upstream_actor_handle_id] = INT64_MAX;
     }
     recovered_ = false;
-  } else {
-    recovered_ = true;
   }
 }
 
@@ -177,7 +175,8 @@ int ActorRegistration::NumHandles() const { return frontier_.size(); }
 
 std::shared_ptr<ActorCheckpointDataT> ActorRegistration::GenerateCheckpointData(
     const ActorID &actor_id, const Task &task,
-    const std::vector<ActorID> &downstream_actor_ids) {
+    const std::vector<ActorID> &downstream_actor_ids,
+    const std::vector<ActorHandleID> &upstream_actor_handle_ids) {
   const auto actor_handle_id = task.GetTaskSpecification().ActorHandleId();
   const auto dummy_object = task.GetTaskSpecification().ActorDummyObject();
   // Make a copy of the actor registration, and extend its frontier to include
@@ -204,6 +203,9 @@ std::shared_ptr<ActorCheckpointDataT> ActorRegistration::GenerateCheckpointData(
   }
   for (const auto &downstream_actor_id : downstream_actor_ids) {
     checkpoint_data->downstream_actor_ids.push_back(downstream_actor_id.binary());
+  }
+  for (const auto &upstream_actor_handle_id : upstream_actor_handle_ids) {
+    checkpoint_data->upstream_actor_handle_ids.push_back(upstream_actor_handle_id.binary());
   }
   return checkpoint_data;
 }

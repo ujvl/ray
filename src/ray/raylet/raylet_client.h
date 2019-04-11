@@ -10,6 +10,7 @@
 #include "ray/status.h"
 
 using ray::ActorID;
+using ray::ActorHandleID;
 using ray::ActorCheckpointID;
 using ray::JobID;
 using ray::ObjectID;
@@ -159,7 +160,8 @@ class RayletClient {
   /// \return ray::Status.
   ray::Status PrepareActorCheckpoint(const ActorID &actor_id,
                                      ActorCheckpointID &checkpoint_id,
-                                     std::vector<ActorID> &downstream_actor_ids);
+                                     std::vector<ActorID> &downstream_actor_ids,
+                                     std::vector<ActorHandleID> &upstream_actor_handle_ids);
 
   /// Notify raylet backend that an actor was resumed from a checkpoint.
   ///

@@ -328,6 +328,7 @@ table ActorCheckpointData {
   // The numbers of dependencies for the above unreleased dummy objects.
   num_dummy_object_dependencies: [int];
   downstream_actor_ids: [string];
+  upstream_actor_handle_ids: [string];
 }
 
 // This table stores the actor-to-available-checkpoint-ids mapping.

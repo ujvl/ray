@@ -13,6 +13,7 @@ from ray.includes.common cimport (
 from ray.includes.unique_ids cimport (
     CActorCheckpointID,
     CActorID,
+    CActorHandleID,
     CClientID,
     CDriverID,
     CObjectID,
@@ -75,7 +76,8 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
                                c_bool local_only)
         CRayStatus PrepareActorCheckpoint(const CActorID &actor_id,
                                           CActorCheckpointID &checkpoint_id,
-                                          const c_vector[CActorID] &downstream_actor_ids)
+                                          const c_vector[CActorID] &downstream_actor_ids,
+                                          const c_vector[CActorHandleID] &upstream_actor_handle_ids)
         CRayStatus NotifyActorResumedFromCheckpoint(
             const CActorID &actor_id, const CActorCheckpointID &checkpoint_id)
         CLanguage GetLanguage() const

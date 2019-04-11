@@ -837,8 +837,10 @@ class FunctionActorManager(object):
             try:
                 now = int(1000 * time.time())
                 downstream_actor_ids = getattr(actor, "_ray_downstream_actors", [])
+                upstream_actor_handle_ids = getattr(actor, "_ray_upstream_actor_handle_ids", [])
                 checkpoint_id = (self._worker.raylet_client.
-                                 prepare_actor_checkpoint(actor_id, downstream_actor_ids))
+                                 prepare_actor_checkpoint(actor_id, downstream_actor_ids,
+                                     upstream_actor_handle_ids))
                 checkpoint_info.checkpoint_ids.append(checkpoint_id)
                 actor.save_checkpoint(actor_id, checkpoint_id)
                 if (len(checkpoint_info.checkpoint_ids) >

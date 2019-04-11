@@ -137,7 +137,8 @@ class ActorRegistration {
   /// \return A shared pointer to the generated checkpoint data.
   std::shared_ptr<ActorCheckpointDataT> GenerateCheckpointData(const ActorID &actor_id,
                                                                const Task &task,
-                                                               const std::vector<ActorID> &downstream_actor_ids);
+                                                               const std::vector<ActorID> &downstream_actor_ids,
+                                                               const std::vector<ActorHandleID> &upstream_actor_handle_ids);
 
   bool RemoveDownstreamActorId(const ActorID &downstream_actor_id);
   const std::unordered_set<ActorID> &GetDownstreamActorIds();

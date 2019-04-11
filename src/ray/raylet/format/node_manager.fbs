@@ -241,6 +241,10 @@ table PrepareActorCheckpointRequest {
   actor_id: string;
   // IDs of any downstream actors, for nondeterministic operators.
   downstream_actor_ids: [string];
+  // Handle IDs of upstream actors, for nondeterministic operators. If this is
+  // set, then we will wait for a new task from each of these handles before
+  // allowing any new tasks to be executed on a recovered actor.
+  upstream_actor_handle_ids: [string];
 }
 
 table PrepareActorCheckpointReply {

@@ -99,6 +99,22 @@ cdef c_vector[CActorID] ActorIDsToVector(actor_ids):
         result.push_back(actor_id.data)
     return result
 
+cdef c_vector[CActorHandleID] ActorHandleIDsToVector(actor_handle_ids):
+    """A helper function that converts a Python list of object IDs to a vector.
+
+    Args:
+        object_ids (list): The Python list of object IDs.
+
+    Returns:
+        The output vector.
+    """
+    cdef:
+        ActorHandleID actor_handle_id
+        c_vector[CActorHandleID] result
+    for actor_handle_id in actor_handle_ids:
+        result.push_back(actor_handle_id.data)
+    return result
+
 def generate_actor_task_id(DriverID driver_id, ActorID actor_id,
                            ActorHandleID actor_handle_id,
                            int actor_task_counter):
@@ -390,15 +406,18 @@ cdef class RayletClient:
         cdef c_vector[CObjectID] free_ids = ObjectIDsToVector(object_ids)
         check_status(self.client.get().FreeObjects(free_ids, local_only))
 
-    def prepare_actor_checkpoint(self, ActorID actor_id, py_downstream_actor_ids):
+    def prepare_actor_checkpoint(self, ActorID actor_id, py_downstream_actor_ids,
+            py_upstream_actor_handle_ids):
         cdef CActorCheckpointID checkpoint_id
         cdef c_vector[CActorID] downstream_actor_ids = ActorIDsToVector(py_downstream_actor_ids)
+        cdef c_vector[CActorHandleID] upstream_actor_handle_ids = ActorHandleIDsToVector(py_upstream_actor_handle_ids)
         cdef CActorID c_actor_id = actor_id.data
         # PrepareActorCheckpoint will wait for raylet's reply, release
         # the GIL so other Python threads can run.
         with nogil:
             check_status(self.client.get().PrepareActorCheckpoint(
-                c_actor_id, checkpoint_id, downstream_actor_ids))
+                c_actor_id, checkpoint_id, downstream_actor_ids,
+                upstream_actor_handle_ids))
         return ActorCheckpointID(checkpoint_id.binary())
 
     def notify_actor_resumed_from_checkpoint(self, ActorID actor_id,

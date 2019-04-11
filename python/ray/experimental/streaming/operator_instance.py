@@ -151,6 +151,8 @@ class OperatorInstance(ray.actor.Checkpointable):
     # Used to register the handle of a destination actor to a channel
     def _register_destination_handle(self, actor_handle, channel_id):
         self.destination_actors.append((actor_handle, channel_id))
+        # Register the downstream handle for recovery purposes.
+        self._ray_downstream_actors.append(actor_handle._ray_actor_id)
         for channel in self.output.forward_channels:
             if channel.id == channel_id:
                 channel.register_destination_actor(actor_handle)
@@ -175,6 +177,8 @@ class OperatorInstance(ray.actor.Checkpointable):
                 if channel.id == channel_id:
                     channel.register_destination_actor(actor_handle)
                     return
+    def register_upstream_actor_handle_ids(self, upstream_actor_handle_ids):
+        self._ray_upstream_actor_handle_ids = upstream_actor_handle_ids
 
     # Used to periodically stop spinning and reschedule an actor
     # in order to call other methods on it from the outside world
@@ -275,6 +279,7 @@ class OperatorInstance(ray.actor.Checkpointable):
         checkpoint = {
                 "this_actor": self.this_actor,
                 "destination_actors": self.destination_actors,
+                "_ray_upstream_actor_handle_ids": self._ray_upstream_actor_handle_ids,
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_epoch": self.checkpoint_epoch,
                 "buffer": self.checkpoint_buffer,
@@ -338,6 +343,8 @@ class OperatorInstance(ray.actor.Checkpointable):
         for destination_actor, channel_id in destination_actors:
             destination_actor.reset_handle_id()
             self._register_destination_handle(destination_actor, channel_id)
+        upstream_actor_handle_ids = checkpoint["_ray_upstream_actor_handle_ids"]
+        self.register_upstream_actor_handle_ids(upstream_actor_handle_ids)
         self.num_records_seen = checkpoint["num_records_seen"]
 
         self.checkpoint_epoch = checkpoint["checkpoint_epoch"]

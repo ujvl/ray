@@ -7,6 +7,7 @@ import math
 import sys
 import time
 import uuid
+from collections import defaultdict
 
 import networkx as nx
 
@@ -198,6 +199,10 @@ class Environment(object):
         self.physical_dataflow = PhysicalDataflow()
         self.checkpoint_dir = checkpoint_dir
 
+        # For recovery purposes. A mapping from operator ID to a list of its
+        # upstream actors' handle IDs.
+        self.upstream_actor_handle_ids = defaultdict(list)
+
     # Constructs and deploys a Ray actor of a specific type
     # TODO (john): Actor placement information should be specified in
     # the environment's configuration
@@ -298,9 +303,12 @@ class Environment(object):
             upstream_actor_handles = self.physical_dataflow.actor_handles[
                                                                 operator_id]
             for handle in upstream_actor_handles:
+                destination_handle = ray.put(actor_handle)
                 # Make sure the handle is registered before proceeding
                 ray.get(handle._register_destination_handle.remote(
-                                            actor_handle, channel.id))
+                                            destination_handle, channel.id))
+                upstream_handle_id = ray.get(destination_handle)._ray_actor_handle_id
+                self.upstream_actor_handle_ids[actor_id].append(upstream_handle_id)
         ray.get(actor_handle._register_handle.remote(actor_handle))
         self.physical_dataflow._register_handle(actor_id,actor_handle)
         self.physical_dataflow._register_metadata(operator.id,operator)
@@ -497,6 +505,13 @@ class Environment(object):
                 value = upstream_channels.setdefault(destination, channels)
                 if value != channels:  # Some channels exist already
                     value.extend(channels)
+
+        for node in nx.topological_sort(self.logical_topo):
+            operator = self.operators[node]
+            for i, handle in enumerate(self.physical_dataflow.actor_handles[node]):
+                actor_id = (operator.id, i)
+                upstream_actor_handle_ids = self.upstream_actor_handle_ids[actor_id]
+                ray.get(handle.register_upstream_actor_handle_ids.remote(upstream_actor_handle_ids))
 
         # self.print_logical_graph()
         # self.print_physical_graph()

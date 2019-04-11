@@ -1097,6 +1097,7 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
       flatbuffers::GetRoot<protocol::PrepareActorCheckpointRequest>(message_data);
   ActorID actor_id = from_flatbuf(*message->actor_id());
   const auto downstream_actor_ids = from_flatbuf(*message->downstream_actor_ids());
+  const auto upstream_actor_handle_ids = from_flatbuf(*message->upstream_actor_handle_ids());
   RAY_LOG(DEBUG) << "Preparing checkpoint for actor " << actor_id;
   const auto &actor_entry = actor_registry_.find(actor_id);
   RAY_CHECK(actor_entry != actor_registry_.end());
@@ -1110,7 +1111,8 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
   // Generate checkpoint id and data.
   ActorCheckpointID checkpoint_id = UniqueID::from_random();
   auto checkpoint_data =
-      actor_entry->second.GenerateCheckpointData(actor_entry->first, task, downstream_actor_ids);
+      actor_entry->second.GenerateCheckpointData(actor_entry->first, task, downstream_actor_ids,
+          upstream_actor_handle_ids);
 
   // Write checkpoint data to GCS.
   RAY_CHECK_OK(gcs_client_->actor_checkpoint_table().Add(
