@@ -99,7 +99,9 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         cluster.add_node(
             # Start only one Redis instance
             num_redis_shards=num_redis_shards if i == 0 else None,
-            num_cpus=node_actors,
+            # TODO: Account for CheckpointTracker when counting number of CPUs
+            # needed.
+            num_cpus=node_actors + 1,
             num_gpus=0,
             resources={CLUSTER_NODE_PREFIX + str(i): 100},
             object_store_memory=plasma_memory,

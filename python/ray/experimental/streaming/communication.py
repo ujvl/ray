@@ -402,7 +402,7 @@ class DataOutput(object):
     # Flushes any remaining records in the output channels
     # 'close' indicates whether we should also 'close' the channel (True)
     # by propagating 'None' or just flush the remaining records to plasma
-    def _flush(self, close=False):
+    def _flush(self, close=False, flush_empty=False, event=None):
         """Flushes remaining output records in the output queues to plasma.
 
         None is used as special type of record that is propagated from sources
@@ -415,27 +415,27 @@ class DataOutput(object):
         for channel in self.forward_channels:
             if close is True:
                 channel.queue.push_next(None)
-            channel.queue._flush_writes()
+            channel.queue._flush_writes(flush_empty=flush_empty, event=event)
         for channels in self.shuffle_channels:
             for channel in channels:
                 if close is True:
                     channel.queue.push_next(None)
-                channel.queue._flush_writes()
+                channel.queue._flush_writes(flush_empty=flush_empty, event=event)
         for channels in self.shuffle_key_channels:
             for channel in channels:
                 if close is True:
                     channel.queue.push_next(None)
-                channel.queue._flush_writes()
+                channel.queue._flush_writes(flush_empty=flush_empty, event=event)
         for channels in self.round_robin_channels:
             for channel in channels:
                 if close is True:
                     channel.queue.push_next(None)
-                channel.queue._flush_writes()
+                channel.queue._flush_writes(flush_empty=flush_empty, event=event)
         for channels in self.custom_partitioning_channels:
             for channel in channels:
                 if close is True:
                     channel.queue.push_next(None)
-                channel.queue._flush_writes()
+                channel.queue._flush_writes(flush_empty=flush_empty, event=event)
 
         if self.logging:  # Log rate
             self.__log(force=close)  # force=True only on termination

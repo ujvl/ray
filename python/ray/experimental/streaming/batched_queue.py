@@ -140,9 +140,9 @@ class BatchedQueue(object):
         oid[-1] = batch_offset % 2**32
         return np.ndarray.tobytes(oid)
 
-    def _flush_writes(self, event=None):
+    def _flush_writes(self, event=None, flush_empty=False):
         # TODO: This forces a flush.
-        if not self.write_buffer:
+        if not self.write_buffer and not flush_empty:
             return
         if self.task_based:  # Submit a new downstream task
             args = [[self.write_buffer], self.src_operator_id,
@@ -160,9 +160,6 @@ class BatchedQueue(object):
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
-            closed = self.write_buffer[-1] is None
-            if closed:
-                ray.get(obj_id)
         else:  # Flush batch to plasma
             # with ray.profiling.profile("flush_batch"):
             batch_id = self._batch_id(self.write_batch_offset)

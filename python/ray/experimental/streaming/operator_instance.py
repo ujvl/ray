@@ -227,32 +227,77 @@ class OperatorInstance(ray.actor.Checkpointable):
         else:
             return self.log_apply(batches, channel_id, source_operator_id, checkpoint_epoch)
 
+    def skip_replay_batch(self, batch, submit_log):
+        if getattr(self, 'state', None) is not None:
+            return batch
+
+        while batch:
+            next_task_ids = [ray._raylet.generate_actor_task_id(
+                    ray.worker.global_worker.task_driver_id,
+                    handle._ray_actor_id,
+                    handle._ray_actor_handle_id,
+                    handle._ray_actor_counter) for handle, _ in self.destination_actors]
+
+            execute = False
+            for task_id in next_task_ids:
+                task = ray.global_state.task_table(task_id=task_id)
+                if task and task["ExecutionSpec"]["NumExecutions"] >= 1:
+                    logger.debug("REPLAY: executed task %s", task_id.hex())
+                    execute = True
+                    break
+
+            if not execute:
+                break
+
+            if len(submit_log) > 0:
+                num_skip_records = submit_log[0] - self.num_records_seen
+                flush = num_skip_records <= len(batch)
+            else:
+                num_skip_records = len(batch)
+                flush = False
+            logger.debug("REPLAY: skipping: %d, seen: %d, num_records: %d", num_skip_records, self.num_records_seen, len(batch))
+            assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
+
+            num_records = len(batch)
+            batch = batch[num_skip_records:]
+            num_skipped = num_records - len(batch)
+            self.num_records_seen += num_skipped
+
+            if flush:
+                logger.debug("REPLAY: skipping submit after %d", self.num_records_seen)
+                submit_log.pop(0)
+                # Force a flush, even if the buffer is empty.
+                self.output._flush(flush_empty=True)
+
+        return batch
+
     def replay_apply(self, batches, channel_id, source_operator_id, checkpoint_epoch, submit_log):
         process_records = self.checkpoint(channel_id, checkpoint_epoch)
         records = 0
         if process_records:
             for batch in batches:
+                batch = self.skip_replay_batch(batch, submit_log)
                 for record in batch:
+                    self.num_records_seen += 1
+
                     if record is None:
                         if self.input._close_channel(channel_id):
                             logger.debug("Closing channel %s", channel_id)
                             self.output._flush(close=True)
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
-                        return records
+                    else:
+                        # Apply the operator-specific logic. This may or may not _push
+                        # a record to the downstream actors.
+                        flush = False
+                        if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
+                            flush = True
+                            logger.debug("REPLAY: submit after %d", self.num_records_seen)
+                            submit_log.pop(0)
+                            if len(submit_log) > 0:
+                                assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
 
-                    # Apply the operator-specific logic. This may or may not _push
-                    # a record to the downstream actors.
-                    flush = False
-                    if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
-                        flush = True
-                        logger.debug("REPLAY: submit after %d", self.num_records_seen)
-                        submit_log.pop(0)
-                        if len(submit_log) > 0:
-                            assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
-
-                    self._replay_apply(record, flush=flush)
-                    self.num_records_seen += 1
+                        self._replay_apply(record, flush=flush)
 
                 records += len(batch)
         else:
@@ -260,7 +305,9 @@ class OperatorInstance(ray.actor.Checkpointable):
 
         if self._should_checkpoint:
             logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
-            self.output._flush()
+            if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
+                submit_log.pop(0)
+                self.output._flush(flush_empty=True)
 
         return records
 
@@ -271,18 +318,18 @@ class OperatorInstance(ray.actor.Checkpointable):
         if process_records:
             for batch in batches:
                 for record in batch:
+                    self.num_records_seen += 1
+
                     if record is None:
                         if self.input._close_channel(channel_id):
                             logger.debug("Closing channel %s", channel_id)
                             self.output._flush(close=True)
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
-                        return records
-
-                    # Apply the operator-specific logic. This may or may not _push
-                    # a record to the downstream actors.
-                    self._apply(record)
-                    self.num_records_seen += 1
+                    else:
+                        # Apply the operator-specific logic. This may or may not _push
+                        # a record to the downstream actors.
+                        self._apply(record)
 
                 records += len(batch)
         else:
@@ -290,7 +337,7 @@ class OperatorInstance(ray.actor.Checkpointable):
 
         if self._should_checkpoint:
             logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
-            self.output._flush()
+            self.output._flush(event=self.num_records_seen)
 
         return records
 
@@ -1043,7 +1090,7 @@ class Sink(OperatorInstance):
                                   operator_metadata, input_gate, output_gate,
                                   checkpoint_dir)
         # The user-defined sink with an evict() method
-        self.sink = operator_metadata.sink
+        self.state = operator_metadata.sink
         self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
 
     # Starts the sink by calling process() repeatedly
@@ -1052,23 +1099,23 @@ class Sink(OperatorInstance):
         while True:
             record = self.input._pull()
             if record is None:
-                self.sink.close()
+                self.state.close()
                 signal.send(ActorExit(self.instance_id))
                 return
-            self.sink.evict(record)
+            self.state.evict(record)
 
     # Task-based sink execution on a set of batches
     def _apply(self, record):
         logger.debug("SINK %s", record)
-        self.sink.evict(record)
+        self.state.evict(record)
 
     def _replay_apply(self, record, flush=False):
-        self.sink.evict(record)
+        self.state.evict(record)
 
     # Returns the sink's state
     def state(self):
         try:  # There might be no 'get_state()' method implemented
-            return (self.instance_id, self.sink.get_state())
+            return (self.instance_id, self.state.get_state())
         except AttributeError:
             return None
 
@@ -1126,7 +1173,7 @@ class TimeWindow(OperatorInstance):
                                   checkpoint_dir)
         # The length of the window in ms
         self.length = operator_metadata.length
-        self.window_state = []
+        self.state = []
         self.start = time.time()
 
     def start(self):
@@ -1140,11 +1187,11 @@ class TimeWindow(OperatorInstance):
                 self.output._flush(close=True)
                 signal.send(ActorExit(self.instance_id))
                 return
-            self.window_state.append(record)
+            self.state.append(record)
             elapsed_time = time.time() - self.start
             if elapsed_time >= self.length:
-                self.output._push_all(self.window_state)
-                self.window_state.clear()
+                self.output._push_all(self.state)
+                self.state.clear()
                 self.start = time.time()
 
     # Task-based time window execution
