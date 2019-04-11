@@ -10,7 +10,7 @@ NONDETERMINISM=$5
 NUM_SHARDS=$6
 TASK_DURATION=${7:-0}
 
-NUM_TASKS=100
+NUM_TASKS=10
 NUM_ITERATIONS=1
 
 if [[ $# -eq 7 || $# -eq 6 ]]
@@ -22,20 +22,15 @@ else
 fi
 latency_prefix=$DIR"/latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NONDETERMINISM"-nondeterminism-"$TASK_DURATION"-task-"
 
-#if ls $latency_prefix* 1> /dev/null 2>&1
-#then
-#    echo "Latency file with prefix $latency_prefix already found, skipping..."
-#    exit
-#fi
+if ls $latency_prefix* 1> /dev/null 2>&1
+then
+    echo "Latency file with prefix $latency_prefix already found, skipping..."
+    exit
+fi
 
 latency_prefix=$latency_prefix`date +%y-%m-%d-%H-%M-%S`
 latency_file=$latency_prefix.txt
 raylet_log_file=$latency_prefix.out
-
-if [[ $USE_GCS_ONLY -eq 1 ]]
-then
-  NUM_TASKS=10
-fi
 
 exit_code=1
 i=0
