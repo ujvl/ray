@@ -378,6 +378,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
             assert len(self.checkpoints_pending) == 0
             checkpoint = {
+                    "state": getattr(self, 'state', None),
                     "this_actor": self.this_actor,
                     "destination_actors": self.destination_actors,
                     "_ray_upstream_actor_handle_ids": self._ray_upstream_actor_handle_ids,
@@ -438,6 +439,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
             with open(checkpoint_path, 'rb') as f:
                 checkpoint = pickle.loads(f.read())
+            self.state = checkpoint["state"]
             self.this_actor = checkpoint["this_actor"]
             self.this_actor.reset_handle_id()
             destination_actors = checkpoint["destination_actors"]
