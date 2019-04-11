@@ -10,7 +10,7 @@ NONDETERMINISM=$5
 NUM_SHARDS=$6
 TASK_DURATION=${7:-0}
 
-NUM_TASKS=1000
+NUM_TASKS=100
 NUM_ITERATIONS=1
 
 if [[ $# -eq 7 || $# -eq 6 ]]
@@ -20,7 +20,7 @@ else
     echo "Usage: ./run_job.sh <num raylets> <head IP address> <use gcs only> <GCS delay ms> <nondeterminism> <num shards>"
     exit
 fi
-latency_prefix=$DIR"/latency-"$NUM_RAYLETS"-workers-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NONDETERMINISM"-nondeterminism-"
+latency_prefix=$DIR"/latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NONDETERMINISM"-nondeterminism-"$TASK_DURATION"-task-"
 
 #if ls $latency_prefix* 1> /dev/null 2>&1
 #then
@@ -32,14 +32,24 @@ latency_prefix=$latency_prefix`date +%y-%m-%d-%H-%M-%S`
 latency_file=$latency_prefix.txt
 raylet_log_file=$latency_prefix.out
 
+if [[ $USE_GCS_ONLY -eq 1 ]]
+then
+  NUM_TASKS=10
+fi
+
 exit_code=1
+i=0
 while [[ $exit_code -ne 0 ]]
 do
+    if [[ $i -eq 3 ]]
+    then
+        echo "Failed 3 attempts " >> $latency_file
+    fi
 
     bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM
 
     echo "Logging to file $latency_file..."
-    cmd="python $DIR/../ring_microbenchmark.py --num-workers $NUM_RAYLETS --num-tasks $NUM_TASKS --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --gcs-delay $GCS_DELAY_MS --latency-file $latency_file --task-duration $TASK_DURATION"
+    cmd="python $DIR/../ring_microbenchmark.py --num-workers $NUM_RAYLETS --num-tasks $NUM_TASKS --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --gcs-delay $GCS_DELAY_MS --latency-file $latency_file --task-duration 0."$TASK_DURATION
 
     if [[ $NONDETERMINISM -eq 1 ]]
     then
@@ -50,11 +60,12 @@ do
       cmd=$cmd" --gcs-only"
     fi
 
-    echo $cmd | tee $latency_file
+    echo $cmd | tee -a $latency_file
     $cmd 2>&1 | tee -a $latency_file
 
     exit_code=${PIPESTATUS[0]}
-    exit
+
+    i=$(( $i + 1 ))
 done
 
 
@@ -65,4 +76,4 @@ do
 done
 
 sort $raylet_log_file | uniq -c | sort -bgr >> $latency_file
-#rm $raylet_log_file
+rm $raylet_log_file

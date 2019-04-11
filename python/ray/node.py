@@ -442,7 +442,7 @@ class Node(object):
         if self._redis_address is None:
             self.start_redis()
             self.start_monitor()
-            self.start_raylet_monitor()
+            #self.start_raylet_monitor()
             if PY3 and self._ray_params.include_webui:
                 self.start_dashboard()
 

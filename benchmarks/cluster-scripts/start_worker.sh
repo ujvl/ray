@@ -26,7 +26,6 @@ then
   MAX_FAILURES=-1
 fi
 
-export RAY_BACKEND_LOG_LEVEL=debug
 ray start --redis-address=$HEAD_IP:6379 \
     --num-cpus 2 \
     --resources='{"'$NODE_RESOURCE'": 100}' \

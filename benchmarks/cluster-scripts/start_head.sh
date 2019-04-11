@@ -17,7 +17,6 @@ ulimit -c unlimited
 ulimit -n 65536
 ulimit -a
 
-export RAY_BACKEND_LOG_LEVEL=debug
 ray start --head \
   --redis-port=6379 \
   --num-cpus 1 \
