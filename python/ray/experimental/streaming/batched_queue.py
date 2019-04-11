@@ -154,6 +154,9 @@ class BatchedQueue(object):
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
+            closed = self.write_buffer[-1] is None
+            if closed:
+                ray.get(obj_id)
         else:  # Flush batch to plasma
             # with ray.profiling.profile("flush_batch"):
             batch_id = self._batch_id(self.write_batch_offset)
