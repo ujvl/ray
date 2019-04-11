@@ -113,6 +113,14 @@ class BatchedQueue(object):
         # timeout
         self.last_flush_time = 0.0  # Used to flush based on a timeout
 
+    def save(self):
+        assert len(self.write_buffer) == 0, len(self.write_buffer)
+        self.records_sent
+        return self.records_sent
+
+    def load(self, records_sent):
+        self.records_sent = records_sent
+
     def set_checkpoint_epoch(self, checkpoint_epoch):
         self.checkpoint_epoch = checkpoint_epoch
 

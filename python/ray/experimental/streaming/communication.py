@@ -339,6 +339,48 @@ class DataOutput(object):
         # Measure input rate every RECORDS_PER_ROUND
         self.period = LOGGING_PERIOD
 
+    def save(self):
+        queue_states = []
+        for channel in self.forward_channels:
+            queue_states.append(channel.queue.save())
+        for channels in self.shuffle_channels:
+            for channel in channels:
+                queue_states.append(channel.queue.save())
+        for channels in self.shuffle_key_channels:
+            for channel in channels:
+                queue_states.append(channel.queue.save())
+        for channels in self.round_robin_channels:
+            for channel in channels:
+                queue_states.append(channel.queue.save())
+            queue_states.append(self.round_robin_indexes)
+        for channels in self.custom_partitioning_channels:
+            for channel in channels:
+                queue_states.append(channel.queue.save())
+        return queue_states
+
+    def load(self, queue_states):
+        for channel in self.forward_channels:
+            queue_state = queue_states.pop(0)
+            channel.queue.load(queue_state)
+        for channels in self.shuffle_channels:
+            for channel in channels:
+                queue_state = queue_states.pop(0)
+                channel.queue.load(queue_state)
+        for channels in self.shuffle_key_channels:
+            for channel in channels:
+                queue_state = queue_states.pop(0)
+                channel.queue.load(queue_state)
+        for channels in self.round_robin_channels:
+            for channel in channels:
+                queue_state = queue_states.pop(0)
+                channel.queue.load(queue_state)
+            self.round_robin_indexes = queue_states.pop(0)
+        for channels in self.custom_partitioning_channels:
+            for channel in channels:
+                queue_state = queue_states.pop(0)
+                channel.queue.load(queue_state)
+        assert len(queue_states) == 0
+
     def set_checkpoint_epoch(self, checkpoint_epoch):
         self.checkpoint_epoch = checkpoint_epoch
         for channel in self.forward_channels:

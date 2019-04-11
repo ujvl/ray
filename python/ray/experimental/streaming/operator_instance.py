@@ -234,11 +234,13 @@ class OperatorInstance(ray.actor.Checkpointable):
                     self._apply(record)
 
                 records += len(batch)
-
-            if self._should_checkpoint:
-                self.output._flush()
         else:
             self.checkpoint_buffer.append((batches, channel_id, _source_operator_id, checkpoint_epoch))
+
+        if self._should_checkpoint:
+            logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
+            self.output._flush()
+
         return records
 
     def _apply(self, record):
@@ -280,6 +282,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                 "this_actor": self.this_actor,
                 "destination_actors": self.destination_actors,
                 "_ray_upstream_actor_handle_ids": self._ray_upstream_actor_handle_ids,
+                "channel_state": self.output.save(),
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_epoch": self.checkpoint_epoch,
                 "buffer": self.checkpoint_buffer,
@@ -345,6 +348,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             self._register_destination_handle(destination_actor, channel_id)
         upstream_actor_handle_ids = checkpoint["_ray_upstream_actor_handle_ids"]
         self.register_upstream_actor_handle_ids(upstream_actor_handle_ids)
+        self.output.load(checkpoint["channel_state"])
         self.num_records_seen = checkpoint["num_records_seen"]
 
         self.checkpoint_epoch = checkpoint["checkpoint_epoch"]
