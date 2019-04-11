@@ -11,8 +11,9 @@ import sys
 import time
 
 import ray
-from ray.experimental.streaming.batched_queue import BatchedQueue
 import ray.experimental.streaming.benchmarks.utils as utils
+from ray.experimental.streaming.batched_queue import BatchedQueue
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -289,7 +290,7 @@ def benchmark_queue(num_nodes, source_rate,
 
 
 if __name__ == "__main__":
-    # Benchmark parameters
+    
     args = parser.parse_args()
 
     rounds = int(args.rounds)
@@ -335,12 +336,11 @@ if __name__ == "__main__":
     logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Warm_up: {}".format(warm_up))
     logger.info("Pin processes: {}".format(pin_processes))
-    
+
     # Measure the throughput of the record generator when it is not
     # backpressured by downstream nodes in the chain
     generator = utils.RecordGenerator(rounds, record_type,
                                       record_size, sample_period)
-
     start = time.time()
     records = generator.drain()
     throughput = records / (time.time() - start)

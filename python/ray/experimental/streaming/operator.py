@@ -46,6 +46,8 @@ class OpType(enum.Enum):
     Sum = 11
     Union = 12
     WriteTextFile = 13
+    Join = 14
+    EventTimeWindow = 15
     # ...
 
 
@@ -73,6 +75,8 @@ class Operator(object):
         self.placement = placement
         print("Placement", self.id, self.type, self.placement)
         # TODO (john): Allow partial mappings of instances to nodes
+        # Do not allow empty placements for now
+        assert(self.placement is not None), (self.placement)
         if self.placement is None:  # Set default mapping (node 0)
             self.placement = ["0"] * num_instances
 
@@ -149,6 +153,31 @@ class SumOperator(Operator):
                           logging)
         self.attribute_selector = attribute_selector
 
+class EventTimeWindowOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 window_length_ms,
+                 slide_ms,
+                 aggregation_logic=None,
+                 offset=0,
+                 name="",
+                 logic=None,
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.window_length_ms = window_length_ms
+        self.slide_ms = slide_ms
+        self.aggregation_logic = aggregation_logic
+        self.offset = offset
 
 class UnionOperator(Operator):
     def __init__(self,
@@ -169,6 +198,32 @@ class UnionOperator(Operator):
                           logging,
                           placement)
         self.other_inputs = other_inputs
+
+
+class JoinOperator(Operator):
+    def __init__(self,
+                 id,
+                 type,
+                 right_input,
+                 join_logic,
+                 left_input_operator_id,
+                 right_input_operator_id,
+                 name="",
+                 num_instances=1,
+                 logging=False,
+                 placement=None):
+        Operator.__init__(self,
+                          id,
+                          type,
+                          name,
+                          join_logic,
+                          num_instances,
+                          logging,
+                          placement)
+        self.right_input = right_input
+        # Will be used in actor construction to distinguish left from right
+        self.left_input_operator_id = left_input_operator_id
+        self.right_input_operator_id = right_input_operator_id
 
 
 class TimeWindowOperator(Operator):
@@ -195,6 +250,7 @@ class CustomSourceOperator(Operator):
                  id,
                  type,
                  source_object,
+                 watermark_interval=0,
                  name="",
                  logic=None,
                  num_instances=1,
@@ -209,6 +265,7 @@ class CustomSourceOperator(Operator):
                           logging,
                           placement)
         self.source = source_object
+        self.watermark_interval = watermark_interval
 
 
 class ReadTextFileOperator(Operator):

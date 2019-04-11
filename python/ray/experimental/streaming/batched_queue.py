@@ -75,7 +75,7 @@ class BatchedQueue(object):
         self.max_size_batches = max_size
         self.max_batch_size = max_batch_size
         self.max_size = max_size * max_batch_size  # In number of records
-        self.max_batch_time = max_batch_time
+        self.max_batch_time = max_batch_time  # Flushing timeout
         self.prefetch_depth = prefetch_depth
         self.background_flush = False # background_flush
         self.task_based = task_based  # True for task-based data exchange
@@ -106,6 +106,13 @@ class BatchedQueue(object):
         self.records_sent = 0
         self.records_per_task = {}
 
+        # TODO (john): Use a buffer pool and a separate thread for flushing.
+        # Currently, the timeout is checked within put_next(). This means
+        # that the timeout might be violated in case the actor does not push
+        # any output record to this channel for a time period equal to the
+        # timeout
+        self.last_flush_time = 0.0  # Used to flush based on a timeout
+
     def set_checkpoint_epoch(self, checkpoint_epoch):
         self.checkpoint_epoch = checkpoint_epoch
 
@@ -132,6 +139,7 @@ class BatchedQueue(object):
         if self.task_based:  # Submit a new downstream task
             obj_id = self.destination_actor.apply.remote(
                                 [self.write_buffer], self.src_operator_id,
+                                self.src_operator_id,
                                 self.checkpoint_epoch)
             num_records = len(self.write_buffer)
             self.records_sent += num_records
@@ -153,6 +161,7 @@ class BatchedQueue(object):
             self._wait_for_task_reader()
         else:
             self._wait_for_reader()
+        self.last_flush_time = time.time()
 
     # Currently, the 'queue' size in both task- and queue-based execution is
     # estimated based on the number of unprocessed records, which in turn
@@ -245,9 +254,17 @@ class BatchedQueue(object):
         self.destination_actor = actor_handle
 
     def put_next(self, item):
+        if not self.write_buffer:  # Reset last flush time for the new batch
+            self.last_flush_time = time.time()
         self.write_buffer.append(item)
         self.write_item_offset += 1
+        # If buffer is full...
         if (len(self.write_buffer) >= self.max_batch_size):
+            self._flush_writes()
+            return True
+        # ...or if the timeout expired
+        delay = time.time() - self.last_flush_time
+        if delay >= self.max_batch_time:
             self._flush_writes()
             return True
         return False

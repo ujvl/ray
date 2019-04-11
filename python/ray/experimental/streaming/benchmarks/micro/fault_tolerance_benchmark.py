@@ -64,8 +64,8 @@ parser.add_argument("--record-size", default=10,
 parser.add_argument("--partitioning", default = "round_robin",
                     choices = ["shuffle","round_robin","broadcast"],
                     help="whether to shuffle or balance after each stage")
-parser.add_argument("--source-rate", default=-1,
-                    type=lambda x: float(x) or
+parser.add_argument("--source-rate", default=1000,
+                    type=float or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
 parser.add_argument("--sources", default=3,
@@ -168,7 +168,9 @@ def create_and_run_dataflow(args, num_nodes,  num_sources,
     for i in range(num_sources):
         stream = env.source(utils.RecordGenerator(rounds, record_type,
                                     record_size, sample_period, source_rate,
-                                    warm_up, key=source_keys[i]),
+                                    warm_up,
+                                    key=source_keys[i],
+                                    records_per_round=10000),
                                     name="source_" + str(i),
                                     placement=[node_id])
         print("source", node_id)

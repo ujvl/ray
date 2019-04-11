@@ -9,8 +9,14 @@ import subprocess
 import sys
 import time
 
+try:
+    from itertools import zip_longest as zip_longest
+except:
+    from itertools import izip_longest as zip_longest
+
 import ray
 from ray.tests.cluster_utils import Cluster
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -21,10 +27,16 @@ CLUSTER_NODE_PREFIX = "Node_"
 # Make sure that all python processes are up and running before calling this
 def pin_processes():
     # Pins each python process to a specific core
+    num_cpus = multiprocessing.cpu_count()
     cmd_pids = ["pgrep", "python"]
     result = subprocess.check_output(cmd_pids)
     pids = [pid for pid in str(result.decode("ascii").strip()).split("\n")]
-    print("Found {} python processes with PIDs: {}".format(len(pids), pids))
+    logger.info("Found {} python processes with PIDs: {}".format(len(pids),
+                                                                        pids))
+    if num_cpus < len(pids):
+        logger.error("CPUs are less than python processes.")
+        sys.exit()
+
     cmd_pin = ["taskset", "-p", None, None]
     for i, pid in enumerate(pids):
         cmd_pin[2] = str(hex(i+1))  # Affinity mask
@@ -71,7 +83,7 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
     logger.info(message.format(stages_per_node))
     assigned_actors = 0
     # The monitoring actor runs at the first node
-    node_actors = 1 if api else 0
+    node_actors = 1 if api else 0  # Only in case the streaming API is used
     for i in range(num_nodes):
         remaining_actors = num_actors - assigned_actors
         if remaining_actors == 0:  # No more nodes are needed
@@ -97,6 +109,8 @@ def start_ray(num_nodes, num_redis_shards, plasma_memory,
         logger.info("Added node {} with {} CPUs".format(i, node_actors))
         node_actors = 0
 
+    # Start ray
+    # localhost:6379
     ray.init(redis_address=cluster.redis_address, log_to_driver=True)
 
     if pin:  # Pin python processes to CPU cores (Linux only)
@@ -129,6 +143,7 @@ class RecordGenerator(object):
                  record_size=None, sample_period=1,
                  fixed_rate=-1,
                  warm_up=False,
+                 records_per_round=100000,
                  key=None):
 
         assert rounds > 0, rounds
@@ -137,7 +152,8 @@ class RecordGenerator(object):
         self.warm_up = warm_up
         if self.warm_up:
             rounds += 1
-        self.total_elements = 10000 * rounds
+        self.records_per_round = records_per_round
+        self.total_elements = records_per_round * rounds
         self.total_count = 0
         self.period = sample_period
         self.fixed_rate = fixed_rate if fixed_rate > 0 else float("inf")
@@ -177,6 +193,12 @@ class RecordGenerator(object):
                 string.ascii_letters + string.digits) for _ in range(
                                                             self.record_size))
 
+    # Waits
+    def __wait(self):
+        while (self.rate_count / (time.time() - self.start) >
+               self.fixed_rate):
+           time.sleep(0.0001)  # 100 us
+
     # Returns the next record (either int or string depending on record_type)
     def get_next(self):
         # TODO: Add the source ID here.
@@ -185,17 +207,16 @@ class RecordGenerator(object):
         record = self.__get_next_record()
         self.total_count += 1
         self.rate_count += 1
+        # Wait if needed
+        self.__wait()
         # Measure source rate per round
-        if self.rate_count == 100:
+        if self.rate_count == self.records_per_round:
             self.rate_count = 0
             self.start = time.time()
-            time.sleep(0.001)
-        while (self.rate_count / (time.time() - self.start) >
-               self.fixed_rate):
-            time.sleep(0.01)
+            time.sleep(0.0001)  # 100 us
         # Do a first round without measuring latency just to warm up
-        if self.warm_up and self.total_count <= 100:
-            if self.total_count == 100:
+        if self.warm_up and self.total_count <= self.records_per_round:
+            if self.total_count == self.records_per_round:
                 logger.info("Finished warmup.")
             return (-1,record)
         self.count += 1
@@ -207,8 +228,49 @@ class RecordGenerator(object):
             return(-1,record)
 
     # Drains the generator and returns the total number of records produced
-    def drain(self):
+    def drain(self, no_wait=False):
+        if no_wait:
+            self.fixed_rate = float("inf")
         records = 0
         while self.get_next() is not None:
             records += 1
         return records
+
+# Collects sampled latencies and throughputs from
+# actors in the dataflow and writes the log files
+def write_log_files(all_parameters, latency_filename,
+                    throughput_filename,  dump_filename, dataflow):
+
+    # Dump timeline
+    if dump_filename:
+        dump_filename = dump_filename + all_parameters
+        ray.global_state.chrome_tracing_dump(dump_filename)
+
+    # Collect sampled per-record latencies
+    sink_id = dataflow.operator_id("sink")
+    local_states = ray.get(dataflow.state_of(sink_id))
+    latencies = [state for state in local_states if state is not None]
+    latency_filename = latency_filename + all_parameters
+    with open(latency_filename, "w") as tf:
+        for _, latency_values in latencies:
+            if latency_values is not None:
+                for value in latency_values:
+                    tf.write(str(value) + "\n")
+
+    # Collect throughputs from all actors
+    ids = dataflow.operator_ids()
+    rates = []
+    for id in ids:
+        logs = ray.get(dataflow.logs_of(id))
+        rates.extend(logs)
+    throughput_filename = throughput_filename + all_parameters
+    with open(throughput_filename, "w") as tf:
+        for actor_id, in_rate, out_rate in rates:
+            operator_id, instance_id = actor_id
+            operator_name = dataflow.name_of(operator_id)
+            for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
+                tf.write(
+                    str("(" + str(operator_id) + ", " + str(
+                     operator_name) + ", " + str(
+                     instance_id)) + ")" + " | " + str(
+                     i) + " | " + str(o) + "\n")

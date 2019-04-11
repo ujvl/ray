@@ -33,7 +33,7 @@ def _sum(value_1, value_2):
 
 # Partitioning strategies that require all-to-all instance communication
 all_to_all_strategies = [
-    PStrategy.Shuffle, PStrategy.ShuffleByKey,
+    PStrategy.Shuffle, PStrategy.ShuffleByKey, PStrategy.Custom,
     PStrategy.Broadcast, PStrategy.RoundRobin
 ]
 
@@ -237,6 +237,13 @@ class Environment(object):
         elif operator.type == OpType.Filter:
             actor_handle = operator_instance.Filter.remote(actor_id, operator,
                                                     input, output)
+        elif operator.type == OpType.Join:
+            del operator.right_input
+            node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            actor_handle = operator_instance.Join._remote(args=args,
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.Union:
             # Other input streams are not needed any more.
             # Discard them to avoid serialization errors due to
@@ -249,6 +256,13 @@ class Environment(object):
         elif operator.type == OpType.Reduce:
             actor_handle = operator_instance.Reduce.remote(actor_id, operator,
                                                     input, output)
+        elif operator.type == OpType.EventTimeWindow:
+                node_id = operator.placement[instance_id]
+                args = [actor_id, operator, input, output]
+                actor_handle = operator_instance.EventTimeWindow._remote(
+                                                    args=args,
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.TimeWindow:
             sys.exit("Time window operator not supported yet.")
         elif operator.type == OpType.KeyBy:
@@ -327,6 +341,11 @@ class Environment(object):
             log += "for the {}-th instance of the {} operator."
             logger.debug(log.format(len(ip), len(op), i, operator.type))
             input_gate = DataInput(ip)
+            # TODO (john): Join does not work for queue-based execution
+            # if operator.type == OpType.Join:  # Group channels per stream
+            #     input_operator_ids = [operator.left_input_operator_id]
+            #     input_operator_ids.append(operator.right_input_operator_id)
+            #     input_gate._group_channels_per_stream(input_operator_ids)
             output_gate = DataOutput(op, operator.partitioning_strategies)
             handle = self.__generate_actor(i, operator, input_gate,
                                            output_gate)
@@ -422,13 +441,15 @@ class Environment(object):
     # TODO (john): There should be different types of sources, e.g. sources
     # reading from Kafka, text files, etc.
     # TODO (john): Handle case where environment parallelism is set
-    def source(self, source_object, name="Source_"+str(_generate_uuid()),
+    def source(self, source_object, watermark_interval=0,
+               name="Source_"+_generate_uuid(),
                placement=None):
         source_id = _generate_uuid()
         source_stream = DataStream(self, source_id)
         self.operators[source_id] = operator.CustomSourceOperator(source_id,
                                              OpType.Source,
                                              source_object,
+                                             watermark_interval,
                                              name,
                                              logging=self.config.logging,
                                              placement=placement)
@@ -477,6 +498,8 @@ class Environment(object):
                 if value != channels:  # Some channels exist already
                     value.extend(channels)
 
+        # self.print_logical_graph()
+        # self.print_physical_graph()
         # Start and register the monitoring actor to the physical dataflow
         first_node_id = utils.get_cluster_node_ids()[0]
         monitoring_actor = operator_instance.ProgressMonitor._remote(
@@ -625,6 +648,8 @@ class DataStream(object):
         # TODO (john): Add support for other multiple-input operators
         if operator.type == OpType.Union:
             input_streams.extend(operator.other_inputs)
+        elif operator.type == OpType.Join:
+            input_streams.append(operator.right_input)
         # ...
         for input_stream in input_streams:
             input_stream.dst_operator_id = operator.id
@@ -714,7 +739,7 @@ class DataStream(object):
     # generating and processing watermarks
 
     # Registers map operator to the environment
-    def map(self, map_fn, name="Map_"+str(_generate_uuid()),
+    def map(self, map_fn, name="Map_"+_generate_uuid(),
             placement=None):
         """Applies a map operator to the stream.
 
@@ -736,7 +761,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers flatmap operator to the environment
-    def flat_map(self, flatmap_fn, name="FlatMap_"+str(_generate_uuid()),
+    def flat_map(self, flatmap_logic, name="FlatMap_"+_generate_uuid(),
                  placement=None):
         """Applies a flatmap operator to the stream.
 
@@ -751,7 +776,7 @@ class DataStream(object):
             _generate_uuid(),
             OpType.FlatMap,
             name,
-            flatmap_fn,
+            flatmap_logic,
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging,
             placement=placement)
@@ -793,7 +818,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers Sum operator to the environment
-    def sum(self, attribute_selector, name="Sum_"+str(_generate_uuid())):
+    def sum(self, attribute_selector, name="Sum_"+_generate_uuid()):
         """Applies a rolling sum operator to the stream.
 
         Attributes:
@@ -811,7 +836,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers union operator to the environment
-    def union(self, other_inputs, name="Union_"+str(_generate_uuid()),
+    def union(self, other_inputs, name="Union_"+_generate_uuid(),
               placement=None):
         """Unions the stream with one or more other streams.
 
@@ -824,6 +849,52 @@ class DataStream(object):
             OpType.Union,
             other_inputs,
             name,
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging,
+            placement=placement)
+        return self.__register(op)
+
+    # Registers a join operator to the environment
+    def join(self, right_stream, join_logic,
+             name="Join_"+_generate_uuid(),
+             placement=None):
+        """Joins two streams based on a user-defined logic.
+
+        Attributes:
+             right_stream (DataStream): The stream to join with self.
+             join_logic (object): A class specifying the join logic
+        """
+        assert isinstance(right_stream, DataStream), type(right_stream)
+        op = operator.JoinOperator(
+            _generate_uuid(),
+            OpType.Join,
+            right_stream,
+            join_logic,
+            self.src_operator_id,           # Will be used later on to
+            right_stream.src_operator_id,   # distinuigh left from right
+            name,
+            num_instances=self.env.config.parallelism,
+            logging=self.env.config.logging,
+            placement=placement)
+        return self.__register(op)
+
+    def event_time_window(self, window_length_ms, slide_ms,
+                          aggregation_logic=None, offset=0,
+                          name="EventTimeWindow_"+_generate_uuid(),
+                          placement=None):
+        """Applies a system time window to the stream.
+
+        Attributes:
+             window_width_ms (int): The length of the window in ms.
+        """
+        op = operator.EventTimeWindowOperator(
+            _generate_uuid(),
+            OpType.EventTimeWindow,
+            window_length_ms,
+            slide_ms,
+            aggregation_logic,
+            offset,
+            "EventTimeWindow",
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging,
             placement=placement)
@@ -849,7 +920,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers filter operator to the environment
-    def filter(self, filter_fn):
+    def filter(self, filter_fn, name="Filter_"+_generate_uuid()):
         """Applies a filter to the stream.
 
         Attributes:
@@ -858,7 +929,7 @@ class DataStream(object):
         op = operator.Operator(
             _generate_uuid(),
             OpType.Filter,
-            "Filter",
+            name,
             filter_fn,
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging)
@@ -909,7 +980,7 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers a custom sink operator to the environment
-    def sink(self, sink_object, name="Sink_"+str(_generate_uuid()),
+    def sink(self, sink_object, name="Sink_"+_generate_uuid(),
              placement=None):
         """Closes the stream with a custom sink operator.
 
