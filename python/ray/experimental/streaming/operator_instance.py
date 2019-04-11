@@ -208,14 +208,64 @@ class OperatorInstance(ray.actor.Checkpointable):
     def start(self):  # Used in queue-based execution
         pass
 
-    def apply(self, batches, channel_id, _source_operator_id, checkpoint_epoch):
+    def apply(self, batches, channel_id, source_operator_id, checkpoint_epoch):
         logger.debug("APPLY %s checkpoint:%d task:%s", self.operator_id,
             checkpoint_epoch,
             ray.worker.global_worker.current_task_id.hex())
 
-        if self.flush_checkpoint_buffer:
-            self.push_checkpoint_buffer()
+        if ray.worker.global_worker.task_context.nondeterministic_events is not None:
+            submit_log = [int(event.decode('ascii')) for event in ray.worker.global_worker.task_context.nondeterministic_events]
+            logger.debug("REPLAY: Submit log %s", submit_log)
+        else:
+            submit_log = None
 
+        if self.flush_checkpoint_buffer:
+            self.push_checkpoint_buffer(submit_log)
+
+        if submit_log is not None:
+            return self.replay_apply(batches, channel_id, source_operator_id, checkpoint_epoch, submit_log)
+        else:
+            return self.log_apply(batches, channel_id, source_operator_id, checkpoint_epoch)
+
+    def replay_apply(self, batches, channel_id, source_operator_id, checkpoint_epoch, submit_log):
+        process_records = self.checkpoint(channel_id, checkpoint_epoch)
+        records = 0
+        if process_records:
+            for batch in batches:
+                for record in batch:
+                    if record is None:
+                        if self.input._close_channel(channel_id):
+                            logger.debug("Closing channel %s", channel_id)
+                            self.output._flush(close=True)
+                            signal.send(ActorExit(self.instance_id))
+                            records += len(batch)
+                        return records
+
+                    # Apply the operator-specific logic. This may or may not _push
+                    # a record to the downstream actors.
+                    flush = False
+                    if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
+                        flush = True
+                        logger.debug("REPLAY: submit after %d", self.num_records_seen)
+                        submit_log.pop(0)
+                        if len(submit_log) > 0:
+                            assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
+
+                    self._replay_apply(record, flush=flush)
+                    self.num_records_seen += 1
+
+                records += len(batch)
+        else:
+            self.checkpoint_buffer.append((batches, channel_id, source_operator_id, checkpoint_epoch))
+
+        if self._should_checkpoint:
+            logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
+            self.output._flush()
+
+        return records
+
+
+    def log_apply(self, batches, channel_id, source_operator_id, checkpoint_epoch):
         process_records = self.checkpoint(channel_id, checkpoint_epoch)
         records = 0
         if process_records:
@@ -232,10 +282,11 @@ class OperatorInstance(ray.actor.Checkpointable):
                     # Apply the operator-specific logic. This may or may not _push
                     # a record to the downstream actors.
                     self._apply(record)
+                    self.num_records_seen += 1
 
                 records += len(batch)
         else:
-            self.checkpoint_buffer.append((batches, channel_id, _source_operator_id, checkpoint_epoch))
+            self.checkpoint_buffer.append((batches, channel_id, source_operator_id, checkpoint_epoch))
 
         if self._should_checkpoint:
             logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
@@ -317,14 +368,12 @@ class OperatorInstance(ray.actor.Checkpointable):
         # Make a copy of the checkpoint buffer and try to process them again.
         checkpoint_buffer = self.checkpoint_buffer[:]
         self.checkpoint_buffer.clear()
-        for batches, channel_id, _source_operator_id, checkpoint_epoch in checkpoint_buffer:
-            self.apply(batches, channel_id, _source_operator_id, checkpoint_epoch)
-        #if submit_log is not None:
-        #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
-        #        self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
-        #else:
-        #    for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
-        #        self.log_push(upstream_id, records, checkpoint_epoch)
+        if submit_log is not None:
+            for batches, channel_id, _source_operator_id, checkpoint_epoch in checkpoint_buffer:
+                self.replay_apply(batches, channel_id, _source_operator_id, checkpoint_epoch, submit_log)
+        else:
+            for batches, channel_id, _source_operator_id, checkpoint_epoch in checkpoint_buffer:
+                self.log_apply(batches, channel_id, _source_operator_id, checkpoint_epoch)
         logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
@@ -477,7 +526,10 @@ class Map(OperatorInstance):
 
     # Task-based map execution on a set of batches
     def _apply(self, record):
-        self.output._push(self.map_fn(record))
+        self.output._push(self.map_fn(record), event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        self.output._replay_push(self.map_fn(record), flush=flush)
 
 
 # Flatmap actor
@@ -515,7 +567,10 @@ class FlatMap(OperatorInstance):
     # Task-based flatmap execution on a set of batches
     def _apply(self, record):
         logger.debug("FLATMAP %s", record)
-        self.output._push_all(self.flatmap_fn(record))
+        self.output._push_all(self.flatmap_fn(record), event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        self.output._replay_push_all(self.flatmap_fn(record), flush=flush)
 
 # Filter actor
 @ray.remote
@@ -552,7 +607,11 @@ class Filter(OperatorInstance):
     # Task-based filter execution on a set of batches
     def _apply(self, record):
         if self.filter_fn(record):
-            self.output._push(record)
+            self.output._push(record, event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        if self.filter_fn(record):
+            self.output._replay_push(self.map_fn(record), flush=flush)
 
 # Union actor
 @ray.remote(max_reconstructions=100)
@@ -572,7 +631,10 @@ class Union(OperatorInstance):
     # Task-based union execution on a set of batches
     def _apply(self, record):
         logger.debug("UNION %s", record)
-        self.output._push(record)
+        self.output._push(record, event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        self.output._replay_push(record, flush=flush)
 
 # Join actor
 @ray.remote
@@ -784,7 +846,11 @@ class Inspect(OperatorInstance):
     # Task-based inspect execution on a set of batches
     def _apply(self, record):
         self.inspect_fn(record)
-        self.output._push(record)
+        self.output._push(record, event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        self.inspect_fn(record)
+        self.output._replay_push(record, flush=flush)
 
 # Reduce actor
 @ray.remote
@@ -862,7 +928,20 @@ class Reduce(OperatorInstance):
             self.state[key] = new_value
         except KeyError:  # Key does not exist in state
             self.state.setdefault(key, new_value)
-        self.output._push((key, new_value))
+        self.output._push((key, new_value), event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        key, rest = record
+        new_value = self.attribute_selector(rest)
+        # TODO (john): Is there a way to update state with
+        # a single dictionary lookup?
+        try:
+            old_value = self.state[key]
+            new_value = self.reduce_fn(old_value, new_value)
+            self.state[key] = new_value
+        except KeyError:  # Key does not exist in state
+            self.state.setdefault(key, new_value)
+        self.output._replay_push(record, flush=flush)
 
 
 @ray.remote
@@ -905,7 +984,11 @@ class KeyBy(OperatorInstance):
     # Task-based keyby execution on a set of batches
     def _apply(self, record):
         key = self.key_selector(record)
-        self.output._push((key,record))
+        self.output._push((key,record), event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        key = self.key_selector(record)
+        self.output._replay_push((key, record), flush=flush)
 
 # A custom source actor
 @ray.remote
@@ -979,6 +1062,9 @@ class Sink(OperatorInstance):
         logger.debug("SINK %s", record)
         self.sink.evict(record)
 
+    def _replay_apply(self, record, flush=False):
+        self.sink.evict(record)
+
     # Returns the sink's state
     def state(self):
         try:  # There might be no 'get_state()' method implemented
@@ -1025,7 +1111,10 @@ class WriteTextFile(OperatorInstance):
 
     # Task-based sink execution on a set of batches
     def _apply(self, record):
-        self._put_next(record)
+        self._put_next(record, event=self.num_records_seen)
+
+    def _replay_apply(self, record, flush=False):
+        self.output._replay_push(record, flush=flush)
 
 # TODO (john): Time window actor (uses system time)
 @ray.remote

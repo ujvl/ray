@@ -414,27 +414,27 @@ class DataOutput(object):
         """
         for channel in self.forward_channels:
             if close is True:
-                channel.queue.put_next(None)
+                channel.queue.push_next(None)
             channel.queue._flush_writes()
         for channels in self.shuffle_channels:
             for channel in channels:
                 if close is True:
-                    channel.queue.put_next(None)
+                    channel.queue.push_next(None)
                 channel.queue._flush_writes()
         for channels in self.shuffle_key_channels:
             for channel in channels:
                 if close is True:
-                    channel.queue.put_next(None)
+                    channel.queue.push_next(None)
                 channel.queue._flush_writes()
         for channels in self.round_robin_channels:
             for channel in channels:
                 if close is True:
-                    channel.queue.put_next(None)
+                    channel.queue.push_next(None)
                 channel.queue._flush_writes()
         for channels in self.custom_partitioning_channels:
             for channel in channels:
                 if close is True:
-                    channel.queue.put_next(None)
+                    channel.queue.push_next(None)
                 channel.queue._flush_writes()
 
         if self.logging:  # Log rate
@@ -467,7 +467,7 @@ class DataOutput(object):
     # Pushes the record to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
-    def _push(self, record, input_channel_id=None):
+    def _push(self, record, input_channel_id=None, event=None):
         if isinstance(record, Watermark):
             self.__forward_watermark(record, input_channel_id)
             return
@@ -476,11 +476,11 @@ class DataOutput(object):
             # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
             #    channel.src_operator_id, channel.src_instance_id, record,
             #    channel))
-            channel.queue.put_next(record)
+            channel.queue.push_next(record, event=event)
         # Round-robin forwarding
         for i, channels in enumerate(self.round_robin_channels):
             channel_index = self.round_robin_indexes[i]
-            flushed = channels[channel_index].queue.put_next(record)
+            flushed = channels[channel_index].queue.push_next(record, event=event)
             if flushed:  # Round-robin batches, not individual records
                 channel_index += 1
                 channel_index %= len(channels)
@@ -496,7 +496,72 @@ class DataOutput(object):
                 #     "Actor ({},{}) pushed '{}' to channel {}.".format(
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
+                channel.queue.push_next(record, event=event)
+        elif self.shuffle_exists:  # Hash-based shuffling per destination
+            h = _hash(record)
+            for channels in self.shuffle_channels:
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.push_next(record, event=event)
+        elif self.custom_partitioning_exists:
+            for i, channels in enumerate(self.custom_partitioning_channels):
+                # Set the right function. In general, there might be multiple
+                # destinations, each one with a different custom partitioning
+                partitioning_fn = self.custom_partitioning_functions[i]
+                h = partitioning_fn(record)
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.push_next(record, event=event)
+
+        if self.logging:  # Log rate
+            self.__log(batch_size=1)
+
+    # Pushes the record to the output
+    # Each individual output queue flushes batches to plasma periodically
+    # based on 'batch_max_size' and 'batch_max_time'
+    def _replay_push(self, record, input_channel_id=None, flush=False):
+        if isinstance(record, Watermark):
+            self.__forward_watermark(record, input_channel_id)
+            return
+        # Simple forwarding
+        for channel in self.forward_channels:
+            # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
+            #    channel.src_operator_id, channel.src_instance_id, record,
+            #    channel))
+            channel.queue.put_next(record)
+            if flush:
+                channel.queue._flush_writes()
+        # Round-robin forwarding
+        for i, channels in enumerate(self.round_robin_channels):
+            channel_index = self.round_robin_indexes[i]
+            channels[channel_index].queue.put_next(record)
+            if flush:
+                channel.queue._flush_writes()
+                channel_index += 1
+                channel_index %= len(channels)
+                self.round_robin_indexes[i] = channel_index
+        # Hash-based shuffling by key
+        if self.shuffle_key_exists:
+            key, _ = record
+            h = _hash(key)
+            for channels in self.shuffle_key_channels:
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
                 channel.queue.put_next(record)
+                if flush:
+                    channel.queue._flush_writes()
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             h = _hash(record)
             for channels in self.shuffle_channels:
@@ -507,6 +572,8 @@ class DataOutput(object):
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
                 channel.queue.put_next(record)
+                if flush:
+                    channel.queue._flush_writes()
         elif self.custom_partitioning_exists:
             for i, channels in enumerate(self.custom_partitioning_channels):
                 # Set the right function. In general, there might be multiple
@@ -520,6 +587,8 @@ class DataOutput(object):
                 #     channel.src_operator_id, channel.src_instance_id,
                 #     record, channel))
                 channel.queue.put_next(record)
+                if flush:
+                    channel.queue._flush_writes()
 
         if self.logging:  # Log rate
             self.__log(batch_size=1)
@@ -547,24 +616,24 @@ class DataOutput(object):
     # Broadcasts a watermark to all output channels
     def __broadcast(self, watermark):
         for channel in self.forward_channels:
-            channel.queue.put_next(watermark)
+            channel.queue.push_next(watermark)
         for channels in self.shuffle_channels:
             for channel in channels:
-                channel.queue.put_next(watermark)
+                channel.queue.push_next(watermark)
         for channels in self.shuffle_key_channels:
             for channel in channels:
-                channel.queue.put_next(watermark)
+                channel.queue.push_next(watermark)
         for channels in self.round_robin_channels:
             for channel in channels:
-                channel.queue.put_next(watermark)
+                channel.queue.push_next(watermark)
         for channels in self.custom_partitioning_channels:
             for channel in channels:
-                channel.queue.put_next(watermark)
+                channel.queue.push_next(watermark)
 
     # Pushes a list of records to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on the configured batch size and timeout
-    def _push_all(self, records, input_channel_id=None):
+    def _push_all(self, records, input_channel_id=None, event=None):
         assert isinstance(records, list)
         # Forward records
         for record in records:
@@ -576,11 +645,11 @@ class DataOutput(object):
                 #     "Actor ({},{}) pushed '{}' to channel {}.".format(
                 #     channel.src_operator_id, channel.src_instance_id,
                 #      record, channel))
-                channel.queue.put_next(record)
+                channel.queue.push_next(record, event=event)
             # Round-robin forwarding
             for i, channels in enumerate(self.round_robin_channels):
                 channel_index = self.round_robin_indexes[i]
-                flushed = channels[channel_index].queue.put_next(record)
+                flushed = channels[channel_index].queue.push_next(record, event=event)
                 if flushed:  # Round-robin batches, not individual records
                     channel_index += 1
                     channel_index %= len(channels)
@@ -600,7 +669,89 @@ class DataOutput(object):
                     # "Actor ({},{}) pushed '{}' to channel {}.".format(
                     #     channel.src_operator_id, channel.src_instance_id,
                     #     record, channel))
+                    channel.queue.push_next(record, event=event)
+        elif self.shuffle_exists:  # Hash-based shuffling per destination
+            for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
+                h = _hash(record)
+                for channels in self.shuffle_channels:
+                    num_instances = len(channels)  # Downstream instances
+                    channel = channels[h % num_instances]
+                    # logger.debug(
+                    #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    #     channel.src_operator_id, channel.src_instance_id,
+                    #     record, channel))
+                    channel.queue.push_next(record, event=event)
+        elif self.custom_partitioning_exists:
+            for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
+                for i, channels in enumerate(
+                                    self.custom_partitioning_channels):
+                    # Set the right function. In general, there might be
+                    # multiple destinations, each one with a different custom
+                    # partitioning
+                    partitioning_fn = self.custom_partitioning_functions[i]
+                    h = partitioning_fn(record)
+                    num_instances = len(channels)  # Downstream instances
+                    channel = channels[h % num_instances]
+                    # logger.debug(
+                    #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    #     channel.src_operator_id, channel.src_instance_id,
+                    #     record, channel))
+                    channel.queue.push_next(record, event=event)
+
+        if self.logging:  # Log rate
+            self.__log(batch_size=len(records))
+
+    # Pushes a list of records to the output
+    # Each individual output queue flushes batches to plasma periodically
+    # based on the configured batch size and timeout
+    def _replay_push_all(self, records, input_channel_id=None, event=None):
+        assert isinstance(records, list)
+        # Forward records
+        for record in records:
+            if isinstance(record, Watermark):
+                self.__forward_watermark(record, input_channel_id)
+                return
+            for channel in self.forward_channels:
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #      record, channel))
+                channel.queue.put_next(record)
+                if flush:
+                    channel.queue._flush_writes()
+            # Round-robin forwarding
+            for i, channels in enumerate(self.round_robin_channels):
+                channel_index = self.round_robin_indexes[i]
+                channels[channel_index].queue.put_next(record)
+                if flush:
+                    channel.queue._flush_writes()
+                    channel_index += 1
+                    channel_index %= len(channels)
+                    self.round_robin_indexes[i] = channel_index
+        # Hash-based shuffling by key per destination
+        if self.shuffle_key_exists:
+            for record in records:
+                if isinstance(record, Record):
+                    self.__forward_watermark(record, input_channel_id)
+                    return
+                key, _ = record
+                h = _hash(key)
+                for channels in self.shuffle_channels:
+                    num_instances = len(channels)  # Downstream instances
+                    channel = channels[h % num_instances]
+                    # logger.debug(
+                    # "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    #     channel.src_operator_id, channel.src_instance_id,
+                    #     record, channel))
                     channel.queue.put_next(record)
+                    if flush:
+                        channel.queue._flush_writes()
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
                 if isinstance(record, Record):
@@ -615,6 +766,8 @@ class DataOutput(object):
                     #     channel.src_operator_id, channel.src_instance_id,
                     #     record, channel))
                     channel.queue.put_next(record)
+                    if flush:
+                        channel.queue._flush_writes()
         elif self.custom_partitioning_exists:
             for record in records:
                 if isinstance(record, Record):
@@ -634,6 +787,8 @@ class DataOutput(object):
                     #     channel.src_operator_id, channel.src_instance_id,
                     #     record, channel))
                     channel.queue.put_next(record)
+                    if flush:
+                        channel.queue._flush_writes()
 
         if self.logging:  # Log rate
             self.__log(batch_size=len(records))

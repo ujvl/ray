@@ -140,16 +140,22 @@ class BatchedQueue(object):
         oid[-1] = batch_offset % 2**32
         return np.ndarray.tobytes(oid)
 
-    def _flush_writes(self):
+    def _flush_writes(self, event=None):
         # TODO: This forces a flush.
         if not self.write_buffer:
             return
         if self.task_based:  # Submit a new downstream task
-            obj_id = self.destination_actor.apply.remote(
-                                [self.write_buffer], self.src_operator_id,
+            args = [[self.write_buffer], self.src_operator_id,
                                 self.src_operator_id,
-                                self.checkpoint_epoch)
-            logger.debug("Flushed task %s %d", obj_id.hex(), self.checkpoint_epoch)
+                                self.checkpoint_epoch]
+            if event is not None:
+                event = str(event).encode('ascii')
+            obj_id = self.destination_actor.apply._remote(
+                    args=args,
+                    kwargs={},
+                    nondeterministic_event=event)
+            logger.debug("Flushed task %s %d, event:%s", obj_id.hex(), self.checkpoint_epoch, event)
+
             num_records = len(self.write_buffer)
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
@@ -270,16 +276,22 @@ class BatchedQueue(object):
             self.last_flush_time = time.time()
         self.write_buffer.append(item)
         self.write_item_offset += 1
+
+    def try_flush(self, event=None):
         # If buffer is full...
         if (len(self.write_buffer) >= self.max_batch_size):
-            self._flush_writes()
+            self._flush_writes(event=event)
             return True
         # ...or if the timeout expired
         delay = time.time() - self.last_flush_time
         if delay >= self.max_batch_time:
-            self._flush_writes()
+            self._flush_writes(event=event)
             return True
         return False
+
+    def push_next(self, item, event=None):
+        self.put_next(item)
+        return self.try_flush(event=event)
 
     def read_next(self):
         # Actors never pull in task-based execution
