@@ -4,11 +4,11 @@ NUM_REDIS_SHARDS=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
 NONDETERMINISM=$4
+MAX_FAILURES=${5:-1}
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
 
-MAX_FAILURES=1
-if [[ $NONDETERMINISM -eq 1 ]]
+if [[ $NONDETERMINISM -eq 1 && $MAX_FAILURES -eq 1 ]]
 then
   MAX_FAILURES=-1
 fi

@@ -4,8 +4,9 @@ HEAD_IP=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
 NONDETERMINISM=$4
-NODE_RESOURCE=${5:-'Node'$RANDOM}
-SLEEP_TIME=${6:-$(( $RANDOM % 5 ))}
+MAX_FAILURES=${5:-1}
+NODE_RESOURCE=${6:-'Node'$RANDOM}
+SLEEP_TIME=${7:-$(( $RANDOM % 5 ))}
 
 SEND_THREADS=4
 RECEIVE_THREADS=4
@@ -20,11 +21,11 @@ ulimit -a
 echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
-MAX_FAILURES=1
-if [[ $NONDETERMINISM -eq 1 ]]
+if [[ $NONDETERMINISM -eq 1 && $MAX_FAILURES -eq 1 ]]
 then
   MAX_FAILURES=-1
 fi
+
 
 ray start --redis-address=$HEAD_IP:6379 \
     --num-cpus 2 \

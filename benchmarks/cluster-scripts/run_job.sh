@@ -9,18 +9,19 @@ GCS_DELAY_MS=$4
 NONDETERMINISM=$5
 NUM_SHARDS=$6
 TASK_DURATION=${7:-0}
+MAX_FAILURES=${8:-1}
 
-NUM_TASKS=10
+NUM_TASKS=100
 NUM_ITERATIONS=1
 
-if [[ $# -eq 7 || $# -eq 6 ]]
+if [[ $# -eq 8 || $# -eq 7 || $# -eq 6 ]]
 then
     echo "Running with $NUM_RAYLETS workers, use gcs only? $USE_GCS_ONLY, $GCS_DELAY_MS ms GCS delay, nondeterminism? $NONDETERMINISM"
 else
     echo "Usage: ./run_job.sh <num raylets> <head IP address> <use gcs only> <GCS delay ms> <nondeterminism> <num shards>"
     exit
 fi
-latency_prefix=$DIR"/latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NONDETERMINISM"-nondeterminism-"$TASK_DURATION"-task-"
+latency_prefix=$DIR"/latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NONDETERMINISM"-nondeterminism-"$TASK_DURATION"-task-"$MAX_FAILURES"-failures-"
 
 if ls $latency_prefix* 1> /dev/null 2>&1
 then
@@ -41,7 +42,7 @@ do
         echo "Failed 3 attempts " >> $latency_file
     fi
 
-    bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM
+    bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES
 
     echo "Logging to file $latency_file..."
     cmd="python $DIR/../ring_microbenchmark.py --num-workers $NUM_RAYLETS --num-tasks $NUM_TASKS --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --gcs-delay $GCS_DELAY_MS --latency-file $latency_file --task-duration 0."$TASK_DURATION

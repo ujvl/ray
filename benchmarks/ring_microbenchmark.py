@@ -119,9 +119,11 @@ def step(iteration, workers, tokens, num_tasks, task_duration):
             else:
                 break
 
-    log.debug("Round %d done", iteration)
-
+    log.debug("Round %d done after %f", iteration, time.time() - start)
+    start = time.time()
     latencies = ray.get([worker.get_latencies.remote() for worker in workers])
+    log.debug("Got latencies for round %d after %f", iteration, time.time() - start)
+
     latencies = np.array(latencies)
     latencies -= task_duration * (len(workers))
     latencies /= len(workers)
@@ -221,7 +223,6 @@ def main(args):
     latencies = []
     for i in range(args.num_iterations):
         log.info("Starting iteration %d", i)
-
         results = step(i, workers, tokens, args.num_tasks, args.task_duration)
         latencies.append(results)
 
