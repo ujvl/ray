@@ -16,6 +16,7 @@ import sys
 import time
 
 import ray
+import ray.experimental.streaming.benchmarks.micro.record_generator as rg
 import ray.experimental.streaming.benchmarks.utils as utils
 from ray.experimental.streaming.batched_queue import BatchedQueue
 from ray.experimental.streaming.communication import QueueConfig
@@ -31,6 +32,9 @@ parser.add_argument("--rounds", default=10,
 parser.add_argument("--pin-processes", default=False,
                     action='store_true',
                     help="whether to pin python processes to cores or not")
+parser.add_argument("--simulate-cluster", default=False,
+                    action='store_true',
+                    help="simulate a Ray cluster on a single machine")
 parser.add_argument("--nodes", default=1,
                     help="total number of nodes in the cluster")
 parser.add_argument("--redis-shards", default=1,
@@ -111,6 +115,10 @@ class Sink(object):
     def get_state(self):
         return self.state
 
+def partition_fn(record):
+    _, n = record
+    return n
+
 def compute_elapsed_time(record):
     generation_time, _ = record
     if generation_time != -1:
@@ -139,18 +147,25 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     if task_based:
         env.enable_tasks()
     node_prefix = utils.CLUSTER_NODE_PREFIX
-    stages_per_node = math.trunc(
-                            math.ceil((num_stages + num_sources) / num_nodes))
+
+    stages_per_node = math.trunc(math.ceil(
+                        (num_stages + 1) / num_nodes))  # +1 for source stage
     id = 0
     node_id = node_prefix + str(id)
-    stream = env.source(utils.RecordGenerator(rounds, record_type,
-                                    record_size, sample_period, source_rate,
-                                    warm_up, num_records_per_round),
-                                    name="source",
-                                    placement=[node_id] * num_sources)
-    # TODO (john): Use custom partitioning here to shuffle by key
+    source_objects = [rg.RecordGenerator(rounds, record_type,
+                                    record_size, sample_period,
+                                    source_rate, warm_up,
+                                    num_records_per_round) for _ in range(
+                                    num_sources)]
+    stream = env.source(source_objects, name="source",
+                        placement=[node_id] * num_sources).set_parallelism(
+                                                                  num_sources)
+
     if partitioning == "shuffle":
-        stream = stream.shuffle()
+        stream = stream.partition(partition_fn)
+    elif partitioning == "broadcast":
+        stream = stream.broadcast()
+
     for stage in range(num_stages):
         id = (stage + 1) // stages_per_node
         mapping = [node_prefix + str(id)] * dataflow_parallelism
@@ -173,8 +188,8 @@ def create_and_run_dataflow(num_nodes,  num_sources,
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
     input_rate = source_rate if source_rate > 0 else "inf"
-    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, input_rate,
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, input_rate, num_sources,
         redis_shards, redis_max_memory, plasma_memory,
         rounds, sample_period,
         record_type, record_size,
@@ -182,50 +197,10 @@ def create_and_run_dataflow(num_nodes,  num_sources,
         background_flush, num_stages,
         partitioning, task_based, dataflow_parallelism
     )
-    write_log_files(all, latency_filename,
+    utils.write_log_files(all, latency_filename,
                     throughput_filename, dump_filename, dataflow)
     logger.info("Elapsed time: {}".format(time.time()-start))
 
-# Collects sampled latencies and throughputs from
-# actors in the dataflow and writes the log files
-def write_log_files(all_parameters, latency_filename,
-                    throughput_filename,  dump_filename, dataflow):
-
-    time.sleep(2)
-
-    # Dump timeline
-    if dump_filename:
-        dump_filename = dump_filename + all_parameters
-        ray.global_state.chrome_tracing_dump(dump_filename)
-
-    # Collect sampled per-record latencies
-    sink_id = dataflow.operator_id("sink")
-    local_states = ray.get(dataflow.state_of(sink_id))
-    latencies = [state for state in local_states if state is not None]
-    latency_filename = latency_filename + all_parameters
-    with open(latency_filename, "w") as tf:
-        for _, latency_values in latencies:
-            if latency_values is not None:
-                for value in latency_values:
-                    tf.write(str(value) + "\n")
-
-    # Collect throughputs from all actors
-    ids = dataflow.operator_ids()
-    rates = []
-    for id in ids:
-        logs = ray.get(dataflow.logs_of(id))
-        rates.extend(logs)
-    throughput_filename = throughput_filename + all_parameters
-    with open(throughput_filename, "w") as tf:
-        for actor_id, in_rate, out_rate in rates:
-            operator_id, instance_id = actor_id
-            operator_name = dataflow.name_of(operator_id)
-            for i, o in zip_longest(in_rate, out_rate, fillvalue=0):
-                tf.write(
-                    str("(" + str(operator_id) + ", " + str(
-                     operator_name) + ", " + str(
-                     instance_id)) + ")" + " | " + str(
-                     i) + " | " + str(o) + "\n")
 
 if __name__ == "__main__":
 
@@ -233,6 +208,7 @@ if __name__ == "__main__":
 
     rounds = int(args.rounds)
     num_nodes = int(args.nodes)
+    simulate_cluster = bool(args.simulate_cluster)
     num_redis_shards = int(args.redis_shards)
     redis_max_memory = int(args.redis_max_memory)
     plasma_memory = int(args.plasma_memory)
@@ -262,6 +238,7 @@ if __name__ == "__main__":
     logger.info("Rounds: {}".format(rounds))
     logger.info("Records per round: {}".format(num_records_per_round))
     logger.info("Number of nodes: {}".format(num_nodes))
+    logger.info("Simulate cluster: {}".format(simulate_cluster))
     logger.info("Number of Redis shards: {}".format(num_redis_shards))
     logger.info("Max memory per Redis shard: {}".format(redis_max_memory))
     logger.info("Plasma memory: {}".format(plasma_memory))
@@ -289,7 +266,7 @@ if __name__ == "__main__":
 
     # Estimate the ideal output rate of a single source instance
     # when it is not backpressured by downstream operators in the chain
-    source = utils.RecordGenerator(rounds, record_type, record_size,
+    source = rg.RecordGenerator(rounds, record_type, record_size,
                                    sample_period,
                                    warm_up=False,
                                    records_per_round=num_records_per_round)
@@ -309,14 +286,18 @@ if __name__ == "__main__":
         logger.warning(message.format(num_sources))
         sys.exit()
 
-    # Start Ray with the specified configuration
-    utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
-                    redis_max_memory, num_stages, dataflow_parallelism,
-                    num_sources, pin_processes)
+    # All maps and the final sink have the same level of parallelism
+    stage_parallelism = [dataflow_parallelism for _ in range(num_stages + 1)]
+    if simulate_cluster:  # Simulate a cluster with the given configuration
+        utils.start_virtual_cluster(num_nodes, num_redis_shards,
+                                    plasma_memory, redis_max_memory,
+                                    stage_parallelism, num_sources,
+                                    pin_processes)
+    else:  # TODO (john): Connect to existing cluster
+        sys.exit("Cannot connect to existing cluster.")
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
     # In queue-based execution, all batched queues have the same configuration
     queue_config = QueueConfig(max_queue_size,
                         max_batch_size, batch_timeout,

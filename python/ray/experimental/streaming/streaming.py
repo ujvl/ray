@@ -521,6 +521,7 @@ class Environment(object):
                                             args=[all_handles], kwargs=None,
                                             resources={first_node_id: 1})
         self.physical_dataflow.monitoring_actor = monitoring_actor
+        logger.info("Done. Starting sources...")
         # Start spinning actors
         source_handles = []
         spinning_actor_handles = []
@@ -909,7 +910,7 @@ class DataStream(object):
             slide_ms,
             aggregation_logic,
             offset,
-            "EventTimeWindow",
+            name,
             num_instances=self.env.config.parallelism,
             logging=self.env.config.logging,
             placement=placement)
