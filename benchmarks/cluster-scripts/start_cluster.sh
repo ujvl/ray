@@ -23,6 +23,16 @@ else
     exit
 fi
 
+if [[ $NONDETERMINISM -eq 0 && $MAX_FAILURES -ne 1 ]]; then
+  echo "Specified deterministic recovery, but max failures was set to $MAX_FAILURES"
+  exit
+fi
+
+if [[ $USE_GCS_ONLY -eq 1 && $MAX_FAILURES -ne 1 ]]; then
+  echo "Specified GCS only, but max failures was set to $MAX_FAILURES"
+  exit
+fi
+
 bash $DIR/stop_cluster.sh
 
 echo "Starting head with $NUM_REDIS_SHARDS Redis shards..."

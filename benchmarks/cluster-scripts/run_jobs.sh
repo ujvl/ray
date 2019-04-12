@@ -15,7 +15,7 @@ for GCS_DELAY_MS in 0 1 10; do
                     bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $NUM_SHARDS $TASK_DURATION $MAX_FAILURES
                 done
             else
-                MAX_FAILURES=-1
+                MAX_FAILURES=1
                 bash -x ./cluster-scripts/run_job.sh $NUM_RAYLETS $HEAD_IP $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $NUM_SHARDS $TASK_DURATION $MAX_FAILURES
             fi
         done
