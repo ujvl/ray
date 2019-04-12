@@ -13,8 +13,7 @@ import ray
 import ray.experimental.streaming.benchmarks.utils as utils
 import ray.experimental.streaming.benchmarks.macro.nexmark.data_generator as dg
 from ray.experimental.streaming.batched_queue import BatchedQueue
-from ray.experimental.streaming.benchmarks.macro.nexmark.event import Person
-from ray.experimental.streaming.benchmarks.macro.nexmark.event import Auction
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Bid
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
 from ray.experimental.streaming.communication import QueueConfig
 from ray.experimental.streaming.streaming import Environment
@@ -48,8 +47,10 @@ parser.add_argument("--enable-logging", default=False,
 parser.add_argument("--queue-based", default=False,
                     action='store_true',
                     help="queue-based execution")
+parser.add_argument("--window-instances", default=1,
+                    help="the number of instances per window operator")
 parser.add_argument("--join-instances", default=1,
-                    help="the number of join instances")
+                    help="the number of instances for the join operator")
 parser.add_argument("--latency-file", default="latencies",
                     help="a prefix for the latency log files")
 parser.add_argument("--throughput-file", default="throughputs",
@@ -86,7 +87,7 @@ parser.add_argument("--background-flush", default=False,
 parser.add_argument("--max-throughput", default="inf",
                     help="maximum read throughput (records/s)")
 
-# Used to join auctions with persons incrementally. An auction has exactly one
+# Used to join auctions with persons on a window. An auction has exactly one
 # seller, thus, we can remove the auction entry from local state upon a join
 class JoinLogic(object):
     def __init__(self):
@@ -94,16 +95,19 @@ class JoinLogic(object):
         self.auctions = {}  # seller -> auctions
         self.persons = {}   # id -> person
 
-    def process_left(self, auction):
+    def process_left(self, left_record):
+        window, auction = left_record.content
         result = []
         person = self.persons.get(auction.seller)
         if person is None:  # Store auction for future join
             entry = self.auctions.setdefault(auction.seller, [])
+            # Keep watermark's timestamp
+            auction.system_time = left_record.system_time
             entry.append(auction)
         else:  # Found a join; emit and do not store auction
             # logger.info("Found a join {} - {}".format(auction, person))
             p_time = person.system_time
-            a_time = auction.system_time
+            a_time = left_record.system_time
             if p_time is None or a_time is None:
                 s_time = None  # There might be no associated timestamp
             else:
@@ -116,7 +120,8 @@ class JoinLogic(object):
             result.append(record)
         return result
 
-    def process_right(self, person):
+    def process_right(self, right_record):
+        window, person = right_record.content
         result = []
         self.persons.setdefault(person.id,person)
         auctions = self.auctions.pop(person.id, None)
@@ -124,7 +129,7 @@ class JoinLogic(object):
             for auction in auctions:
                 # logger.info("Found a join {} - {}".format(auction, person))
                 # Remove entry
-                p_time = person.system_time
+                p_time = right_record.system_time
                 a_time = auction.system_time
                 if p_time is None or a_time is None:
                     s_time = None  # There might be no associated timestamp
@@ -137,7 +142,6 @@ class JoinLogic(object):
                                 system_time=s_time)
                 result.append(record)
         return result
-
 
 if __name__ == "__main__":
 
@@ -156,6 +160,7 @@ if __name__ == "__main__":
     logging = bool(args.enable_logging)
     sample_period = int(args.sample_period)
     task_based = not bool(args.queue_based)
+    window_instances = int(args.window_instances)
     join_instances = int(args.join_instances)
     max_queue_size = int(args.queue_size)
     max_batch_size = int(args.batch_size)
@@ -177,11 +182,12 @@ if __name__ == "__main__":
     logger.info("Logging: {}".format(logging))
     logger.info("Sample period: {}".format(sample_period))
     logger.info("Task-based execution: {}".format(task_based))
-    logger.info("Auctions file: {}".format(auctions_file))
     logger.info("Persons file: {}".format(persons_file))
+    logger.info("Latency file prefix: {}".format(latency_filename))
     logger.info("Latency file prefix: {}".format(latency_filename))
     logger.info("Throughput file prefix: {}".format(throughput_filename))
     logger.info("Dump file prefix: {}".format(dump_filename))
+    logger.info("Window instances: {}".format(window_instances))
     logger.info("Join instances: {}".format(join_instances))
     logger.info("Max queue size: {}".format(max_queue_size))
     logger.info("Max batch size: {}".format(max_batch_size))
@@ -199,9 +205,10 @@ if __name__ == "__main__":
     # Total number of source instances
     num_sources = auction_sources + person_sources
 
-    # Number of actors per dataflow stage
-    stage_parallelism = [join_instances,
-                         join_instances]  # One sink per flatmap instance
+    # Total number of actors per dataflow stage
+    stage_parallelism = [2 * window_instances,  # 2 time windows (stage 1)
+                         join_instances,        # 1 join (stage 2)
+                         join_instances]        # One sink per join instance
 
     if simulate_cluster:  # Simulate a cluster with the given configuration
         utils.start_virtual_cluster(num_nodes, num_redis_shards,
@@ -212,12 +219,11 @@ if __name__ == "__main__":
         sys.exit("Cannot connect to existing cluster.")
 
 
-    num_stages = 2  # We have a source and a join stage (sinks omitted)
+    num_stages = 3  # We have a source stage followed by windowing and join
     stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
     # Batched queue configuration
     queue_config = QueueConfig(max_queue_size,
                         max_batch_size, batch_timeout,
@@ -231,6 +237,8 @@ if __name__ == "__main__":
     if task_based:
         env.enable_tasks()
 
+    watermark_interval = 1000  # 1s
+
     # Construct the auction source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(auctions_file, "Auction",
                                                auctions_rate, sample_period)
@@ -239,6 +247,7 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     auctions_source = env.source(source_objects,
                     name="Auctions Source",
+                    watermark_interval=watermark_interval,
                     placement=[
                         source_node_id] * auction_sources).set_parallelism(
                                                               auction_sources)
@@ -251,22 +260,38 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     persons_source = env.source(source_objects,
                     name="Persons Source",
+                    watermark_interval=watermark_interval,
                     placement=[
                         source_node_id] * person_sources).set_parallelism(
                                                               person_sources)
     persons = persons_source.partition(lambda person: person.id)
 
-    # Add the join
+    # Add the event-time window
     id = 1 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * join_instances
-    # Add the filter
-    output = auctions.join(persons,
+    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * stage_parallelism[0]
+
+    # 60' tumbling window
+    auctions_window = auctions.event_time_window(3600000, 3600000,
+                        name="Auctions per Window",
+                        placement=mapping).set_parallelism(window_instances)
+
+    # 60' tumbling window
+    persons_window = persons.event_time_window(3600000, 3600000,
+                        name="Person per Window",
+                        placement=mapping).set_parallelism(window_instances)
+
+    # Add the join
+    id = 2 // stages_per_node
+    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * stage_parallelism[1]
+
+    output = auctions_window.join(persons_window,
                            JoinLogic(),  # The custom join logic (see above)
-                           name="Join Auctions with Persons",
+                           name="Join Auctions with Persons within a window",
                            placement=mapping).set_parallelism(join_instances)
 
     # Add a final custom sink to measure latency if logging is enabled
-    output.sink(dg.LatencySink(), name="sink",
+    output.sink(dg.LatencySink(),
+                name="sink",
                 placement=mapping).set_parallelism(join_instances)
 
     start = time.time()
@@ -281,14 +306,13 @@ if __name__ == "__main__":
     background_flush = queue_config.background_flush
     auctions_rate = auctions_rate if auctions_rate > 0 else "inf"
     persons_rate = persons_rate if persons_rate > 0 else "inf"
-    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, auction_sources, auctions_rate,
-        person_sources, persons_rate,
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, auctions_rate, persons_rate,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
         background_flush, pin_processes,
-        task_based, join_instances
+        task_based, window_instances, join_instances
     )
     utils.write_log_files(all, latency_filename,
                           throughput_filename, dump_filename, dataflow)

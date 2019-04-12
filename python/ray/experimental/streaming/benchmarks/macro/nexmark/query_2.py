@@ -25,6 +25,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--pin-processes", default=False,
                     action='store_true',
                     help="whether to pin python processes to cores or not")
+parser.add_argument("--simulate-cluster", default=False,
+                    action='store_true',
+                    help="simulate a Ray cluster on a single machine")
 parser.add_argument("--nodes", default=1,
                     help="total number of nodes in the cluster")
 parser.add_argument("--redis-shards", default=1,
@@ -42,8 +45,8 @@ parser.add_argument("--enable-logging", default=False,
 parser.add_argument("--queue-based", default=False,
                     action='store_true',
                     help="queue-based execution")
-parser.add_argument("--dataflow-parallelism", default=1,
-                    help="the number of instances per operator")
+parser.add_argument("--flatmap-instances", default=1,
+                    help="the number of flatmap instances")
 parser.add_argument("--latency-file", default="latencies",
                     help="a prefix for the latency log files")
 parser.add_argument("--throughput-file", default="throughputs",
@@ -56,6 +59,9 @@ parser.add_argument("--source-rate", default=-1,
                     type=lambda x: float(x) or
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
+parser.add_argument("--sources", default=1,
+                    # TODO (john): Add check
+                    help="number of bid sources")
 # Queue-related parameters
 parser.add_argument("--queue-size", default=100,
                     help="the queue size in number of batches")
@@ -79,11 +85,13 @@ def flatmap_function(bid):
         return [record]
     return []
 
+
 if __name__ == "__main__":
 
     args = parser.parse_args()
 
     num_nodes = int(args.nodes)
+    simulate_cluster = bool(args.simulate_cluster)
     num_redis_shards = int(args.redis_shards)
     redis_max_memory = int(args.redis_max_memory)
     plasma_memory = int(args.plasma_memory)
@@ -94,13 +102,14 @@ if __name__ == "__main__":
     logging = bool(args.enable_logging)
     sample_period = int(args.sample_period)
     task_based = not bool(args.queue_based)
-    dataflow_parallelism = int(args.dataflow_parallelism)
+    flatmap_instances = int(args.flatmap_instances)
     max_queue_size = int(args.queue_size)
     max_batch_size = int(args.batch_size)
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
     source_rate = float(args.source_rate)
+    num_sources = int(args.sources)
     pin_processes = bool(args.pin_processes)
 
     logger.info("== Parameters ==")
@@ -115,27 +124,34 @@ if __name__ == "__main__":
     logger.info("Latency file prefix: {}".format(latency_filename))
     logger.info("Throughput file prefix: {}".format(throughput_filename))
     logger.info("Dump file prefix: {}".format(dump_filename))
-    logger.info("Parallelism: {}".format(dataflow_parallelism))
+    logger.info("Flatmap instances: {}".format(flatmap_instances))
     logger.info("Max queue size: {}".format(max_queue_size))
     logger.info("Max batch size: {}".format(max_batch_size))
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
+    logger.info("Number of sources: {}".format(num_sources))
     message = (" (as fast as it gets)") if source_rate < 0 else ""
     logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Pin processes: {}".format(pin_processes))
 
-    # Start Ray with the specified configuration
-    utils.start_ray(num_nodes, num_redis_shards, plasma_memory,
-                    redis_max_memory, 1, dataflow_parallelism,
-                    1, pin_processes)
+    # Number of actors per dataflow stage
+    stage_parallelism = [flatmap_instances,
+                         flatmap_instances]  # One sink per flatmap instance
 
-    # We just have a source and a flatmap
-    stages_per_node = math.trunc(math.ceil(2 / num_nodes))
+    if simulate_cluster:  # Simulate a cluster with the given configuration
+        utils.start_virtual_cluster(num_nodes, num_redis_shards,
+                                    plasma_memory, redis_max_memory,
+                                    stage_parallelism, num_sources,
+                                    pin_processes)
+    else:  # TODO (john): Connect to existing cluster
+        sys.exit("Cannot connect to existing cluster.")
+
+    num_stages = 2  # We have a source and a flatmap stage (sinks omitted)
+    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
-
     # Batched queue configuration
     queue_config = QueueConfig(max_queue_size,
                         max_batch_size, batch_timeout,
@@ -144,22 +160,28 @@ if __name__ == "__main__":
     # Create streaming environment, construct and run dataflow
     env = Environment()
     env.set_queue_config(queue_config)
-    env.set_parallelism(dataflow_parallelism)
     if logging:
         env.enable_logging()
     if task_based:
         env.enable_tasks()
 
-    # Add the bid source
-    bid_source = env.source(dg.NexmarkEventGenerator(bids_file, "Bid",
-                                source_rate, sample_period),
-                                placement=[utils.CLUSTER_NODE_PREFIX + "0"])
-    # Add the mapper
+    # Construct the custom source objects (all read from the same file)
+    source_objects = [dg.NexmarkEventGenerator(bids_file, "Bid",
+                                               source_rate, sample_period)
+                      for _ in range(num_sources)]
+    source_node_id  = utils.CLUSTER_NODE_PREFIX + "0"
+    # Add sources to the dataflow
+    bid_source = env.source(source_objects,
+                    placement=[source_node_id] * num_sources).set_parallelism(
+                                                                  num_sources)
+    # Add the flatmap
     id = 1 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * dataflow_parallelism
+    flatmap_node_id = utils.CLUSTER_NODE_PREFIX + str(id)
+    mapping = [flatmap_node_id] * flatmap_instances
     # Add the filter
     output = bid_source.flat_map(flatmap_function, name="Filter Bids",
-                                     placement=mapping)
+                                 placement=mapping).set_parallelism(
+                                                            flatmap_instances)
     # Add a final custom sink to measure latency if logging is enabled
     output.sink(dg.LatencySink(), name="sink", placement=mapping)
 
@@ -174,13 +196,13 @@ if __name__ == "__main__":
     prefetch_depth = queue_config.prefetch_depth
     background_flush = queue_config.background_flush
     input_rate = source_rate if source_rate > 0 else "inf"
-    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, input_rate,
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, input_rate, num_sources,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
         background_flush, pin_processes,
-        task_based, dataflow_parallelism
+        task_based, flatmap_instances
     )
     utils.write_log_files(all, latency_filename,
                           throughput_filename, dump_filename, dataflow)

@@ -248,7 +248,7 @@ class CustomSourceOperator(Operator):
     def __init__(self,
                  id,
                  type,
-                 source_object,
+                 source_objects,
                  watermark_interval=0,
                  name="",
                  logic=None,
@@ -263,7 +263,7 @@ class CustomSourceOperator(Operator):
                           num_instances,
                           logging,
                           placement)
-        self.source = source_object
+        self.sources = source_objects
         self.watermark_interval = watermark_interval
 
 

@@ -486,8 +486,6 @@ class EventTimeWindow(OperatorInstance):
         self.state = []
         # An (optional) offset that serves as the min window (bucket) id
         self.offset = operator_metadata.offset
-        # Whether the window is tumbling or sliding
-        self.tumbling = (self.window_length_ms <= self.slide_ms)
         # Range of window ids (used to find the windows a records belongs to)
         self.range = math.trunc(math.ceil(
                                 self.window_length_ms / self.slide_ms))
@@ -517,9 +515,9 @@ class EventTimeWindow(OperatorInstance):
                 indexes = []
                 for j, window in enumerate(windows):
                     if window < min_open_window:  # Window has expired
-                        record = Record(content=(window, state),
+                        r = Record(content=(window, record),
                                         system_time=watermark.system_time)
-                        result.append(record)
+                        result.append(r)
                         indexs.append(j)
                 for window_index in indexes:  # Update state
                     self.state[i][1].pop(window_index)
@@ -793,9 +791,14 @@ class Source(OperatorInstance):
         OperatorInstance.__init__(self, instance_id,
                                   operator_metadata, input_gate, output_gate)
         # The user-defined source with a get_next() method
-        self.source = operator_metadata.source
+        _, local_instance_id = instance_id
+        source_objects = operator_metadata.sources
+        self.source = source_objects[local_instance_id] if isinstance(
+                            source_objects, list) else source_objects
+        self.source.init()
         self.watermark_interval = operator_metadata.watermark_interval
         self.max_event_time = 0
+
 
     def __watermark(self, record):
         event_time = record.dateTime  # TODO (john): Make this general

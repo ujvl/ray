@@ -18,43 +18,17 @@ class NexmarkEventGenerator(object):
         self.event_file = event_file
         self.event_rate = event_rate  if event_rate > 0 else float("inf")
         self.event_type = event_type  # Auction, Bid, Person
+        assert event_type in ["Auction","Bid","Person"]
         self.events = []
-        # Read all events from the input file
-        with open(self.event_file, "r") as ef:
-            for event in ef:
-                self.events.append(self.create_event(event))
+
         # Used for event replaying
         self.total_count = 0
         self.count = 0
         self.period = sample_period
         self.start = 0
 
-    # Waits
-    def __wait(self):
-        while (self.total_count / (time.time() - self.start) >
-               self.event_rate):
-           time.sleep(0.0001)  # 100 us
-
-    # Returns the next event
-    def get_next(self):
-        if not self.start:
-            self.start = time.time()
-        if not self.events:
-            return None  # Exhausted
-        event = self.events.pop(0)
-        # print(event)
-        self.total_count += 1
-        # Wait if needed
-        self.__wait()
-        self.count += 1
-        if self.count == self.period:
-            self.count = 0
-            # Assign the generation timestamp
-            event.system_time = time.time()
-        return event
-
     # Parses a nexmark event log and creates an event object
-    def create_event(self, event):
+    def __create_event(self, event):
         obj = Bid() if self.event_type == "Bid" else Person(
                             ) if self.event_type == "Person" else Auction()
         event = event.strip()[1:-1]  # Trim spaces and brackets
@@ -66,6 +40,45 @@ class NexmarkEventGenerator(object):
             value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
             setattr(obj, key, value)
         return obj
+
+    # Waits
+    def __wait(self):
+        while (self.total_count / (time.time() - self.start) >
+               self.event_rate):
+           time.sleep(0.0001)  # 100 us
+
+    # Load input file
+    def init(self):
+        # Read all events from the input file
+        with open(self.event_file, "r") as ef:
+            for event in ef:
+                self.events.append(self.__create_event(event))
+
+    # Returns the next event
+    def get_next(self):
+        if not self.start:
+            self.start = time.time()
+        if not self.events:
+            return None  # Exhausted
+        event = self.events.pop(0)
+        self.total_count += 1
+        # Wait if needed
+        self.__wait()
+        self.count += 1
+        if self.count == self.period:
+            self.count = 0
+            # Assign the generation timestamp
+            event.system_time = time.time()
+        return event
+
+    def drain(self):
+        if no_wait:
+            self.event_rate = float("inf")
+        records = 0
+        while self.get_next() is not None:
+            records += 1
+        return records
+
 
 # Used to measure per-record processing time in nexmark queries
 def compute_elapsed_time(record):
