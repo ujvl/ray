@@ -10,6 +10,8 @@ RECEIVE_THREADS=1
 
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 
 ulimit -c unlimited
 ulimit -n 65536
@@ -22,7 +24,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
     --plasma-directory=/mnt/hugepages \
     --huge-pages \
-    --object-store-memory 10000000000 \
+    --object-store-memory 8000000000 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
