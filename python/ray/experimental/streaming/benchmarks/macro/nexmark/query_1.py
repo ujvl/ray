@@ -147,8 +147,12 @@ if __name__ == "__main__":
                                     stage_parallelism, num_sources,
                                     pin_processes)
     else:  # TODO (john): Connect to existing cluster
-        sys.exit("Cannot connect to existing cluster.")
-
+        ray.init(redis_address="localhost:6379")
+        node_ids = utils.get_cluster_node_ids()
+        logger.info("Found {} cluster nodes.".format(len(node_ids)))
+        # TODO (john): Specify placement
+        source_placement = []
+        map_placement = []
 
     num_stages = 2  # We have a source and a map stage (sinks omitted)
     stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
