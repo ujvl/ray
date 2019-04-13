@@ -72,8 +72,7 @@ class NexmarkEventGenerator(object):
         return event
 
     def drain(self):
-        if no_wait:
-            self.event_rate = float("inf")
+        self.event_rate = float("inf")
         records = 0
         while self.get_next() is not None:
             records += 1

@@ -458,7 +458,10 @@ class Join(OperatorInstance):
                         signal.send(ActorExit(self.instance_id))
                         records += len(batch)
                     return records
-                self.output._push_all(self.process_logic(record))
+                if isinstance(record, Watermark):  # It is a watermark
+                    self.output._push(record)
+                else:
+                    self.output._push_all(self.process_logic(record))
             records += len(batch)
         return records
 
@@ -511,14 +514,14 @@ class EventTimeWindow(OperatorInstance):
             for window_index in indexes:  # Update state
                 self.state.pop(window_index)
         else:  # record -> window ids
-            for i, record, windows in enumerate(self.state):
+            for i, (record, windows) in enumerate(self.state):
                 indexes = []
                 for j, window in enumerate(windows):
                     if window < min_open_window:  # Window has expired
                         r = Record(content=(window, record),
-                                        system_time=watermark.system_time)
+                                   system_time=watermark.system_time)
                         result.append(r)
-                        indexs.append(j)
+                        indexes.append(j)
                 for window_index in indexes:  # Update state
                     self.state[i][1].pop(window_index)
         return result
@@ -563,7 +566,7 @@ class EventTimeWindow(OperatorInstance):
                 init_state = [self.aggregator.initialize(record)]
                 # logger.info("Init state for window {} is {}".format(window,
                 #             init_state))
-                self.state.append((window,init_state))
+                self.state.append((window, init_state))
             else:  # Apply pre-aggregation and update state
                 self.aggregator.update(state, record)
 
@@ -587,7 +590,7 @@ class EventTimeWindow(OperatorInstance):
                     windows = self.__collect_expired_windows(record)
                     # for win in windows:
                     #     logger.info("Firing windows {} on {}".format(
-                    #             win.content, record.event_time))
+                    #             win.content[0], record.event_time))
                     self.output._push_all(windows)  # Push records
                     self.output._push(record)       # Propagate watermark
                 else:  # It is a data record
