@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import boto3
 import logging
 from statistics import mean
 import time
@@ -72,9 +73,12 @@ if __name__ == "__main__":
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
 
+
+    s3 = boto3.resource('s3')
+    s3.meta.client.download_file('nexmarkx', 'bids', 'bids.data')
     # Run program at the head node
     # redis_address="localhost:6379",
-    ray.init(resources={"0":3})  # For source, sink, and progress monitor
+    ray.init(redis_address="localhost:6379")  # For source, sink, and progress monitor
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
@@ -97,22 +101,22 @@ if __name__ == "__main__":
         source = env.source(dg.NexmarkEventGenerator(in_file, "Auction", -1,
                                                      sample_period),
                             name="auction",
-                            placement=["0"])
+                            placement=["Node_0"])
     elif source_type ==  "bid":  # Add the bid source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Bid", -1,
                                                      sample_period),
                                     name="bid",
-                                    placement=["0"])
+                                    placement=["Node_0"])
     else:  # Add the person source
         assert source_type == "person"
         source = env.source(dg.NexmarkEventGenerator(in_file, "Person", -1,
                                                      sample_period),
                             name="person",
-                            placement=["0"])
+                            placement=["Node_0"])
     assert source is not None
 
     # Connect a dummy sink to measure latency as well
-    _ = source.sink(dg.LatencySink(), name="sink", placement=["0"])
+    _ = source.sink(dg.LatencySink(), name="sink", placement=["Node_0"])
 
     start = time.time()
     dataflow = env.execute()
