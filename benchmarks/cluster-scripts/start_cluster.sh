@@ -4,9 +4,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 NUM_RAYLETS=$1
 NUM_REDIS_SHARDS=${2:-1}
-#LINEAGE_POLICY=$2
-#MAX_LINEAGE_SIZE=$3
-GCS_DELAY_MS=${3:--1}
+GCS_DELAY_MS=${3:-0}
 
 HEAD_IP=$(head -n 1 ~/workers.txt)
 WORKER_IPS=$(tail -n $NUM_RAYLETS ~/workers.txt)
