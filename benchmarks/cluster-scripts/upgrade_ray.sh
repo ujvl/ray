@@ -16,6 +16,6 @@ fi
 num_workers=$(( `wc -l ~/workers.txt | awk '{ print $1 }'` - 1 ))
 for worker in `tail -n $num_workers ~/workers.txt`; do
     echo $worker
-    rsync -e "ssh -o StrictHostKeyChecking=no" -az "/home/ubuntu/ray" $worker:/home/ubuntu & sleep 0.5
+    rsync -e "ssh -o StrictHostKeyChecking=no -i ~/ray_bootstrap_key.pem" -az "/home/ubuntu/ray" $worker:/home/ubuntu & sleep 0.5
 done
 wait
