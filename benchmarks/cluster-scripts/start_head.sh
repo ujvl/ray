@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -x -e
 NUM_REDIS_SHARDS=$1
 GCS_DELAY_MS=$2
 
@@ -14,6 +14,7 @@ ray start --head \
   --resources='{"Node_0": 100}' \
   --plasma-directory=/mnt/hugepages \
   --huge-pages \
+  --object-store-memory 8000000000 \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
