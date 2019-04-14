@@ -97,11 +97,11 @@ class PhysicalDataflow(object):
         # progress of the dataflow execution
         self.monitoring_actor = None
         # A mapping from operator names to ids
-        self.operator_names = {}
+        self.names_to_ids = {}
 
     # Adds operator metadata to the dictionary and checks for duplicates
     def __register_name(self, operator_id, name):
-        id = self.operator_names.setdefault(name, operator_id)
+        id = self.names_to_ids.setdefault(name, operator_id)
         # Each operator must have a unique name and id
         assert id == operator_id, (id, operator_id)
 
@@ -128,13 +128,17 @@ class PhysicalDataflow(object):
 
     # Returns None if operator name does not exist
     def operator_id(self, operator_name):
-        return self.operator_names.get(operator_name)
+        return self.names_to_ids.get(operator_name)
 
-    # Returns all operator ids in the dataflow
+    # Returns all dataflow operator ids
     def operator_ids(self):
         keys_and_names = set(self.actor_handles.keys())
-        names = set(self.operator_names.keys())
+        names = set(self.names_to_ids.keys())
         return list(keys_and_names - names)
+
+    # Returns all dataflow operator names
+    def operator_names(self):
+        return list(self.names_to_ids.keys())
 
     # Returns the name of the operator
     def name_of(self, operator_id):

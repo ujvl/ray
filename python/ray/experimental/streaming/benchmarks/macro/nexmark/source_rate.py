@@ -25,6 +25,12 @@ logger.setLevel("INFO")
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument("--simulate-cluster", default=False,
+                    action='store_true',
+                    help="simulate a Ray cluster on a single machine")
+parser.add_argument("--pin-processes", default=False,
+                    action='store_true',
+                    help="whether to pin python processes to cores or not")
 parser.add_argument("--input-file", required=True,
                     help="path to the event file")
 parser.add_argument("--queue-based", default=False,
@@ -58,6 +64,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     in_file = str(args.input_file)
+    simulate_cluster = bool(args.simulate_cluster)
     fetch_data = bool(args.fetch_data)
     task_based = not bool(args.queue_based)
     sink_instances = int(args.sink_instances)
@@ -68,8 +75,10 @@ if __name__ == "__main__":
     batch_timeout = float(args.flush_timeout)
     prefetch_depth = int(args.prefetch_depth)
     background_flush = bool(args.background_flush)
+    pin_processes = bool(args.pin_processes)
 
     logger.info("== Parameters ==")
+    logger.info("Simulate cluster: {}".format(simulate_cluster))
     logger.info("Source type: {}".format(source_type))
     logger.info("Fetch data: {}".format(fetch_data))
     logger.info("Task-based execution: {}".format(task_based))
@@ -81,6 +90,7 @@ if __name__ == "__main__":
     logger.info("Batch timeout: {}".format(batch_timeout))
     logger.info("Prefetch depth: {}".format(prefetch_depth))
     logger.info("Background flush: {}".format(background_flush))
+    logger.info("Pin processes: {}".format(pin_processes))
 
     if fetch_data:
         logger.info("Fetching data...")
@@ -88,8 +98,14 @@ if __name__ == "__main__":
         local_file_name = source_type + ".data"
         s3.meta.client.download_file('nexmark', source_type, local_file_name)
 
-    # Run program at the head node
-    ray.init(redis_address="localhost:6379")
+    if simulate_cluster:
+        stage_parallelism = [sink_instances]
+        utils.start_virtual_cluster(1, 1, 1000000000, 1000000000,
+                                    stage_parallelism, 1,
+                                    pin_processes)
+    else:
+        # Run program at the head node
+        ray.init(redis_address="localhost:6379")
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
@@ -128,6 +144,7 @@ if __name__ == "__main__":
 
     # Connect a dummy sink to measure latency as well
     _ = source.sink(dg.LatencySink(),
+                    name="sink",
                     placement=["Node_0"] * sink_instances).set_parallelism(
                                                             sink_instances)
 
@@ -138,13 +155,9 @@ if __name__ == "__main__":
     # Collect throughputs from source
     raw_rates = ray.get(dataflow.logs_of(source_type))
     rates = [rate for _, _, out_rates in raw_rates for rate in out_rates]
-    sink_ids = [id for id in dataflow.operator_ids if "sink" in id.lower()]
-    assert len(sink_ids) > 0
     latencies = []
-    for sink_id in sink_ids:
-        raw_latencies = ray.get(dataflow.state_of("sink"))
-        latencies.extend(
-                    [l for _, latencies in raw_latencies for l in latencies])
+    raw_latencies = ray.get(dataflow.state_of("sink"))
+    latencies = [l for _, latencies in raw_latencies for l in latencies]
     if len(rates) > 0:
         logger.info("Mean source rate: {}".format(mean(rates)))
     else:
