@@ -92,55 +92,63 @@ parser.add_argument("--max-throughput", default="inf",
 class JoinLogic(object):
     def __init__(self):
         # Local state
-        self.auctions = {}  # seller -> auctions
-        self.persons = {}   # id -> person
+        self.auctions = {}  # window -> seller -> auctions
+        self.persons = {}   # window -> id -> person
 
     def process_left(self, left_record):
         window, auction = left_record.content
         result = []
-        person = self.persons.get(auction.seller)
-        if person is None:  # Store auction for future join
-            entry = self.auctions.setdefault(auction.seller, [])
-            # Keep watermark's timestamp
+        entry = self.persons.get(window)
+        if entry is None: # Add entry
+            new_entry = self.auctions.setdefault(window, {auction.seller: []})
             auction.system_time = left_record.system_time
-            entry.append(auction)
-        else:  # Found a join; emit and do not store auction
-            # logger.info("Found a join {} - {}".format(auction, person))
-            p_time = person.system_time
-            a_time = left_record.system_time
-            if p_time is None or a_time is None:
-                s_time = None  # There might be no associated timestamp
-            else:
-                # This is just to measure end-to-end latency considering as
-                # start time the time we have seen both input tuples
-                s_time = p_time if a_time <= p_time else a_time  # Max
-            record = Record(name=person.name, city=person.city,
-                            state=person.state, auction=auction.id,
-                            system_time=s_time)
-            result.append(record)
+            new_entry[auction.seller].append(auction)
+        else:  # Window has expired in persons stream
+            person = entry.get(auction.seller)  # Get person
+            if person is not None:  # Found a join
+                # logger.info("Found a join {} - {}".format(auction, person))
+                logger.info(person)
+                p_time = person.system_time
+                a_time = left_record.system_time
+                if p_time is None or a_time is None:
+                    s_time = None  # There might be no assigned timestamp
+                else:
+                    # This is to measure end-to-end latency considering
+                    # as start time the time we have seen both inputs
+                    s_time = p_time if a_time <= p_time else a_time  # Max
+                record = Record(name=person.name, city=person.city,
+                                state=person.state, auction=auction.id,
+                                system_time=s_time)
+                result.append(record)
         return result
 
     def process_right(self, right_record):
         window, person = right_record.content
         result = []
-        self.persons.setdefault(person.id,person)
-        auctions = self.auctions.pop(person.id, None)
-        if auctions is not None:
-            for auction in auctions:
-                # logger.info("Found a join {} - {}".format(auction, person))
-                # Remove entry
-                p_time = right_record.system_time
-                a_time = auction.system_time
-                if p_time is None or a_time is None:
-                    s_time = None  # There might be no associated timestamp
-                else:
-                    # This is just to measure end-to-end latency considering
-                    # as start time the time we have seen both input tuples
-                    s_time = p_time if a_time <=p_time else a_time  # Max
-                record = Record(name=person.name, city=person.city,
-                                state=person.state, auction=auction.id,
-                                system_time=s_time)
-                result.append(record)
+        entry = self.auctions.get(window)
+        if entry is None:  # Add entry
+            # Keep watermark's timestamp
+            person.system_time = right_record.system_time
+            new_entry = self.persons.setdefault(window, {person.id: person})
+        else:  # Window has expired in auctions stream
+            auctions = entry.pop(person.id, None)
+            if auctions is not None:
+                for auction in auctions:
+                    # logger.info("Found a join {} - {}".format(auction,
+                    #                                           person))
+                    # Remove entry
+                    p_time = right_record.system_time
+                    a_time = auction.system_time
+                    if p_time is None or a_time is None:
+                        s_time = None  # There might be no assigned timestamp
+                    else:
+                        # This is to measure end-to-end latency considering
+                        # as start time the time we have seen both inputs
+                        s_time = p_time if a_time <=p_time else a_time  # Max
+                    record = Record(name=person.name, city=person.city,
+                                    state=person.state, auction=auction.id,
+                                    system_time=s_time)
+                    result.append(record)
         return result
 
 if __name__ == "__main__":
@@ -237,7 +245,7 @@ if __name__ == "__main__":
     if task_based:
         env.enable_tasks()
 
-    watermark_interval = 1000  # 1s
+    watermark_interval = 10  # 10ms
 
     # Construct the auction source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(auctions_file, "Auction",
@@ -268,21 +276,21 @@ if __name__ == "__main__":
 
     # Add the event-time window
     id = 1 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * stage_parallelism[0]
+    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * window_instances
 
-    # 60' tumbling window
-    auctions_window = auctions.event_time_window(3600000, 3600000,
+    # 60' tumbling window 3600000, 3600000
+    auctions_window = auctions.event_time_window(20, 20,
                         name="Auctions per Window",
                         placement=mapping).set_parallelism(window_instances)
 
     # 60' tumbling window
-    persons_window = persons.event_time_window(3600000, 3600000,
+    persons_window = persons.event_time_window(20, 20,
                         name="Person per Window",
                         placement=mapping).set_parallelism(window_instances)
 
     # Add the join
     id = 2 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * stage_parallelism[1]
+    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * join_instances
 
     output = auctions_window.join(persons_window,
                            JoinLogic(),  # The custom join logic (see above)
@@ -306,8 +314,9 @@ if __name__ == "__main__":
     background_flush = queue_config.background_flush
     auctions_rate = auctions_rate if auctions_rate > 0 else "inf"
     persons_rate = persons_rate if persons_rate > 0 else "inf"
-    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, auctions_rate, persons_rate,
+    all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
+        num_nodes, auction_sources, auctions_rate,
+        person_sources, persons_rate,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
@@ -319,4 +328,4 @@ if __name__ == "__main__":
 
     logger.info("Elapsed time: {}".format(time.time() - start))
 
-    utils.shutdown_ray(sleep=2)
+    utils.shutdown_ray(sleep=10)

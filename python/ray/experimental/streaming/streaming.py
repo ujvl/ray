@@ -98,11 +98,11 @@ class PhysicalDataflow(object):
         # progress of the dataflow execution
         self.monitoring_actor = None
         # A mapping from operator names to ids
-        self.operator_names = {}
+        self.names_to_ids = {}
 
     # Adds operator metadata to the dictionary and checks for duplicates
     def __register_name(self, operator_id, name):
-        id = self.operator_names.setdefault(name, operator_id)
+        id = self.names_to_ids.setdefault(name, operator_id)
         # Each operator must have a unique name and id
         assert id == operator_id, (id, operator_id)
 
@@ -129,13 +129,17 @@ class PhysicalDataflow(object):
 
     # Returns None if operator name does not exist
     def operator_id(self, operator_name):
-        return self.operator_names.get(operator_name)
+        return self.names_to_ids.get(operator_name)
 
-    # Returns all operator ids in the dataflow
+    # Returns all dataflow operator ids
     def operator_ids(self):
         keys_and_names = set(self.actor_handles.keys())
-        names = set(self.operator_names.keys())
-        return list(keys_and_names-names)
+        names = set(self.names_to_ids.keys())
+        return list(keys_and_names - names)
+
+    # Returns all dataflow operator names
+    def operator_names(self):
+        return list(self.names_to_ids.keys())
 
     # Returns the name of the operator
     def name_of(self, operator_id):
@@ -226,16 +230,22 @@ class Environment(object):
         args = [actor_id, operator, input, output, self.checkpoint_dir]
         if operator.type == OpType.Source:
             node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            logger.info("Placing source {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Source._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Map:
             node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            logger.info("Placing map {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Map._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.FlatMap:
             node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            logger.info("Placing flatmap {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.FlatMap._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
@@ -246,6 +256,7 @@ class Environment(object):
             del operator.right_input
             node_id = operator.placement[instance_id]
             args = [actor_id, operator, input, output]
+            logger.info("Placing join {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Join._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
@@ -264,6 +275,9 @@ class Environment(object):
         elif operator.type == OpType.EventTimeWindow:
                 node_id = operator.placement[instance_id]
                 args = [actor_id, operator, input, output]
+                logger.info("Placing event time window {} at {}.".format(
+                                                                    actor_id,
+                                                                    node_id))
                 actor_handle = operator_instance.EventTimeWindow._remote(
                                                     args=args,
                                                     kwargs=None,
@@ -279,6 +293,8 @@ class Environment(object):
                                                            self.config)
         elif operator.type == OpType.Sink:
             node_id = operator.placement[instance_id]
+            args = [actor_id, operator, input, output]
+            logger.info("Placing sink {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Sink._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
@@ -517,6 +533,7 @@ class Environment(object):
         # self.print_physical_graph()
         # Start and register the monitoring actor to the physical dataflow
         first_node_id = utils.get_cluster_node_ids()[0]
+        logger.info("Placing progress monitor at {}.".format(first_node_id))
         monitoring_actor = operator_instance.ProgressMonitor._remote(
                                             args=[all_handles], kwargs=None,
                                             resources={first_node_id: 1})

@@ -730,6 +730,32 @@ def latency_vs_parallelism(latencies, plot_repo, parameter_values,
                            plot_type=="cdf", logscale=logscale)
 
 # Generates plots showing how end-to-end record latency is affected
+# by varying the number of cluster nodes
+def latency_vs_nodes(latencies, plot_repo, parameter_values,
+                             plot_file_prefix, plot_type="line",
+                             logscale=False):
+    labels = _generate_labels([], parameter_values,
+                              label_prefix="Nodes")
+    if plot_type == "line":
+        x_axis_label = "Samples"
+        y_axis_label = "End-to-end record latency [s]"
+        plot_filename = plot_file_prefix + "-nodes.png"
+    elif plot_type == "cdf":
+        x_axis_label = "End-to-end record latency [s]"
+        y_axis_label = "Percentage [%]"
+        plot_filename = plot_file_prefix + "-nodes-cdf.png"
+    else:
+        sys.exit("Unrecognized or unsupported plot type.")
+
+    x_data = [data for _, data in latencies] if plot_type=="cdf" else [
+                              [s for s in range(len(data[1]))]
+                              for data in latencies]
+    y_data = [] if plot_type=="cdf" else [data for _, data in latencies]
+    generate_line_plot(x_data, y_data, x_axis_label, y_axis_label,
+                           labels, plot_repo, plot_filename,
+                           plot_type=="cdf", logscale=logscale)
+
+# Generates plots showing how end-to-end record latency is affected
 # by varying a combination of parameters
 def latency_vs_multiple_parameters(latencies, plot_repo, varying_combination,
                                    plot_file_prefix, plot_type="line",
@@ -796,7 +822,7 @@ if __name__ == "__main__":
 
     # Configuration arguments
     exp_args = []
-    exp_args.append(("nodes", [int(args.nodes)]))
+    exp_args.append(("nodes", _parse_arg(args.nodes, type="int")))
     input_rate = float(args.source_rate)
     if input_rate < 0:
         input_rate = "inf"
@@ -934,6 +960,10 @@ if __name__ == "__main__":
                     latency_vs_parallelism(latencies, plot_repo, values,
                                             plot_file_prefix, plot_type,
                                             logscale)
+                elif tag == "nodes":
+                    latency_vs_nodes(latencies, plot_repo, values,
+                                          plot_file_prefix, plot_type,
+                                          logscale)
                 else:
                     sys.exit("Unrecognized or unsupported option.")
         else:  # All parameters are fixed
