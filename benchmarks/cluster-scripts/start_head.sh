@@ -4,6 +4,8 @@ NUM_REDIS_SHARDS=$1
 GCS_DELAY_MS=$2
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 
 ulimit -c unlimited
 ulimit -n 65536
@@ -13,6 +15,7 @@ ray start --head \
   --num-redis-shards $NUM_REDIS_SHARDS \
   --resources='{"Node_0": 100}' \
   --plasma-directory=/mnt/hugepages \
+  --object-store-memory 8000000000 \
   --huge-pages \
   --object-store-memory 8000000000 \
   --internal-config='{

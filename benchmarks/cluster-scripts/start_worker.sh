@@ -10,6 +10,8 @@ RECEIVE_THREADS=1
 
 
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 
 ulimit -c unlimited
 ulimit -n 65536
