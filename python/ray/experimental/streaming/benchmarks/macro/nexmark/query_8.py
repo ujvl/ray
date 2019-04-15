@@ -228,6 +228,12 @@ if __name__ == "__main__":
     logger.info("Persons rate: {}".format(persons_rate) + message)
     logger.info("Pin processes: {}".format(pin_processes))
 
+    if fetch_data:
+        logger.info("Fetching data...")
+        s3 = boto3.resource('s3')
+        s3.meta.client.download_file('nexmark', "auctions", "auctions.data")
+        s3.meta.client.download_file('nexmark', "persons", "persons.data")
+        
     # Total number of source instances
     num_sources = auction_sources + person_sources
 

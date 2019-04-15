@@ -155,6 +155,11 @@ if __name__ == "__main__":
     logger.info("Source rate: {}".format(source_rate) + message)
     logger.info("Pin processes: {}".format(pin_processes))
 
+    if fetch_data:
+        logger.info("Fetching data...")
+        s3 = boto3.resource('s3')
+        s3.meta.client.download_file('nexmark', "bids", "bids.data")
+
     # Number of actors per dataflow stage
     stage_parallelism = [map_instances,
                          map_instances]  # One sink per map instance

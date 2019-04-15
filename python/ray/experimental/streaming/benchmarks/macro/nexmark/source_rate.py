@@ -49,7 +49,7 @@ parser.add_argument("--records", default=-1,
 parser.add_argument("--sink-instances", default=1,
                     help="the number of sink instances after the source")
 parser.add_argument("--source-type", default="auction",
-                    choices=["auction","bid","person"],
+                    choices=["auctions","bids","persons"],
                     help="source type")
 parser.add_argument("--sample-period", default=1000,
                     help="every how many input records latency is measured.")
@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
     source = None
 
-    if source_type == "auction":  # Add the auction source
+    if source_type == "auctions":  # Add the auction source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Auction",
                                                 -1,
                                                 sample_period=sample_period,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
                                                 omit_extra=omit_extra),
                             name="auction",
                             placement=["Node_0"])
-    elif source_type ==  "bid":  # Add the bid source
+    elif source_type ==  "bids":  # Add the bid source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Bid", -1,
                                                 sample_period=sample_period,
                                                 max_records=max_records,
@@ -152,7 +152,7 @@ if __name__ == "__main__":
                                     name="bid",
                                     placement=["Node_0"])
     else:  # Add the person source
-        assert source_type == "person"
+        assert source_type == "persons"
         source = env.source(dg.NexmarkEventGenerator(in_file, "Person", -1,
                                                 sample_period=sample_period,
                                                 max_records=max_records,
