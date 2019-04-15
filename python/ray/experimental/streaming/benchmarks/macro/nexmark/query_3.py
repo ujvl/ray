@@ -29,6 +29,14 @@ parser.add_argument("--pin-processes", default=False,
 parser.add_argument("--simulate-cluster", default=False,
                     action='store_true',
                     help="simulate a Ray cluster on a single machine")
+parser.add_argument("--fetch-data", default=False,
+                    action='store_true',
+                    help="fecth data from S3")
+parser.add_argument("--omit-extra", default=False,
+                    action='store_true',
+                    help="omit extra field from events")
+parser.add_argument("--records", default=-1,
+                help="maximum number of records to replay from each source.")
 parser.add_argument("--nodes", default=1,
                     help="total number of nodes in the cluster")
 parser.add_argument("--redis-shards", default=1,
@@ -38,6 +46,8 @@ parser.add_argument("--redis-max-memory", default=10**9,
 parser.add_argument("--plasma-memory", default=10**9,
                     help="amount of memory to start plasma with")
 # Dataflow-related parameters
+parser.add_argument("--placement-file", default="",
+            help="Path to the file containing the explicit actor placement")
 parser.add_argument("--auctions-file", required=True,
                     help="Path to the auctions file")
 parser.add_argument("--persons-file", required=True,
@@ -145,6 +155,10 @@ if __name__ == "__main__":
 
     num_nodes = int(args.nodes)
     simulate_cluster = bool(args.simulate_cluster)
+    fetch_data = bool(args.fetch_data)
+    omit_extra = bool(args.omit_extra)
+    max_records = int(args.records)
+    placement_file = str(args.placement_file)
     num_redis_shards = int(args.redis_shards)
     redis_max_memory = int(args.redis_max_memory)
     plasma_memory = int(args.plasma_memory)
@@ -171,6 +185,10 @@ if __name__ == "__main__":
     logger.info("== Parameters ==")
     logger.info("Number of nodes: {}".format(num_nodes))
     logger.info("Simulate cluster: {}".format(simulate_cluster))
+    logger.info("Fetch data: {}".format(fetch_data))
+    logger.info("Omit extra: {}".format(omit_extra))
+    logger.info("Maximum number of records: {}".format(max_records))
+    logger.info("Placement file: {}".format(placement_file))
     logger.info("Number of Redis shards: {}".format(num_redis_shards))
     logger.info("Max memory per Redis shard: {}".format(redis_max_memory))
     logger.info("Plasma memory: {}".format(plasma_memory))
@@ -203,17 +221,28 @@ if __name__ == "__main__":
     stage_parallelism = [join_instances,
                          join_instances]  # One sink per flatmap instance
 
+    placement = {}  # oparator name -> node ids
     if simulate_cluster:  # Simulate a cluster with the given configuration
         utils.start_virtual_cluster(num_nodes, num_redis_shards,
                                     plasma_memory, redis_max_memory,
                                     stage_parallelism, num_sources,
                                     pin_processes)
-    else:  # TODO (john): Connect to existing cluster
-        sys.exit("Cannot connect to existing cluster.")
-
-
-    num_stages = 2  # We have a source and a join stage (sinks omitted)
-    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+        num_stages = 2  # We have a source and a join stage (sinks omitted)
+        stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+        source_node_id  = utils.CLUSTER_NODE_PREFIX + "0"
+        placement["Auctions Source"] = [source_node_id] * auction_sources
+        placement["Persons Source"] = [source_node_id] * person_sources
+        id = 1 // stages_per_node
+        join_node_id = utils.CLUSTER_NODE_PREFIX + str(id)
+        placement["Join Auctions-Persons"] = [join_node_id] * join_instances
+        placement["sink"] = [join_node_id] * join_instances
+    else:  # Connect to existing cluster
+        ray.init(redis_address="localhost:6379")
+        if not placement_file:
+            sys.exit("No actor placement specified.")
+        node_ids = utils.get_cluster_node_ids()
+        logger.info("Found {} cluster nodes.".format(len(node_ids)))
+        placement = utils.parse_placement(placement_file, node_ids)
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
@@ -233,41 +262,44 @@ if __name__ == "__main__":
 
     # Construct the auction source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(auctions_file, "Auction",
-                                               auctions_rate, sample_period)
+                                               auctions_rate,
+                                               sample_period=sample_period,
+                                               max_records=max_records,
+                                               omit_extra=omit_extra)
                       for _ in range(auction_sources)]
-    source_node_id  = utils.CLUSTER_NODE_PREFIX + "0"
+
     # Add auction sources to the dataflow
     auctions_source = env.source(source_objects,
                     name="Auctions Source",
-                    placement=[
-                        source_node_id] * auction_sources).set_parallelism(
+                    placement=placement["Auctions Source"]).set_parallelism(
                                                               auction_sources)
     auctions = auctions_source.partition(lambda auction: auction.seller)
 
     # Construct the person source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(persons_file, "Person",
-                                               persons_rate, sample_period)
+                                               persons_rate,
+                                               sample_period=sample_period,
+                                               max_records=max_records,
+                                               omit_extra=omit_extra)
                       for _ in range(person_sources)]
     # Add auction sources to the dataflow
     persons_source = env.source(source_objects,
                     name="Persons Source",
-                    placement=[
-                        source_node_id] * person_sources).set_parallelism(
+                    placement=placement["Persons Source"]).set_parallelism(
                                                               person_sources)
     persons = persons_source.partition(lambda person: person.id)
 
     # Add the join
-    id = 1 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * join_instances
-    # Add the filter
     output = auctions.join(persons,
                            JoinLogic(),  # The custom join logic (see above)
-                           name="Join Auctions with Persons",
-                           placement=mapping).set_parallelism(join_instances)
+                           name="Join Auctions-Persons",
+                           placement=placement[
+                                "Join Auctions-Persons"]).set_parallelism(
+                                                            join_instances)
 
     # Add a final custom sink to measure latency if logging is enabled
     output.sink(dg.LatencySink(), name="sink",
-                placement=mapping).set_parallelism(join_instances)
+                placement=placement["sink"]).set_parallelism(join_instances)
 
     start = time.time()
     dataflow = env.execute()

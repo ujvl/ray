@@ -2,6 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from collections import deque
 import logging
 import time
 
@@ -18,14 +19,15 @@ logging.basicConfig(level=logging.INFO)
 # replays them at given rates
 class NexmarkEventGenerator(object):
     def __init__(self, event_file, event_type, event_rate,
-                       max_records=-1, sample_period=1000):
+                       sample_period=1000, max_records=-1,
+                       omit_extra=False):
         self.event_file = event_file
         self.max_records = max_records if max_records > 0 else float("inf")
         self.event_rate = event_rate  if event_rate > 0 else float("inf")
         self.event_type = event_type  # Auction, Bid, Person
         assert event_type in ["Auction","Bid","Person"]
         self.events = []
-
+        self.omit_extra_field = omit_extra
         # Used for event replaying
         self.total_count = 0
         self.count = 0
@@ -33,7 +35,7 @@ class NexmarkEventGenerator(object):
         self.start = 0
 
     # Parses a nexmark event log and creates an event object
-    def __create_event(self, event):
+    def __create_event(self, event, omit_extra_field=False):
         obj = Bid() if self.event_type == "Bid" else Person(
                             ) if self.event_type == "Person" else Auction()
         event = event.strip()[1:-1]  # Trim spaces and brackets
@@ -43,23 +45,25 @@ class NexmarkEventGenerator(object):
             k_v = attribute.split(":")
             key = k_v[0][1:-1]
             value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
-            setattr(obj, key, value)
+            if (key != "extra") or (not omit_extra_field):
+                setattr(obj, key, value)
         return obj
 
-    # Waits
+    # Used to rate limit the source
     def __wait(self):
         while (self.total_count / (time.time() - self.start) >
                self.event_rate):
            time.sleep(0.00005)  # 50 us
 
-    # Load input file
+    # Loads input file
     def init(self):
         # Read all events from the input file
         logger.info("Loading input file...")
         records = 0
         with open(self.event_file, "r") as ef:
             for event in ef:
-                self.events.append(self.__create_event(event))
+                self.events.append(self.__create_event(event,
+                                                  self.omit_extra_field))
                 records += 1
                 if records == self.max_records:
                     break
@@ -73,8 +77,7 @@ class NexmarkEventGenerator(object):
             return None  # Exhausted
         event = self.events.pop(0)
         self.total_count += 1
-        # Wait if needed
-        self.__wait()
+        self.__wait()  # Wait if needed
         self.count += 1
         if self.count == self.period:
             self.count = 0
@@ -82,8 +85,9 @@ class NexmarkEventGenerator(object):
             event.system_time = time.time()
         return event
 
+    # Drains the source as fast as possible
     def drain(self):
-        self.event_rate = float("inf")  # Set rate to unbounded
+        self.event_rate = float("inf")  # Set rate limit to inf
         records = 0
         while self.get_next() is not None:
             records += 1

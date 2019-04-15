@@ -52,6 +52,33 @@ def get_cluster_node_ids():
                 node_ids.append(node_id)
     return node_ids
 
+# Returns the user-defined actor placement as a mapping of the
+# form operator_name -> cluster node ids (exactly one node for each instance)
+def parse_placement(placement_file, cluster_node_ids):
+    ids = {}
+    for i, node_id in enumerate(cluster_node_ids):
+        # In case the user is not aware of the actual node ids in the cluster
+        # and just uses ids in [1,N), where N is the total number of nodes
+        ids[str(i)] = node_id
+    placement = {}  # name -> cluster node ids
+    with open(placement_file, "r") as pf:
+        for line in pf:
+            name_placement = line.split(":")
+            name = name_placement[0].strip()
+            node_ids = name_placement[1].split(",")
+            node_ids = [n.strip() for n in node_ids]
+            operator_placement = []
+            for node_id in node_ids:
+                new_id = ids.setdefault(node_id, node_id)
+                operator_placement.append(new_id)
+            existing_lacement = placement.setdefault(name, operator_placement)
+            if existing_lacement != operator_placement:
+                error_message = "Looks like there are two dataflow operators"
+                error_message += " with the same name."
+                raise Exception(error_message)
+    logger.info("Found explicit placement: {}".format(placement))
+    return placement
+
 # Simulates a Ray cluster with the given configuration on a single machine.
 # Assumes a chain dataflow where all stages have the same level of parallelism
 # except sources, which can be configured arbitrarily to meet rate targets.

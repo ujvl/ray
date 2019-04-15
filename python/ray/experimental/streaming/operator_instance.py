@@ -693,9 +693,10 @@ class Join(OperatorInstance):
     """A join operator instance that joins two streams."""
 
     def __init__(self, instance_id, operator_metadata, input_gate,
-                 output_gate):
+                 output_gate, checkpoint_dir):
         OperatorInstance.__init__(self, instance_id,
-                                  operator_metadata, input_gate, output_gate)
+                                  operator_metadata, input_gate, output_gate,
+                                  checkpoint_dir)
         self.join_logic = operator_metadata.logic
         assert(self.join_logic is not None), (self.join_logic)
         self.left = operator_metadata.left_input_operator_id
@@ -737,9 +738,10 @@ class EventTimeWindow(OperatorInstance):
     """An event time window operator instance (tumbling or sliding)."""
 
     def __init__(self, instance_id, operator_metadata, input_gate,
-                 output_gate):
+                 output_gate, checkpoint_dir):
         OperatorInstance.__init__(self, instance_id,
-                                  operator_metadata, input_gate, output_gate)
+                                  operator_metadata, input_gate, output_gate,
+                                  checkpoint_dir)
         self.window_length_ms =operator_metadata.window_length_ms
         self.slide_ms = operator_metadata.slide_ms
         aggregator = operator_metadata.aggregation_logic
@@ -1101,7 +1103,8 @@ class Sink(OperatorInstance):
                                   checkpoint_dir)
         # The user-defined sink with an evict() method
         self.state = operator_metadata.sink
-        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        # TODO (john): Fixme
+        # self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
 
     # Starts the sink by calling process() repeatedly
     def start(self):

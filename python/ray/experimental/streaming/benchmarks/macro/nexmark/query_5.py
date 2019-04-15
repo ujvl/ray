@@ -28,6 +28,14 @@ parser.add_argument("--pin-processes", default=False,
 parser.add_argument("--simulate-cluster", default=False,
                     action='store_true',
                     help="simulate a Ray cluster on a single machine")
+parser.add_argument("--fetch-data", default=False,
+                    action='store_true',
+                    help="fecth data from S3")
+parser.add_argument("--omit-extra", default=False,
+                    action='store_true',
+                    help="omit extra field from events")
+parser.add_argument("--records", default=-1,
+                help="maximum number of records to replay from each source.")
 parser.add_argument("--nodes", default=1,
                     help="total number of nodes in the cluster")
 parser.add_argument("--redis-shards", default=1,
@@ -37,6 +45,8 @@ parser.add_argument("--redis-max-memory", default=10**9,
 parser.add_argument("--plasma-memory", default=10**9,
                     help="amount of memory to start plasma with")
 # Dataflow-related parameters
+parser.add_argument("--placement-file", default="",
+            help="Path to the file containing the explicit actor placement")
 parser.add_argument("--bids-file", required=True,
                     help="Path to the bids file")
 parser.add_argument("--enable-logging", default=False,
@@ -106,6 +116,10 @@ if __name__ == "__main__":
 
     num_nodes = int(args.nodes)
     simulate_cluster = bool(args.simulate_cluster)
+    fetch_data = bool(args.fetch_data)
+    omit_extra = bool(args.omit_extra)
+    max_records = int(args.records)
+    placement_file = str(args.placement_file)
     num_redis_shards = int(args.redis_shards)
     redis_max_memory = int(args.redis_max_memory)
     plasma_memory = int(args.plasma_memory)
@@ -129,6 +143,10 @@ if __name__ == "__main__":
     logger.info("== Parameters ==")
     logger.info("Number of nodes: {}".format(num_nodes))
     logger.info("Simulate cluster: {}".format(simulate_cluster))
+    logger.info("Fetch data: {}".format(fetch_data))
+    logger.info("Omit extra: {}".format(omit_extra))
+    logger.info("Maximum number of records: {}".format(max_records))
+    logger.info("Placement file: {}".format(placement_file))
     logger.info("Number of Redis shards: {}".format(num_redis_shards))
     logger.info("Max memory per Redis shard: {}".format(redis_max_memory))
     logger.info("Plasma memory: {}".format(plasma_memory))
@@ -155,16 +173,27 @@ if __name__ == "__main__":
     stage_parallelism = [window_instances,
                          window_instances]  # One sink per window instance
 
+    placement = {}  # oparator name -> node ids
     if simulate_cluster:  # Simulate a cluster with the given configuration
         utils.start_virtual_cluster(num_nodes, num_redis_shards,
                                     plasma_memory, redis_max_memory,
                                     stage_parallelism, bid_sources,
                                     pin_processes)
-    else:  # TODO (john): Connect to existing cluster
-        sys.exit("Cannot connect to existing cluster.")
-
-    num_stages = 2  # We have a source stage followed by a sliding window
-    stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+        num_stages = 2  # We have a source stage followed by a sliding window
+        stages_per_node = math.trunc(math.ceil(num_stages / num_nodes))
+        source_node_id  = utils.CLUSTER_NODE_PREFIX + "0"
+        placement["Bids Source"] = [source_node_id] * bid_sources
+        id = 1 // stages_per_node
+        window_node_id = utils.CLUSTER_NODE_PREFIX + str(id)
+        placement["Cound Bids"] = [window_node_id] * window_instances
+        placement["sink"] = [window_node_id] * window_instances
+    else:  # Connect to existing cluster
+        ray.init(redis_address="localhost:6379")
+        if not placement_file:
+            sys.exit("No actor placement specified.")
+        node_ids = utils.get_cluster_node_ids()
+        logger.info("Found {} cluster nodes.".format(len(node_ids)))
+        placement = utils.parse_placement(placement_file, node_ids)
 
     # Use pickle for BatchedQueue
     ray.register_custom_serializer(BatchedQueue, use_pickle=True)
@@ -182,33 +211,34 @@ if __name__ == "__main__":
         env.enable_tasks()
 
     watermark_interval = 1000  # 1s
-    
+
     # Construct the bid source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(bids_file, "Bid",
-                                               bids_rate, sample_period)
+                                               bids_rate,
+                                               sample_period=sample_period,
+                                               max_records=max_records,
+                                               omit_extra=omit_extra)
                       for _ in range(bid_sources)]
-    source_node_id  = utils.CLUSTER_NODE_PREFIX + "0"
+
     # Add bid sources to the dataflow
     bids_source = env.source(source_objects,
                     watermark_interval=watermark_interval,
                     name="Bids Source",
-                    placement=[source_node_id] * bid_sources).set_parallelism(
+                    placement=placement["Bids Source"]).set_parallelism(
                                                               bid_sources)
     bids = bids_source.partition(lambda bid: bid.auction)
 
-    # Add the join
-    id = 1 // stages_per_node
-    mapping = [utils.CLUSTER_NODE_PREFIX + str(id)] * window_instances
-    # Add the filter
+    # Add the window
     output = bids.event_time_window(3600000, 60000,  # 60' window, 1' slide
                         # The custom aggregation logic (see above)
                         aggregation_logic=AggregationLogic(),
-                        name="Cound Bids per Auction per Window",
-                        placement=mapping).set_parallelism(window_instances)
+                        name="Cound Bids",
+                        placement=placement["Cound Bids"]).set_parallelism(
+                                                            window_instances)
     # Add a final custom sink to measure latency if logging is enabled
     output.sink(dg.LatencySink(),
                 name="sink",
-                placement=mapping).set_parallelism(window_instances)
+                placement=placement["sink"]).set_parallelism(window_instances)
 
     start = time.time()
     dataflow = env.execute()

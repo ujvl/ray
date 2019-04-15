@@ -39,6 +39,11 @@ parser.add_argument("--queue-based", default=False,
 parser.add_argument("--fetch-data", default=False,
                     action='store_true',
                     help="fecth data from S3")
+parser.add_argument("--omit-extra", default=False,
+                    action='store_true',
+                    help="omit extra field from events")
+parser.add_argument("--records", default=-1,
+                help="maximum number of records to replay from each source.")
 parser.add_argument("--sink-instances", default=1,
                     help="the number of sink instances after the source")
 parser.add_argument("--source-type", default="auction",
@@ -66,6 +71,8 @@ if __name__ == "__main__":
     in_file = str(args.input_file)
     simulate_cluster = bool(args.simulate_cluster)
     fetch_data = bool(args.fetch_data)
+    omit_extra = bool(args.omit_extra)
+    max_records = int(args.records)
     task_based = not bool(args.queue_based)
     sink_instances = int(args.sink_instances)
     source_type = str(args.source_type)
@@ -81,6 +88,8 @@ if __name__ == "__main__":
     logger.info("Simulate cluster: {}".format(simulate_cluster))
     logger.info("Source type: {}".format(source_type))
     logger.info("Fetch data: {}".format(fetch_data))
+    logger.info("Omit extra: {}".format(omit_extra))
+    logger.info("Maximum number of records: {}".format(max_records))
     logger.info("Task-based execution: {}".format(task_based))
     logger.info("Input file: {}".format(in_file))
     logger.info("Sink instances: {}".format(sink_instances))
@@ -103,8 +112,7 @@ if __name__ == "__main__":
         utils.start_virtual_cluster(1, 1, 1000000000, 1000000000,
                                     stage_parallelism, 1,
                                     pin_processes)
-    else:
-        # Run program at the head node
+    else:  # Connect to existing ray cluster
         ray.init(redis_address="localhost:6379")
 
     # Use pickle for BatchedQueue
@@ -125,19 +133,26 @@ if __name__ == "__main__":
     source = None
 
     if source_type == "auction":  # Add the auction source
-        source = env.source(dg.NexmarkEventGenerator(in_file, "Auction", -1,
-                                                     sample_period),
+        source = env.source(dg.NexmarkEventGenerator(in_file, "Auction",
+                                                -1,
+                                                sample_period=sample_period,
+                                                max_records=max_records,
+                                                omit_extra=omit_extra),
                             name="auction",
                             placement=["Node_0"])
     elif source_type ==  "bid":  # Add the bid source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Bid", -1,
-                                                     sample_period),
+                                                sample_period=sample_period,
+                                                max_records=max_records,
+                                                omit_extra=omit_extra),
                                     name="bid",
                                     placement=["Node_0"])
     else:  # Add the person source
         assert source_type == "person"
         source = env.source(dg.NexmarkEventGenerator(in_file, "Person", -1,
-                                                     sample_period),
+                                                sample_period=sample_period,
+                                                max_records=max_records,
+                                                omit_extra=omit_extra),
                             name="person",
                             placement=["Node_0"])
     assert source is not None

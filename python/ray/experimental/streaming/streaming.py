@@ -230,21 +230,18 @@ class Environment(object):
         args = [actor_id, operator, input, output, self.checkpoint_dir]
         if operator.type == OpType.Source:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             logger.info("Placing source {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Source._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.Map:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             logger.info("Placing map {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Map._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
         elif operator.type == OpType.FlatMap:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             logger.info("Placing flatmap {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.FlatMap._remote(args=args,
                                                     kwargs=None,
@@ -255,7 +252,6 @@ class Environment(object):
         elif operator.type == OpType.Join:
             del operator.right_input
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             logger.info("Placing join {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Join._remote(args=args,
                                                     kwargs=None,
@@ -274,7 +270,6 @@ class Environment(object):
                                                     input, output)
         elif operator.type == OpType.EventTimeWindow:
                 node_id = operator.placement[instance_id]
-                args = [actor_id, operator, input, output]
                 logger.info("Placing event time window {} at {}.".format(
                                                                     actor_id,
                                                                     node_id))
@@ -293,7 +288,6 @@ class Environment(object):
                                                            self.config)
         elif operator.type == OpType.Sink:
             node_id = operator.placement[instance_id]
-            args = [actor_id, operator, input, output]
             logger.info("Placing sink {} at {}.".format(actor_id, node_id))
             actor_handle = operator_instance.Sink._remote(args=args,
                                                     kwargs=None,

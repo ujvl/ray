@@ -73,7 +73,6 @@ class Operator(object):
         # An optional mapping of operator instances with local ids in
         # [0..num_instances) to cluster nodes ids
         self.placement = placement
-        print("Placement", self.id, self.type, self.placement)
         # TODO (john): Allow partial mappings of instances to nodes
         # Do not allow empty placements for now
         assert(self.placement is not None), (self.placement)
