@@ -105,6 +105,11 @@ if __name__ == "__main__":
     logger.info("Background flush: {}".format(background_flush))
     logger.info("Pin processes: {}".format(pin_processes))
 
+    if pin_processes:
+        logger.info("Waiting for python processes to come up...")
+        time.sleep(5)  # Wait a bit for Ray to start
+        pin_processes()
+
     if fetch_data:
         logger.info("Fetching data...")
         s3 = boto3.resource('s3')
@@ -138,26 +143,31 @@ if __name__ == "__main__":
 
     if source_type == "auctions":  # Add the auction source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Auction",
-                                                -1,
+                                                -1,  # Unbounded rate
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
                             name="auctions",
+                            batch_size=max_batch_size,
                             placement=["Node_0"])
     elif source_type ==  "bids":  # Add the bid source
-        source = env.source(dg.NexmarkEventGenerator(in_file, "Bid", -1,
+        source = env.source(dg.NexmarkEventGenerator(in_file, "Bid",
+                                                -1,  # Unbounded rate
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
                                     name="bids",
+                                    batch_size=max_batch_size,
                                     placement=["Node_0"])
     else:  # Add the person source
         assert source_type == "persons"
-        source = env.source(dg.NexmarkEventGenerator(in_file, "Person", -1,
+        source = env.source(dg.NexmarkEventGenerator(in_file, "Person",
+                                                -1,  # Unbounded rate
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
                             name="persons",
+                            batch_size=max_batch_size,
                             placement=["Node_0"])
     assert source is not None
 

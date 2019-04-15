@@ -140,11 +140,32 @@ class BatchedQueue(object):
         oid[-1] = batch_offset % 2**32
         return np.ndarray.tobytes(oid)
 
+    def push_next_batch(self, records_batch, event=None):
+        if self.task_based:  # Submit a new downstream task
+            print("Batch size:", len(records_batch))
+            args = [[records_batch], self.src_operator_id,
+                                self.src_operator_id,
+                                self.checkpoint_epoch]
+            if event is not None:
+                event = str(event).encode('ascii')
+            obj_id = self.destination_actor.apply._remote(
+                    args=args,
+                    kwargs={},
+                    nondeterministic_event=event)
+            logger.debug("Flushed task %s %d, event:%s", obj_id.hex(),
+                                                self.checkpoint_epoch, event)
+
+            num_records = len(records_batch)
+            self.records_sent += num_records
+            self.records_per_task[obj_id] = num_records
+            self.task_queue.append(obj_id)
+
     def _flush_writes(self, event=None, flush_empty=False):
         # TODO: This forces a flush.
         if not self.write_buffer and not flush_empty:
             return
         if self.task_based:  # Submit a new downstream task
+            print("Batch size:", len(self.write_buffer))
             args = [[self.write_buffer], self.src_operator_id,
                                 self.src_operator_id,
                                 self.checkpoint_epoch]

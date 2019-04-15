@@ -461,6 +461,7 @@ class Environment(object):
     # TODO (john): Handle case where environment parallelism is set
     def source(self, source_object, watermark_interval=0,
                name="Source_"+_generate_uuid(),
+               batch_size=None,
                placement=None):
         source_id = _generate_uuid()
         source_stream = DataStream(self, source_id)
@@ -469,6 +470,7 @@ class Environment(object):
                                              source_object,
                                              watermark_interval,
                                              name,
+                                             batch_size=batch_size,
                                              logging=self.config.logging,
                                              placement=placement)
         return source_stream

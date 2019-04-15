@@ -233,7 +233,7 @@ if __name__ == "__main__":
         s3 = boto3.resource('s3')
         s3.meta.client.download_file('nexmark', "auctions", "auctions.data")
         s3.meta.client.download_file('nexmark', "persons", "persons.data")
-        
+
     # Total number of source instances
     num_sources = auction_sources + person_sources
 
@@ -261,6 +261,8 @@ if __name__ == "__main__":
         placement["Window Join"] = [join_node_id] * join_instances
         placement["sink"] = [join_node_id] * join_instances
     else:  # Connect to existing cluster
+        if pin_processes:
+            pin_processes()  
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")

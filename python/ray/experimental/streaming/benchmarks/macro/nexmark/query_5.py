@@ -172,7 +172,7 @@ if __name__ == "__main__":
         logger.info("Fetching data...")
         s3 = boto3.resource('s3')
         s3.meta.client.download_file('nexmark', "bids", "bids.data")
-        
+
     # Number of actors per dataflow stage
     stage_parallelism = [window_instances,
                          window_instances]  # One sink per window instance
@@ -192,6 +192,8 @@ if __name__ == "__main__":
         placement["Cound Bids"] = [window_node_id] * window_instances
         placement["sink"] = [window_node_id] * window_instances
     else:  # Connect to existing cluster
+        if pin_processes:
+            pin_processes()  
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")

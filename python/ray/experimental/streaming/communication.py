@@ -524,6 +524,66 @@ class DataOutput(object):
         if self.logging:  # Log rate
             self.__log(batch_size=1)
 
+    def _push_batch(self, record_batch, input_channel_id=None, event=None):
+        assert isinstance(record_batch, list)
+        # Simple forwarding
+        for channel in self.forward_channels:
+            # logger.debug("Actor ({},{}) pushed '{}' to channel {}.".format(
+            #    channel.src_operator_id, channel.src_instance_id, record,
+            #    channel))
+            channel.queue.push_next_batch(record_batch, event=event)
+        # Round-robin forwarding
+        for i, channels in enumerate(self.round_robin_channels):
+            channel_index = self.round_robin_indexes[i]
+            flushed = channels[channel_index].queue.push_next_batch(
+                                                                record_batch,
+                                                                event=event)
+            if flushed:  # Round-robin batches, not individual records
+                channel_index += 1
+                channel_index %= len(channels)
+                self.round_robin_indexes[i] = channel_index
+        # Hash-based shuffling by key
+        if self.shuffle_key_exists:
+            raise Exception("Shuffle doesn't work with the source")
+            key, _ = record
+            h = _hash(key)
+            for channels in self.shuffle_key_channels:
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.push_next(record, event=event)
+        elif self.shuffle_exists:  # Hash-based shuffling per destination
+            raise Exception("Shuffle doesn't work with the source")
+            h = _hash(record)
+            for channels in self.shuffle_channels:
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.push_next(record, event=event)
+        elif self.custom_partitioning_exists:
+            raise Exception("Shuffle doesn't work with the source")
+            for i, channels in enumerate(self.custom_partitioning_channels):
+                # Set the right function. In general, there might be multiple
+                # destinations, each one with a different custom partitioning
+                partitioning_fn = self.custom_partitioning_functions[i]
+                h = partitioning_fn(record)
+                num_instances = len(channels)  # Downstream instances
+                channel = channels[h % num_instances]
+                # logger.debug(
+                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                #     channel.src_operator_id, channel.src_instance_id,
+                #     record, channel))
+                channel.queue.push_next(record, event=event)
+
+        if self.logging:  # Log rate
+            self.__log(batch_size=1)
+
     # Pushes the record to the output
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'

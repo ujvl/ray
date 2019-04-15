@@ -34,6 +34,8 @@ class NexmarkEventGenerator(object):
         self.period = sample_period
         self.start = 0
 
+        self.done = False
+
     # Parses a nexmark event log and creates an event object
     def __create_event(self, event, omit_extra_field=False):
         obj = Bid() if self.event_type == "Bid" else Person(
@@ -68,6 +70,27 @@ class NexmarkEventGenerator(object):
                 if records == self.max_records:
                     break
         logger.info("Done.")
+
+    # Returns the next event
+    def get_next_batch(self, batch_size):
+        if not self.start:
+            self.start = time.time()
+        if self.total_count == len(self.events):
+            self.done = True
+        if self.done or (self.total_count >= self.max_records):
+            return None  # Exhausted
+        limit = min(len(self.events), self.total_count + batch_size)
+        event_batch = self.events[self.total_count:limit]
+        added_records = limit - self.total_count
+        self.total_count += added_records
+        self.__wait()  # Wait if needed
+        self.count += added_records
+        if self.count >= self.period:
+            self.count = 0
+            # Assign the generation timestamp
+            # to the 1st record of each batch
+            event_batch[0].system_time = time.time()
+        return event_batch
 
     # Returns the next event
     def get_next(self):

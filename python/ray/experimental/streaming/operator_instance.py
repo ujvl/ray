@@ -1060,7 +1060,7 @@ class Source(OperatorInstance):
         self.source.init()
         self.watermark_interval = operator_metadata.watermark_interval
         self.max_event_time = 0
-
+        self.batch_size = operator_metadata.batch_size
 
     def __watermark(self, record):
         event_time = record.dateTime  # TODO (john): Make this general
@@ -1073,24 +1073,54 @@ class Source(OperatorInstance):
             self.output._push(Watermark(self.max_event_time, time.time()))
             self.max_event_time = max_timestamp
 
+    def __watermark_batch(self, record_batch):
+        max_timestamp = 0
+        for record in record_batch:
+            event_time = record.dateTime  # TODO (john): Make this general
+            max_timestamp = max(event_time, self.max_event_time)
+        if (max_timestamp >=
+                self.max_event_time + self.watermark_interval):
+            # Emit watermark
+            # logger.info("Source emitting watermark {} due to {}".format(
+            #             self.max_event_time, max_timestamp))
+            self.output._push(Watermark(self.max_event_time, time.time()))
+            self.output.flush()
+            self.max_event_time = max_timestamp
+
     # Starts the source by calling get_next() repeatedly
     def start(self):
         signal.send(ActorStart(self.instance_id))
         while True:
-            record = self.source.get_next()
-            logger.debug("SOURCE %s", record)
-            if record is None:
-                self.output._flush(close=True)
-                signal.send(ActorExit(self.instance_id))
-                return
-            self.output._push(record)
-            if self.watermark_interval > 0:
-                # Check if watermark should be emitted
-                self.__watermark(record)
+            if self.batch_size is None:
+                record = self.source.get_next()
+                logger.debug("SOURCE %s", record)
+                if record is None:
+                    self.output._flush(close=True)
+                    signal.send(ActorExit(self.instance_id))
+                    return
+                self.output._push(record)
+                if self.watermark_interval > 0:
+                    # Check if watermark should be emitted
+                    self.__watermark(record)
 
-            self.num_records_seen += 1
-            # if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
-            #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+                self.num_records_seen += 1
+                # if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
+                #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+            else:
+                record_batch = self.source.get_next_batch(self.batch_size)
+                # logger.debug("SOURCE %s", len(record_batch))
+                if record_batch is None:
+                    self.output._flush(close=True)
+                    signal.send(ActorExit(self.instance_id))
+                    return
+                self.output._push_batch(record_batch)
+                if self.watermark_interval > 0:
+                    # Check if watermark should be emitted
+                    self.__watermark_batch(record_batch)
+
+                self.num_records_seen += 1
+                # if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
+                #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
 
 
 # A custom sink actor

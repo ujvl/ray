@@ -251,6 +251,7 @@ class CustomSourceOperator(Operator):
                  source_objects,
                  watermark_interval=0,
                  name="",
+                 batch_size=None,
                  logic=None,
                  num_instances=1,
                  logging=False,
@@ -265,6 +266,7 @@ class CustomSourceOperator(Operator):
                           placement)
         self.sources = source_objects
         self.watermark_interval = watermark_interval
+        self.batch_size = batch_size
 
 
 class ReadTextFileOperator(Operator):
