@@ -582,7 +582,7 @@ class DataOutput(object):
                 channel.queue.push_next(record, event=event)
 
         if self.logging:  # Log rate
-            self.__log(batch_size=1)
+            self.__log(batch_size=len(record_batch))
 
     # Pushes the record to the output
     # Each individual output queue flushes batches to plasma periodically
