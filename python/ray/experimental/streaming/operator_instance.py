@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import logging
 import math
+import msgpack
 import sys
 import time
 import types
@@ -15,6 +16,11 @@ import ray.cloudpickle as pickle
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Record
 from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
 from ray.experimental import named_actors
+
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Auction
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Bid
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Person
+from ray.experimental.streaming.benchmarks.macro.nexmark.event import Watermark
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -275,6 +281,7 @@ class OperatorInstance(ray.actor.Checkpointable):
         process_records = self.checkpoint(channel_id, checkpoint_epoch)
         records = 0
         if process_records:
+            # batches = msgpack.loads(batches)
             for batch in batches:
                 batch = self.skip_replay_batch(batch, submit_log)
                 for record in batch:
@@ -297,6 +304,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                             if len(submit_log) > 0:
                                 assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
 
+                        record = self.__event_from(record)
                         self._replay_apply(record, flush=flush)
 
                 records += len(batch)
@@ -311,11 +319,32 @@ class OperatorInstance(ray.actor.Checkpointable):
 
         return records
 
+    def __event_from(self, attibutes_dict):
+        #logger.info("Dict: {}".format(attibutes_dict))
+        #attributes_dict = {k.decode("ascii"): v for k, v in attributes_dict.items()}
+        event_type = attibutes_dict["event_type"]
+        obj = None
+        if event_type == "Auction":
+            obj = Auction()
+            obj.__dict__ = attibutes_dict
+            return a
+        elif event_type == "Bid":
+            obj = Bid()
+            obj.__dict__ = attibutes_dict
+        elif event_type == "Person":
+            obj = Person()
+            obj.__dict__ = attibutes_dict
+        else:
+            assert event_type == "Watermark"
+            obj = Person()
+            obj.__dict__ = attibutes_dict
+        return obj
 
     def log_apply(self, batches, channel_id, source_operator_id, checkpoint_epoch):
         process_records = self.checkpoint(channel_id, checkpoint_epoch)
         records = 0
         if process_records:
+            # batches = msgpack.loads(batches)
             for batch in batches:
                 for record in batch:
                     self.num_records_seen += 1
@@ -329,6 +358,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                     else:
                         # Apply the operator-specific logic. This may or may not _push
                         # a record to the downstream actors.
+                        record = self.__event_from(record)
                         self._apply(record)
 
                 records += len(batch)

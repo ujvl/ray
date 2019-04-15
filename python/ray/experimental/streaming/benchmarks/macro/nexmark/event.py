@@ -14,15 +14,17 @@ class Watermark(object):
     def __init__(self, event_time, system_time):
         self.event_time = event_time
         self.system_time = system_time
+        self.event_type = "Watermark"
 
 # An event with an event and a system time. The latter denotes when the
 # event enters the system, i.e. when it exits the data source
 class Event(object):
-    def __init__(self, event_time, system_time=None, extra=None):
+    def __init__(self, event_time, system_time=None, extra=None,
+                       event_type=None):
         self.system_time = system_time
         self.dateTime = event_time
         self.extra = extra
-        self.type = "d"
+        self.event_type = event_type
 
 # An Auction event log
 class Auction(Event):
@@ -30,7 +32,7 @@ class Auction(Event):
                        initial_bid=None, reserve=None,
                        date_time=None, expires=None, seller=None,
                        category=None, extra=None):
-        Event.__init__(self, date_time, extra)
+        Event.__init__(self, date_time, extra, event_type="Auction")
         self.id = id
         self.itemName = item_name
         self.description = description
@@ -53,7 +55,7 @@ class Auction(Event):
 class Bid(Event):
     def __init__(self, auction=None, bidder=None,
                        price=None, date_time=None, extra=None):
-        Event.__init__(self, date_time, extra)
+        Event.__init__(self, date_time, extra, event_type="Bid")
         self.auction = auction
         self.bidder = bidder
         self.price = price
@@ -68,7 +70,7 @@ class Bid(Event):
 class Person(Event):
     def __init__(self, id=None, name=None, email=None, credit_card=None,
                        city=None, state=None, date_time=None, extra=None):
-        Event.__init__(self, date_time, extra)
+        Event.__init__(self, date_time, extra, event_type="Person")
         self.id = id
         self.name = name
         self.emailAddress = email

@@ -49,7 +49,7 @@ class NexmarkEventGenerator(object):
             value = int(k_v[1]) if k_v[1][0] != "\"" else str(k_v[1])
             if (key != "extra") or (not omit_extra_field):
                 setattr(obj, key, value)
-        return obj
+        return obj.__dict__
 
     # Used to rate limit the source
     def __wait(self):
