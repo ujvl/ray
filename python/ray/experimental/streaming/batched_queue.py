@@ -159,6 +159,8 @@ class BatchedQueue(object):
             self.records_sent += num_records
             self.records_per_task[obj_id] = num_records
             self.task_queue.append(obj_id)
+            self._wait_for_task_reader()
+            self.write_batch_offset += len(records_batch) / self.batch_max_size
 
     def _flush_writes(self, event=None, flush_empty=False):
         # TODO: This forces a flush.
