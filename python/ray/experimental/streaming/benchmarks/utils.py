@@ -58,7 +58,7 @@ def parse_placement(placement_file, cluster_node_ids):
     ids = {}
     for i, node_id in enumerate(cluster_node_ids):
         # In case the user is not aware of the actual node ids in the cluster
-        # and just uses ids in [1,N), where N is the total number of nodes
+        # and just uses ids in [0,N), where N is the total number of nodes
         ids[str(i)] = node_id
     placement = {}  # name -> cluster node ids
     with open(placement_file, "r") as pf:
@@ -138,7 +138,6 @@ def start_ray_simple(num_nodes, num_redis_shards, plasma_memory,
         node_actors = 0
 
     # Start ray
-    # localhost:6379
     ray.init(redis_address=cluster.redis_address, log_to_driver=True)
 
     if pin:  # Pin python processes to CPU cores (Linux only)

@@ -33,6 +33,8 @@ parser.add_argument("--pin-processes", default=False,
                     help="whether to pin python processes to cores or not")
 parser.add_argument("--input-file", required=True,
                     help="path to the event file")
+parser.add_argument("--dump-file", default="",
+                    help="a file to dump the chrome timeline")
 parser.add_argument("--queue-based", default=False,
                     action='store_true',
                     help="queue-based execution")
@@ -69,6 +71,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     in_file = str(args.input_file)
+    dump_filename = str(args.dump_file)
     simulate_cluster = bool(args.simulate_cluster)
     fetch_data = bool(args.fetch_data)
     omit_extra = bool(args.omit_extra)
@@ -92,6 +95,7 @@ if __name__ == "__main__":
     logger.info("Maximum number of records: {}".format(max_records))
     logger.info("Task-based execution: {}".format(task_based))
     logger.info("Input file: {}".format(in_file))
+    logger.info("Dump file: {}".format(dump_filename))
     logger.info("Sink instances: {}".format(sink_instances))
     logger.info("Latency sample period: {}".format(sample_period))
     logger.info("Max queue size: {}".format(max_queue_size))
@@ -184,5 +188,9 @@ if __name__ == "__main__":
             "No latencies found (maybe the sample period is too large?)")
 
     logger.info("Elapsed time: {}".format(time.time() - start))
+
+    # Dump timeline
+    if dump_filename:
+        ray.global_state.chrome_tracing_dump(dump_filename)
 
     utils.shutdown_ray(sleep=2)
