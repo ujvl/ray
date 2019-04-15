@@ -142,14 +142,14 @@ if __name__ == "__main__":
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
-                            name="auction",
+                            name="auctions",
                             placement=["Node_0"])
     elif source_type ==  "bids":  # Add the bid source
         source = env.source(dg.NexmarkEventGenerator(in_file, "Bid", -1,
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
-                                    name="bid",
+                                    name="bids",
                                     placement=["Node_0"])
     else:  # Add the person source
         assert source_type == "persons"
@@ -157,7 +157,7 @@ if __name__ == "__main__":
                                                 sample_period=sample_period,
                                                 max_records=max_records,
                                                 omit_extra=omit_extra),
-                            name="person",
+                            name="persons",
                             placement=["Node_0"])
     assert source is not None
 
