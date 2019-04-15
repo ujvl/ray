@@ -1089,8 +1089,8 @@ class Source(OperatorInstance):
                 self.__watermark(record)
 
             self.num_records_seen += 1
-            if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
-                self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
+            # if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
+            #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
 
 
 # A custom sink actor
