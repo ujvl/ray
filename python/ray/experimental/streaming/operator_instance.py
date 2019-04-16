@@ -347,9 +347,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             # batches = msgpack.loads(batches)
             for batch in batches:
                 for record in batch:
-
                     self.num_records_seen += 1
-
                     if record is None:
                         if self.input._close_channel(channel_id):
                             logger.debug("Closing channel %s", channel_id)
@@ -357,7 +355,6 @@ class OperatorInstance(ray.actor.Checkpointable):
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
                     else:
-                        continue
                         # Apply the operator-specific logic. This may or may not _push
                         # a record to the downstream actors.
                         #record = self.__event_from(record)
