@@ -304,7 +304,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                             if len(submit_log) > 0:
                                 assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
 
-                        record = self.__event_from(record)
+                        #record = self.__event_from(record)
                         self._replay_apply(record, flush=flush)
 
                 records += len(batch)
@@ -358,7 +358,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                     else:
                         # Apply the operator-specific logic. This may or may not _push
                         # a record to the downstream actors.
-                        record = self.__event_from(record)
+                        #record = self.__event_from(record)
                         self._apply(record)
 
                 records += len(batch)

@@ -119,7 +119,7 @@ class NexmarkEventGenerator(object):
 
 # Used to measure per-record processing time in nexmark queries
 def compute_elapsed_time(record):
-    generation_time = record.system_time
+    generation_time = record["system_time"]
     if generation_time is not None:
         # TODO (john): Clock skew might distort elapsed time
         return [time.time() - generation_time]
