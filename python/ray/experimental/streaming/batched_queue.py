@@ -162,6 +162,7 @@ class BatchedQueue(object):
             self.write_batch_offset += (num_records / self.max_batch_size)
             self._wait_for_task_reader()
             self.last_flush_time = time.time()
+            return True
 
     def _flush_writes(self, event=None, flush_empty=False):
         # TODO: This forces a flush.
