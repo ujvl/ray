@@ -134,6 +134,7 @@ class LatencySink(object):
 
     # Evicts next record
     def evict(self, record):
+        print("Hello")
         if isinstance(record, Watermark):
             return  # Ignore watermarks
         self.state.extend(self.logic(record))

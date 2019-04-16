@@ -143,7 +143,7 @@ class BatchedQueue(object):
 
     def push_next_batch(self, record_batch, event=None):
         if self.task_based:  # Submit a new downstream task
-            args = [[record_batch], self.src_operator_id,
+            args = [[record_batch], self.channel_id,
                                 self.src_operator_id,
                                 self.checkpoint_epoch]
             if event is not None:
