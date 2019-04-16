@@ -347,6 +347,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             # batches = msgpack.loads(batches)
             for batch in batches:
                 for record in batch:
+                    continue
                     self.num_records_seen += 1
 
                     if record is None:
