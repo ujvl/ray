@@ -90,11 +90,11 @@ def dollar_to_euro(price_in_dollars):
     return price_in_dollars * 0.9
 
 def map_function(bid):
-    bid.price = dollar_to_euro(bid.price)
-    record = Record(auction=bid.auction, bidder=bid.bidder,
-               price=bid.price, date_time=bid.dateTime,
-               system_time=bid.system_time)
-    return record
+    bid["price"] = dollar_to_euro(bid["price"])
+    # record = Record(auction=bid.auction, bidder=bid.bidder,
+    #            price=bid.price, date_time=bid.dateTime,
+    #            system_time=bid.system_time)
+    return bid
 
 
 if __name__ == "__main__":
@@ -213,6 +213,7 @@ if __name__ == "__main__":
     # Add sources to the dataflow
     bid_source = env.source(source_objects,
                     name="Bids Source",
+                    batch_size=max_batch_size,
                     placement=placement["Bids Source"]).set_parallelism(
                                                                   num_sources)
     # Add the mapper
