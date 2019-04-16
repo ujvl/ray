@@ -649,7 +649,7 @@ class FlatMap(OperatorInstance):
 
     # Task-based flatmap execution on a set of batches
     def _apply(self, record):
-        logger.debug("FLATMAP %s", record)
+        # logger.debug("FLATMAP %s", record)
         self.output._push_all(self.flatmap_fn(record), event=self.num_records_seen)
 
     def _replay_apply(self, record, flush=False):
@@ -713,7 +713,7 @@ class Union(OperatorInstance):
 
     # Task-based union execution on a set of batches
     def _apply(self, record):
-        logger.debug("UNION %s", record)
+        # logger.debug("UNION %s", record)
         self.output._push(record, event=self.num_records_seen)
 
     def _replay_apply(self, record, flush=False):
@@ -1125,7 +1125,7 @@ class Source(OperatorInstance):
         while True:
             if self.batch_size is None:
                 record = self.source.get_next()
-                logger.debug("SOURCE %s", record)
+                # logger.debug("SOURCE %s", record)
                 if record is None:
                     self.output._flush(close=True)
                     signal.send(ActorExit(self.instance_id))
@@ -1181,7 +1181,7 @@ class Sink(OperatorInstance):
 
     # Task-based sink execution on a set of batches
     def _apply(self, record):
-        logger.debug("SINK %s", record)
+        # logger.debug("SINK %s", record)
         self.state.evict(record)
 
     def _replay_apply(self, record, flush=False):

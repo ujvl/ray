@@ -116,28 +116,19 @@ class NexmarkEventGenerator(object):
             records += 1
         return records
 
-
-# Used to measure per-record processing time in nexmark queries
-def compute_elapsed_time(record):
-    generation_time = record["system_time"]
-    if generation_time is not None:
-        # TODO (john): Clock skew might distort elapsed time
-        return [time.time() - generation_time]
-    else:
-        return []
-
 # A custom sink used to measure processing latency
 class LatencySink(object):
     def __init__(self):
         self.state = []
-        self.logic = compute_elapsed_time
 
     # Evicts next record
     def evict(self, record):
-        print("Hello")
         if isinstance(record, Watermark):
             return  # Ignore watermarks
-        self.state.extend(self.logic(record))
+        generation_time = record["system_time"]
+        if generation_time is not None:
+            # TODO (john): Clock skew might distort elapsed time
+            self.state.append(time.time() - generation_time)
 
     # Closes the sink
     def close(self):
