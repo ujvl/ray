@@ -248,7 +248,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             for task_id in next_task_ids:
                 task = ray.global_state.task_table(task_id=task_id)
                 if task and task["ExecutionSpec"]["NumExecutions"] >= 1:
-                    logger.debug("REPLAY: executed task %s", task_id.hex())
+                    # logger.debug("REPLAY: executed task %s", task_id.hex())
                     execute = True
                     break
 
@@ -261,7 +261,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             else:
                 num_skip_records = len(batch)
                 flush = False
-            logger.debug("REPLAY: skipping: %d, seen: %d, num_records: %d", num_skip_records, self.num_records_seen, len(batch))
+            # logger.debug("REPLAY: skipping: %d, seen: %d, num_records: %d", num_skip_records, self.num_records_seen, len(batch))
             assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
 
             num_records = len(batch)
@@ -270,7 +270,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             self.num_records_seen += num_skipped
 
             if flush:
-                logger.debug("REPLAY: skipping submit after %d", self.num_records_seen)
+                # logger.debug("REPLAY: skipping submit after %d", self.num_records_seen)
                 submit_log.pop(0)
                 # Force a flush, even if the buffer is empty.
                 self.output._flush(flush_empty=True)
@@ -289,7 +289,7 @@ class OperatorInstance(ray.actor.Checkpointable):
 
                     if record is None:
                         if self.input._close_channel(channel_id):
-                            logger.debug("Closing channel %s", channel_id)
+                            # logger.debug("Closing channel %s", channel_id)
                             self.output._flush(close=True)
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
@@ -299,7 +299,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                         flush = False
                         if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
                             flush = True
-                            logger.debug("REPLAY: submit after %d", self.num_records_seen)
+                            # logger.debug("REPLAY: submit after %d", self.num_records_seen)
                             submit_log.pop(0)
                             if len(submit_log) > 0:
                                 assert submit_log[0] != self.num_records_seen, "Flushing a record to multiple channels at once is not yet supported"
@@ -312,7 +312,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             self.checkpoint_buffer.append((batches, channel_id, source_operator_id, checkpoint_epoch))
 
         if self._should_checkpoint:
-            logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
+            # logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
             if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
                 submit_log.pop(0)
                 self.output._flush(flush_empty=True)
@@ -350,7 +350,7 @@ class OperatorInstance(ray.actor.Checkpointable):
                     self.num_records_seen += 1
                     if record is None:
                         if self.input._close_channel(channel_id):
-                            logger.debug("Closing channel %s", channel_id)
+                            # logger.debug("Closing channel %s", channel_id)
                             self.output._flush(close=True)
                             signal.send(ActorExit(self.instance_id))
                             records += len(batch)
@@ -365,7 +365,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             self.checkpoint_buffer.append((batches, channel_id, source_operator_id, checkpoint_epoch))
 
         if self._should_checkpoint:
-            logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
+            # logger.debug("Flushing channel for checkpoint %d", self.checkpoint_epoch)
             self.output._flush(event=self.num_records_seen)
 
         return records
@@ -380,17 +380,17 @@ class OperatorInstance(ray.actor.Checkpointable):
             # This is the first checkpoint marker for the new checkpoint
             # interval that we've received so far.
             if len(self.checkpoints_pending) == 0:
-                logger.debug("Starting checkpoint %d", self.checkpoint_epoch)
+                # logger.debug("Starting checkpoint %d", self.checkpoint_epoch)
                 self.checkpoints_pending = set(self.upstream_ids)
             # Record the checkpoint marker received from this upstream actor's
             # operator_id.
-            logger.debug("Received checkpoint marker %d from %s", checkpoint_epoch, upstream_id)
+            # logger.debug("Received checkpoint marker %d from %s", checkpoint_epoch, upstream_id)
             self.checkpoints_pending.discard(upstream_id)
-            logger.debug("XXX PENDING %s", self.checkpoints_pending)
+            # logger.debug("XXX PENDING %s", self.checkpoints_pending)
             # If we've received all checkpoint markers from all upstream
             # actors, then take the checkpoint.
             if len(self.checkpoints_pending) == 0:
-                logger.debug("Received all checkpoint markers, taking checkpoint for interval %d", self.checkpoint_epoch)
+                # logger.debug("Received all checkpoint markers, taking checkpoint for interval %d", self.checkpoint_epoch)
                 self._should_checkpoint = True
             process_record = False
         else:
@@ -404,7 +404,7 @@ class OperatorInstance(ray.actor.Checkpointable):
 
     def save_checkpoint(self, actor_id, checkpoint_id):
         with ray.profiling.profile("save_checkpoint"):
-            logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
+            # logger.debug("Saving checkpoint %d ID:%s", self.checkpoint_epoch, checkpoint_id.hex())
             assert len(self.checkpoints_pending) == 0
             checkpoint = {
                     "state": getattr(self, 'state', None),
@@ -441,7 +441,7 @@ class OperatorInstance(ray.actor.Checkpointable):
         if not self.flush_checkpoint_buffer:
             return
         self.flush_checkpoint_buffer = False
-        logger.debug("Pushing checkpoint buffer %d", self.checkpoint_epoch)
+        # logger.debug("Pushing checkpoint buffer %d", self.checkpoint_epoch)
 
         # Make a copy of the checkpoint buffer and try to process them again.
         checkpoint_buffer = self.checkpoint_buffer[:]
@@ -452,11 +452,11 @@ class OperatorInstance(ray.actor.Checkpointable):
         else:
             for batches, channel_id, _source_operator_id, checkpoint_epoch in checkpoint_buffer:
                 self.log_apply(batches, channel_id, _source_operator_id, checkpoint_epoch)
-        logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
+        # logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         with ray.profiling.profile("load_checkpoint"):
-            logger.debug("Available checkpoints %s", ','.join(
+            # logger.debug("Available checkpoints %s", ','.join(
                 [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
 
             ## Get the latest checkpoint that completed.
@@ -488,7 +488,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             self.flush_checkpoint_buffer = True
 
             checkpoint_id = checkpoint["checkpoint_id"]
-            logger.debug("Reloaded checkpoint %d ID:%s", latest_checkpoint_interval, checkpoint_id.hex())
+            # logger.debug("Reloaded checkpoint %d ID:%s", latest_checkpoint_interval, checkpoint_id.hex())
             return checkpoint_id
 
     def checkpoint_expired(self, actor_id, checkpoint_id):
@@ -1276,10 +1276,10 @@ class CheckpointTracker(object):
         self.num_sinks = num_sinks
         self.sinks_pending = set()
         self.checkpoint_epoch = 0
-        logger.debug("CheckpointTracker: expects notifications from %d sinks", self.num_sinks)
+        # logger.debug("CheckpointTracker: expects notifications from %d sinks", self.num_sinks)
 
     def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
-        logger.debug("CheckpointTracker: Checkpoint %d complete from %s", checkpoint_epoch, sink_key)
+        # logger.debug("CheckpointTracker: Checkpoint %d complete from %s", checkpoint_epoch, sink_key)
         assert checkpoint_epoch == self.checkpoint_epoch + 1
         assert sink_key not in self.sinks_pending, (sink_key, self.sinks_pending)
 
