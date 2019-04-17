@@ -103,8 +103,8 @@ class AggregationLogic(object):
             if auction == bid.auction:
                 # logger.info("Old count: {}:{}".format(auction,old_value))
                 updated_state = (auction, old_value+1)
+                old_state.pop(i)  # Remove old
                 break
-        old_state.pop(i)  # Remove old
         assert updated_state is not None
         # logger.info("New count: {}:{}".format(updated_state[0],
         #                                       updated_state[1]))
