@@ -457,7 +457,7 @@ class OperatorInstance(ray.actor.Checkpointable):
     def load_checkpoint(self, actor_id, available_checkpoints):
         with ray.profiling.profile("load_checkpoint"):
             # logger.debug("Available checkpoints %s", ','.join(
-                [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
+                # [checkpoint.checkpoint_id.hex() for checkpoint in available_checkpoints]))
 
             ## Get the latest checkpoint that completed.
             checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
