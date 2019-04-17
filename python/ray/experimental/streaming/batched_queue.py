@@ -114,6 +114,7 @@ class BatchedQueue(object):
         # any output record to this channel for a time period equal to the
         # timeout
         self.last_flush_time = 0.0  # Used to flush based on a timeout
+        self.checkpoint_epoch = 0
 
     def save(self):
         assert len(self.write_buffer) == 0, len(self.write_buffer)
