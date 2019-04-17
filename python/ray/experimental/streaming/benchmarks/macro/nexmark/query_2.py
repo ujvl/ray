@@ -89,7 +89,8 @@ parser.add_argument("--max-throughput", default="inf",
 # Used to filter auctions based on their ID. A filter could be used instead
 def flatmap_function(bid):
     if (bid["auction"] == "1007" or bid["auction"] == "1020" or bid["auction"] == "2001" or
-        bid["auction"] == "2019" or bid["auction"] == "2087") or bid["system_time"] is not None:
+        bid["auction"] == "2019" or bid["auction"] == "2087") or (
+        bid["system_time"] is not None):  # Use these bids to measure latency
         # record = Record(auction=bid.auction, price=bid.price,
         #                 system_time=bid.system_time)
         return [bid]

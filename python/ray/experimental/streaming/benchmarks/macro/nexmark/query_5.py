@@ -102,18 +102,6 @@ class AggregationLogic(object):
     # Updates number of bids per auction with the given record
     def update(self, old_state, bid):
         old_state[bid] += 1
-        #updated_state = None  # Tuples are immutable, so create a new one
-        #for i, state_object in enumerate(old_state):
-        #    auction, old_value = state_object
-        #    if auction == bid["auction"]:
-        #        # logger.info("Old count: {}:{}".format(auction,old_value))
-        #        updated_state = (auction, old_value+1)
-        #        break
-        #old_state.pop(i)  # Remove old
-        #assert updated_state is not None
-        ## logger.info("New count: {}:{}".format(updated_state[0],
-        ##                                       updated_state[1]))
-        #old_state.append(updated_state)
 
 if __name__ == "__main__":
 
