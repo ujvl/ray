@@ -180,7 +180,7 @@ if __name__ == "__main__":
         placement["sink"] = [map_node_id] * map_instances
     else:  # Connect to existing cluster
         if pin_processes:
-            pin_processes()
+            utils.pin_processes()
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")

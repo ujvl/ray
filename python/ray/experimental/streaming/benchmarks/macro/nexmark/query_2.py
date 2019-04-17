@@ -179,7 +179,7 @@ if __name__ == "__main__":
         placement["sink"] = [flatmap_node_id] * flatmap_instances
     else:  # Connect to existing cluster
         if pin_processes:
-            pin_processes()
+            utils.pin_processes()
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")
@@ -213,6 +213,7 @@ if __name__ == "__main__":
     # Add sources to the dataflow
     bid_source = env.source(source_objects,
                     name="Bids Source",
+                    batch_size=max_batch_size,
                     placement=placement["Bids Source"]).set_parallelism(
                                                                   num_sources)
     # Add the flatmap
