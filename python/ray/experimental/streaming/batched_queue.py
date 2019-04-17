@@ -106,6 +106,7 @@ class BatchedQueue(object):
         # Used to simulate backpressure in task-based execution
         self.records_sent = 0
         self.records_per_task = {}
+        self.num_batches_sent = 0
 
         # TODO (john): Use a buffer pool and a separate thread for flushing.
         # Currently, the timeout is checked within put_next(). This means
@@ -148,20 +149,29 @@ class BatchedQueue(object):
                                 self.checkpoint_epoch]
             if event is not None:
                 event = str(event).encode('ascii')
+
+            num_return_vals = 0
+            if self.num_batches_sent % self.max_size_batches == 0:
+                num_return_vals = 1
+
             obj_id = self.destination_actor.apply._remote(
                     args=args,
                     kwargs={},
+                    num_return_vals=num_return_vals,
                     nondeterministic_event=event)
             # logger.debug("Flushed task %s %d, event:%s", obj_id.hex(),
             #                                     self.checkpoint_epoch, event)
 
             num_records = len(record_batch)
             self.records_sent += num_records
-            self.records_per_task[obj_id] = num_records
-            self.task_queue.append(obj_id)
+            #self.records_per_task[obj_id] = num_records
+            if obj_id:
+                self.task_queue.append(obj_id)
             self.write_batch_offset += (num_records / self.max_batch_size)
             self._wait_for_task_reader()
             self.last_flush_time = time.time()
+
+            self.num_batches_sent += 1
             return True
 
     def _flush_writes(self, event=None, flush_empty=False):
@@ -174,16 +184,24 @@ class BatchedQueue(object):
                                 self.checkpoint_epoch]
             if event is not None:
                 event = str(event).encode('ascii')
+
+            num_return_vals = 0
+            if self.num_batches_sent % self.max_size_batches == 0:
+                num_return_vals = 1
+
             obj_id = self.destination_actor.apply._remote(
                     args=args,
                     kwargs={},
+                    num_return_vals=num_return_vals,
                     nondeterministic_event=event)
             # logger.debug("Flushed task %s %d, event:%s", obj_id.hex(), self.checkpoint_epoch, event)
 
             num_records = len(self.write_buffer)
             self.records_sent += num_records
-            self.records_per_task[obj_id] = num_records
-            self.task_queue.append(obj_id)
+            #self.records_per_task[obj_id] = num_records
+            if obj_id:
+                self.task_queue.append(obj_id)
+            self.num_batches_sent += 1
         else:  # Flush batch to plasma
             # with ray.profiling.profile("flush_batch"):
             batch_id = self._batch_id(self.write_batch_offset)
@@ -210,24 +228,24 @@ class BatchedQueue(object):
         """Checks for backpressure by the downstream task-based reader."""
         if self.max_size <= 0:  # Unlimited queue
             return
-        if len(self.task_queue) <= self.max_size_batches:
+        if len(self.task_queue) <= 1:
             return  # Hasn't exceeded max size
         # Check pending downstream tasks
         finished_tasks, self.task_queue = ray.wait(
                 self.task_queue,
                 num_returns=len(self.task_queue),
                 timeout=0)
-        for task_id in finished_tasks:
-            self.records_sent -= self.records_per_task.pop(task_id)
-        while self.records_sent > self.max_size:
+        #for task_id in finished_tasks:
+        #    self.records_sent -= self.records_per_task.pop(task_id)
+        while len(self.task_queue) > 1:
             # logger.debug("Waiting for ({},{}) to catch up".format(
             #              self.dst_operator_id, self.dst_instance_id))
-            finished_tasks, self.task_queue = ray.wait(
+            _, self.task_queue = ray.wait(
                     self.task_queue,
                     num_returns=len(self.task_queue),
                     timeout=0.01)
-            for task_id in finished_tasks:
-                self.records_sent -= self.records_per_task.pop(task_id)
+            #for task_id in finished_tasks:
+            #    self.records_sent -= self.records_per_task.pop(task_id)
 
     def _wait_for_reader(self):
         """Checks for backpressure by the downstream reader."""
