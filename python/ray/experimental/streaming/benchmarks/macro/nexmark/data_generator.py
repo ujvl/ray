@@ -131,7 +131,7 @@ class LatencySink(object):
 
     # Evicts next record
     def evict(self, record):
-        if isinstance(record, Watermark):
+        if record["event_type"] == "Watermark":
             return  # Ignore watermarks
         generation_time = record["system_time"]
         if generation_time is not None:

@@ -468,7 +468,7 @@ class DataOutput(object):
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
     def _push(self, record, input_channel_id=None, event=None):
-        if isinstance(record, Watermark):
+        if record['event_type'] == 'Watermark':
             self.__forward_watermark(record, input_channel_id)
             return
         # Simple forwarding
@@ -589,7 +589,7 @@ class DataOutput(object):
     # Each individual output queue flushes batches to plasma periodically
     # based on 'batch_max_size' and 'batch_max_time'
     def _replay_push(self, record, input_channel_id=None, flush=False):
-        if isinstance(record, Watermark):
+        if record['event_type'] == 'Watermark':
             self.__forward_watermark(record, input_channel_id)
             return
         # Simple forwarding
@@ -659,17 +659,17 @@ class DataOutput(object):
         # logger.info("Previous watermark: {}".format(
         #             self.last_emitted_watermark))
         if input_channel_id is None: # Must be a source
-            self.last_emitted_watermark = watermark.event_time
+            self.last_emitted_watermark = watermark['event_time']
             # logger.info("Source watermark: {}".format(
             #             self.last_emitted_watermark))
             self.__broadcast(watermark)
         else:  # It is an operator with at least one input
-            self.input_channels[input_channel_id] = watermark.event_time
+            self.input_channels[input_channel_id] = watermark['event_time']
             # Find minimum watermark
-            minimum_watermark = min(w for w in self.input_channels.values())
+            minimum_watermark = min(self.input_channels.values())
             if minimum_watermark > self.last_emitted_watermark:  # Forward
                 self.last_emitted_watermark = minimum_watermark
-                watermark.event_time = minimum_watermark
+                watermark['event_time'] = minimum_watermark
                 # logger.info("Emitting watermark: {}".format(
                 #             self.last_emitted_watermark))
                 self.__broadcast(watermark)
@@ -698,7 +698,7 @@ class DataOutput(object):
         assert isinstance(records, list)
         # Forward records
         for record in records:
-            if isinstance(record, Watermark):
+            if record['event_type'] == "Watermark":
                 self.__forward_watermark(record, input_channel_id)
                 return
             for channel in self.forward_channels:
@@ -718,7 +718,7 @@ class DataOutput(object):
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == "Watermark":
                     self.__forward_watermark(record, input_channel_id)
                     return
                 key, _ = record
@@ -733,7 +733,7 @@ class DataOutput(object):
                     channel.queue.push_next(record, event=event)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == 'Watermark':
                     self.__forward_watermark(record, input_channel_id)
                     return
                 h = _hash(record)
@@ -747,7 +747,7 @@ class DataOutput(object):
                     channel.queue.push_next(record, event=event)
         elif self.custom_partitioning_exists:
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == 'Watermark':
                     self.__forward_watermark(record, input_channel_id)
                     return
                 for i, channels in enumerate(
@@ -775,7 +775,7 @@ class DataOutput(object):
         assert isinstance(records, list)
         # Forward records
         for record in records:
-            if isinstance(record, Watermark):
+            if record['event_type'] == 'Watermark':
                 self.__forward_watermark(record, input_channel_id)
                 return
             for channel in self.forward_channels:
@@ -798,7 +798,7 @@ class DataOutput(object):
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == 'Watermark':
                     self.__forward_watermark(record, input_channel_id)
                     return
                 key, _ = record
@@ -815,7 +815,7 @@ class DataOutput(object):
                         channel.queue._flush_writes()
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == 'Watermark':
                     self.__forward_watermark(record, input_channel_id)
                     return
                 h = _hash(record)
@@ -831,7 +831,7 @@ class DataOutput(object):
                         channel.queue._flush_writes()
         elif self.custom_partitioning_exists:
             for record in records:
-                if isinstance(record, Watermark):
+                if record['event_type'] == 'Watermark':
                     self.__forward_watermark(record, input_channel_id)
                     return
                 for i, channels in enumerate(
@@ -863,7 +863,9 @@ class DataOutput(object):
         self.records += batch_size
         if self.records >= self.period or (
            force is True and self.records > 0):
-            self.rates.append(self.records / (time.time() - self.start))
+            rate = self.records / (time.time() - self.start)
+            self.rates.append(rate)
+            logger.info("THROUGHPUT:%f", rate)
             self.records = 0
             self.start = time.time()
 

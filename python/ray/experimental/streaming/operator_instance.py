@@ -336,7 +336,7 @@ class OperatorInstance(ray.actor.Checkpointable):
             obj.__dict__ = attibutes_dict
         else:
             assert event_type == "Watermark"
-            obj = Person()
+            obj = Watermark()
             obj.__dict__ = attibutes_dict
         return obj
 
@@ -737,7 +737,7 @@ class Join(OperatorInstance):
         sys.exit("Queue-based join is not supported yet.")
 
     # Task-based join execution on a set of batches
-    def apply(self, batches, channel_id, source_operator_id):
+    def apply(self, batches, channel_id, source_operator_id, checkpoint_epoch):
         # Distringuish between left and right input and set the right logic
         # We expect this to be as cheap as setting a pointer
         if source_operator_id == self.left:
@@ -745,21 +745,13 @@ class Join(OperatorInstance):
         else:
             assert source_operator_id == self.right
             self.process_logic = self.join_logic.process_right
-        records = 0
-        for batch in batches:
-            for record in batch:
-                if record is None:
-                    if self.input._close_channel(channel_id):
-                        self.output._flush(close=True)
-                        signal.send(ActorExit(self.instance_id))
-                        records += len(batch)
-                    return records
-                if isinstance(record, Watermark):  # It is a watermark
-                    self.output._push(record)
-                else:
-                    self.output._push_all(self.process_logic(record))
-            records += len(batch)
-        return records
+        super().apply(batches, channel_id, source_operator_id, checkpoint_epoch)
+
+    def _apply(self, record):
+        if record["event_type"] == "Watermark":  # It is a watermark
+            self.output._push(record)
+        else:
+            self.output._push_all(self.process_logic(record))
 
 # Event-time window actor
 @ray.remote
@@ -776,14 +768,15 @@ class EventTimeWindow(OperatorInstance):
         aggregator = operator_metadata.aggregation_logic
         self.aggregator = aggregator  # The user-defined aggregator
         # Assignment of records to windows is done based on the type of state
-        self.__assign = self.__assigner_2 if aggregator else self.__assigner_1
+        #self.__assign = self.__assigner_2 if aggregator else self.__assigner_1
+        self.__assign = self.__assigner_3
         # Local state is organized beased on whether the user has given an
         # aggregation function or not. In the former case, state is a list
         # of widnow ids, each one associated with a list of tuples. This is
         # allows for fast pre-aggregation. In the latter case, state is a list
         # of tuples, each one associated with a list of window ids. This is
         # better as we avoid replicating (possibly large) records to windows
-        self.state = []
+        self.state = {}
         # An (optional) offset that serves as the min window (bucket) id
         self.offset = operator_metadata.offset
         # Range of window ids (used to find the windows a records belongs to)
@@ -794,10 +787,27 @@ class EventTimeWindow(OperatorInstance):
             # Keep the last seen watermark from each input channel
             self.output.input_channels[channel.id] = 0
 
+    def collect_expired_windows(self, watermark):
+        result = []
+        event_time = watermark['event_time']
+        min_open_window = (event_time // self.slide_ms) - self.range + 1
+        indexes = []
+        for w, window in self.state.items():
+            if w < min_open_window: # Window has expired
+                for record in window:
+                    record['window'] = w
+                    record['system_time'] = watermark['system_time']
+                result += window
+                indexes.append(w)
+                logger.debug("XXX Firing window %d on time %d", w, event_time)
+        for i in indexes:
+            self.state.pop(i)
+        return result
+    
     # Collects windows that have expired
     def __collect_expired_windows(self, watermark):
         result = []
-        event_time = watermark.event_time
+        event_time = watermark['event_time']
         min_open_window = (event_time // self.slide_ms) - self.range + 1
         # logger.info("Min window: {}".format(min_open_window))
         if self.aggregator is not None:  # window id -> state
@@ -805,7 +815,7 @@ class EventTimeWindow(OperatorInstance):
             for i, (window, state) in enumerate(self.state):
                 if window < min_open_window: # Window has expired
                     record = Record(content=(window, state),
-                                    system_time=watermark.system_time)
+                                    system_time=watermark['system_time']).__dict__
                     result.append(record)
                     indexes.append(i)
             for window_index in indexes:  # Update state
@@ -816,7 +826,7 @@ class EventTimeWindow(OperatorInstance):
                 for j, window in enumerate(windows):
                     if window < min_open_window:  # Window has expired
                         r = Record(content=(window, record),
-                                   system_time=watermark.system_time)
+                                   system_time=watermark['system_time']).__dict__
                         result.append(r)
                         indexes.append(j)
                 for window_index in indexes:  # Update state
@@ -826,7 +836,7 @@ class EventTimeWindow(OperatorInstance):
     # Finds the windows a record belongs to
     def __find_windows(self, record):
         windows = []
-        event_time = record.dateTime
+        event_time = record["dateTime"]
         slot = -1
         slot = event_time // self.slide_ms
         window_end = (slot * self.slide_ms) + self.window_length_ms
@@ -837,7 +847,7 @@ class EventTimeWindow(OperatorInstance):
         # TODO (john): Check if this is the correct semantics for offset
         min_window_id = min if min >= self.offset else self.offset
         max_window_id = slot if slot >= self.offset else self.offset
-        windows = [i for i in range(min_window_id, max_window_id + 1)]
+        windows = list(range(min_window_id, max_window_id + 1))
         return windows
 
     # Updates the list of windows a record belongs to
@@ -867,33 +877,34 @@ class EventTimeWindow(OperatorInstance):
             else:  # Apply pre-aggregation and update state
                 self.aggregator.update(state, record)
 
+    def __assigner_3(self, record):
+        windows = self.__find_windows(record)
+        if self.aggregator is not None:
+            for w in windows:
+                if w not in self.state:
+                    self.state[w] = self.aggregator.initialize_window()
+                self.aggregator.update(self.state[w], record)
+        else:
+            for w in windows:
+                if w not in self.state:
+                    self.state[w] = []
+                self.state[w].append(record)
+
+
     # Repeatedly pulls and joins records from both inputs
     def start(self):
         sys.exit("Queue-based event time window is not supported yet.")
 
     # Task-based window execution on a set of batches
-    def apply(self, batches, channel_id, _source_operator_id):
-        records = 0
-        for batch in batches:
-            for record in batch:
-                if record is None:
-                    if self.input._close_channel(channel_id):
-                        self.output._flush(close=True)
-                        signal.send(ActorExit(self.instance_id))
-                        records += len(batch)
-                    return records
-                if isinstance(record, Watermark):  # It is a watermark
-                    # Fire windows that have expired
-                    windows = self.__collect_expired_windows(record)
-                    # for win in windows:
-                    #     logger.info("Firing windows {} on {}".format(
-                    #             win.content[0], record.event_time))
-                    self.output._push_all(windows)  # Push records
-                    self.output._push(record)       # Propagate watermark
-                else:  # It is a data record
-                    self.__assign(record)
-            records += len(batch)
-        return records
+    def _apply(self, record):
+        if record['event_type'] == 'Watermark':  # It is a watermark
+            logger.debug("XXX WATERMARK %f", record['event_time'])
+            # Fire windows that have expired
+            windows = self.collect_expired_windows(record)
+            self.output._push_all(windows)  # Push records
+            self.output._push(record)       # Propagate watermark
+        else:  # It is a data record
+            self.__assign(record)
 
 # Inspect actor
 @ray.remote
@@ -1092,33 +1103,35 @@ class Source(OperatorInstance):
         self.batch_size = operator_metadata.batch_size
 
     def __watermark(self, record):
-        event_time = record.dateTime  # TODO (john): Make this general
+        event_time = record["dateTime"]  # TODO (john): Make this general
         max_timestamp = max(event_time, self.max_event_time)
         if (max_timestamp >=
                 self.max_event_time + self.watermark_interval):
             # Emit watermark
             # logger.info("Source emitting watermark {} due to {}".format(
             #             self.max_event_time, max_timestamp))
-            self.output._push(Watermark(self.max_event_time, time.time()))
+            self.output._push(Watermark(self.max_event_time, time.time()).__dict__)
             self.max_event_time = max_timestamp
 
     def __watermark_batch(self, record_batch):
         max_timestamp = 0
         for record in record_batch:
-            event_time = record.dateTime  # TODO (john): Make this general
+            event_time = record["dateTime"]  # TODO (john): Make this general
             max_timestamp = max(event_time, self.max_event_time)
         if (max_timestamp >=
                 self.max_event_time + self.watermark_interval):
             # Emit watermark
-            # logger.info("Source emitting watermark {} due to {}".format(
-            #             self.max_event_time, max_timestamp))
-            self.output._push(Watermark(self.max_event_time, time.time()))
-            self.output.flush()
+            logger.debug("XXX Source emitting watermark {} due to {} on interval {}".format(
+                        self.max_event_time, max_timestamp, self.watermark_interval))
+            self.output._push(Watermark(self.max_event_time, time.time()).__dict__)
+            self.output._flush()
             self.max_event_time = max_timestamp
+
 
     # Starts the source by calling get_next() repeatedly
     def start(self):
         signal.send(ActorStart(self.instance_id))
+        self.start_time = time.time()
         while True:
             if self.batch_size is None:
                 record = self.source.get_next()
@@ -1137,17 +1150,18 @@ class Source(OperatorInstance):
                 #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
             else:
                 record_batch = self.source.get_next_batch(self.batch_size)
-                # logger.debug("SOURCE %s", len(record_batch))
                 if record_batch is None:
+                    logger.info("SOURCE THROUGHPUT:%f", self.num_records_seen / (time.time() - self.start_time))
                     self.output._flush(close=True)
                     signal.send(ActorExit(self.instance_id))
                     return
                 self.output._push_batch(record_batch)
-                if self.watermark_interval > 0:
-                    # Check if watermark should be emitted
-                    self.__watermark_batch(record_batch)
+                logger.debug("SOURCE %s watermark:%d max_time:%f, record_time:%f", len(record_batch), self.watermark_interval, self.max_event_time, record_batch[-1]["dateTime"])
+                watermark = self.__watermark_batch(record_batch)
 
-                self.num_records_seen += 1
+                self.num_records_seen += len(record_batch)
+                if self.num_records_seen % 10000 == 0:
+                    logger.info("source throughput:%f", self.num_records_seen / (time.time() - self.start_time))
                 # if self.num_records_seen % CHECKPOINT_INTERVAL == 0:
                 #     self.set_checkpoint_epoch(self.checkpoint_epoch + 1)
 

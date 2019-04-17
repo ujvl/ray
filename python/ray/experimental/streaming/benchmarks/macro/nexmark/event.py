@@ -8,6 +8,7 @@ import time
 class Record(object):
     def __init__(self, **kwds):
         self.__dict__.update(kwds)
+        self.event_type = 'Record'
 
 # An abstract record
 class Watermark(object):

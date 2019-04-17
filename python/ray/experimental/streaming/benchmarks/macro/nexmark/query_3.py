@@ -83,7 +83,7 @@ parser.add_argument("--persons-rate", default=-1,
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
 # Queue-related parameters
-parser.add_argument("--queue-size", default=100,
+parser.add_argument("--queue-size", default=4,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
@@ -114,17 +114,19 @@ class JoinLogic(object):
             # logger.info("Found a join {} - {}".format(auction, person))
             p_time = person["system_time"]
             a_time = auction["system_time"]
-            if p_time is None or a_time is None:
-                s_time = None  # There might be no associated timestamp
+
+            if p_time is None:
+                s_time = a_time
             else:
-                # This is just to measure end-to-end latency considering as
-                # start time the time we have seen both input tuples
-                s_time = p_time if a_time <= p_time else a_time  # Max
+                if a_time is not None and a_time > p_time:
+                    s_time = a_time
+                else:
+                    s_time = p_time
             # record = Record(name=person.name, city=person.city,
             #                 state=person.state, auction=auction.id,
             #                 system_time=s_time)
-            setattr(person,"auction_id",auction["id"])
-            setattr(person,"system_time",s_time)
+            person["auction_id"] = auction["id"]
+            person["system_time"] = s_time
             result.append(person)
         return result
 
@@ -138,17 +140,19 @@ class JoinLogic(object):
                 # Remove entry
                 p_time = person["system_time"]
                 a_time = auction["system_time"]
-                if p_time is None or a_time is None:
-                    s_time = None  # There might be no associated timestamp
+
+                if p_time is None:
+                    s_time = a_time
                 else:
-                    # This is just to measure end-to-end latency considering
-                    # as start time the time we have seen both input tuples
-                    s_time = p_time if a_time <=p_time else a_time  # Max
+                    if a_time is not None and a_time > p_time:
+                        s_time = a_time
+                    else:
+                        s_time = p_time
                 # record = Record(name=person.name, city=person.city,
                 #                 state=person.state, auction=auction.id,
                 #                 system_time=s_time)
-                setattr(person,"auction_id",auction["id"])
-                setattr(person,"system_time",s_time)
+                person["auction_id"] = auction["id"]
+                person["system_time"] = s_time
                 result.append(person)
         return result
 
@@ -283,6 +287,7 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     auctions_source = env.source(source_objects,
                     name="Auctions Source",
+                    batch_size=max_batch_size,
                     placement=placement["Auctions Source"]).set_parallelism(
                                                               auction_sources)
     auctions = auctions_source.partition(lambda auction: auction["seller"])
@@ -297,6 +302,7 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     persons_source = env.source(source_objects,
                     name="Persons Source",
+                    batch_size=max_batch_size,
                     placement=placement["Persons Source"]).set_parallelism(
                                                               person_sources)
     persons = persons_source.partition(lambda person: person["id"])
