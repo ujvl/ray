@@ -152,8 +152,8 @@ class BatchedQueue(object):
                     args=args,
                     kwargs={},
                     nondeterministic_event=event)
-            logger.debug("Flushed task %s %d, event:%s", obj_id.hex(),
-                                                self.checkpoint_epoch, event)
+            # logger.debug("Flushed task %s %d, event:%s", obj_id.hex(),
+            #                                     self.checkpoint_epoch, event)
 
             num_records = len(record_batch)
             self.records_sent += num_records
@@ -178,7 +178,7 @@ class BatchedQueue(object):
                     args=args,
                     kwargs={},
                     nondeterministic_event=event)
-            logger.debug("Flushed task %s %d, event:%s", obj_id.hex(), self.checkpoint_epoch, event)
+            # logger.debug("Flushed task %s %d, event:%s", obj_id.hex(), self.checkpoint_epoch, event)
 
             num_records = len(self.write_buffer)
             self.records_sent += num_records

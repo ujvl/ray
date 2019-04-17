@@ -88,7 +88,7 @@ class NexmarkEventGenerator(object):
         if self.count >= self.period:
             self.count = 0
             # Assign the generation timestamp
-            # to the 1st record of each batch
+            # to the 1st record of the batch
             event_batch[0]["system_time"] = time.time()
         return event_batch
 

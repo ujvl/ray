@@ -262,7 +262,7 @@ if __name__ == "__main__":
         placement["sink"] = [join_node_id] * join_instances
     else:  # Connect to existing cluster
         if pin_processes:
-            pin_processes()  
+            pin_processes()
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")
@@ -357,8 +357,8 @@ if __name__ == "__main__":
     auctions_rate = auctions_rate if auctions_rate > 0 else "inf"
     persons_rate = persons_rate if persons_rate > 0 else "inf"
     all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, auction_sources, auctions_rate,
-        person_sources, persons_rate,
+        num_nodes, auctions_rate, auction_sources,
+        persons_rate, person_sources,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,
@@ -370,4 +370,4 @@ if __name__ == "__main__":
 
     logger.info("Elapsed time: {}".format(time.time() - start))
 
-    utils.shutdown_ray(sleep=10)
+    utils.shutdown_ray(sleep=2)

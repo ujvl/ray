@@ -215,13 +215,13 @@ class OperatorInstance(ray.actor.Checkpointable):
         pass
 
     def apply(self, batches, channel_id, source_operator_id, checkpoint_epoch):
-        logger.debug("APPLY %s checkpoint:%d task:%s", self.operator_id,
-            checkpoint_epoch,
-            ray.worker.global_worker.current_task_id.hex())
+        # logger.debug("APPLY %s checkpoint:%d task:%s", self.operator_id,
+        #     checkpoint_epoch,
+        #     ray.worker.global_worker.current_task_id.hex())
 
         if ray.worker.global_worker.task_context.nondeterministic_events is not None:
             submit_log = [int(event.decode('ascii')) for event in ray.worker.global_worker.task_context.nondeterministic_events]
-            logger.debug("REPLAY: Submit log %s", submit_log)
+            # logger.debug("REPLAY: Submit log %s", submit_log)
         else:
             submit_log = None
 

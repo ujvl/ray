@@ -567,19 +567,20 @@ class DataOutput(object):
                 #     record, channel))
                 channel.queue.push_next(record, event=event)
         elif self.custom_partitioning_exists:
-            raise Exception("Shuffle doesn't work with the source")
-            for i, channels in enumerate(self.custom_partitioning_channels):
-                # Set the right function. In general, there might be multiple
-                # destinations, each one with a different custom partitioning
-                partitioning_fn = self.custom_partitioning_functions[i]
-                h = partitioning_fn(record)
-                num_instances = len(channels)  # Downstream instances
-                channel = channels[h % num_instances]
-                # logger.debug(
-                #     "Actor ({},{}) pushed '{}' to channel {}.".format(
-                #     channel.src_operator_id, channel.src_instance_id,
-                #     record, channel))
-                channel.queue.push_next(record, event=event)
+            # raise Exception("Shuffle doesn't work with the source")
+            for record in record_batch:
+                for i, channels in enumerate(self.custom_partitioning_channels):
+                    # Set the right function. In general, there might be multiple
+                    # destinations, each one with a different custom partitioning
+                    partitioning_fn = self.custom_partitioning_functions[i]
+                    h = partitioning_fn(record)
+                    num_instances = len(channels)  # Downstream instances
+                    channel = channels[h % num_instances]
+                    # logger.debug(
+                    #     "Actor ({},{}) pushed '{}' to channel {}.".format(
+                    #     channel.src_operator_id, channel.src_instance_id,
+                    #     record, channel))
+                    channel.queue.push_next(record, event=event)
 
         if self.logging:  # Log rate
             self.__log(batch_size=len(record_batch))
@@ -717,7 +718,7 @@ class DataOutput(object):
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 key, _ = record
@@ -732,7 +733,7 @@ class DataOutput(object):
                     channel.queue.push_next(record, event=event)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 h = _hash(record)
@@ -746,7 +747,7 @@ class DataOutput(object):
                     channel.queue.push_next(record, event=event)
         elif self.custom_partitioning_exists:
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 for i, channels in enumerate(
@@ -797,7 +798,7 @@ class DataOutput(object):
         # Hash-based shuffling by key per destination
         if self.shuffle_key_exists:
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 key, _ = record
@@ -814,7 +815,7 @@ class DataOutput(object):
                         channel.queue._flush_writes()
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 h = _hash(record)
@@ -830,7 +831,7 @@ class DataOutput(object):
                         channel.queue._flush_writes()
         elif self.custom_partitioning_exists:
             for record in records:
-                if isinstance(record, Record):
+                if isinstance(record, Watermark):
                     self.__forward_watermark(record, input_channel_id)
                     return
                 for i, channels in enumerate(

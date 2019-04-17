@@ -106,46 +106,50 @@ class JoinLogic(object):
 
     def process_left(self, auction):
         result = []
-        person = self.persons.get(auction.seller)
+        person = self.persons.get(auction["seller"])
         if person is None:  # Store auction for future join
-            entry = self.auctions.setdefault(auction.seller, [])
+            entry = self.auctions.setdefault(auction["seller"], [])
             entry.append(auction)
         else:  # Found a join; emit and do not store auction
             # logger.info("Found a join {} - {}".format(auction, person))
-            p_time = person.system_time
-            a_time = auction.system_time
+            p_time = person["system_time"]
+            a_time = auction["system_time"]
             if p_time is None or a_time is None:
                 s_time = None  # There might be no associated timestamp
             else:
                 # This is just to measure end-to-end latency considering as
                 # start time the time we have seen both input tuples
                 s_time = p_time if a_time <= p_time else a_time  # Max
-            record = Record(name=person.name, city=person.city,
-                            state=person.state, auction=auction.id,
-                            system_time=s_time)
-            result.append(record)
+            # record = Record(name=person.name, city=person.city,
+            #                 state=person.state, auction=auction.id,
+            #                 system_time=s_time)
+            setattr(person,"auction_id",auction["id"])
+            setattr(person,"system_time",s_time)
+            result.append(person)
         return result
 
     def process_right(self, person):
         result = []
-        self.persons.setdefault(person.id,person)
-        auctions = self.auctions.pop(person.id, None)
+        self.persons.setdefault(person["id"],person)
+        auctions = self.auctions.pop(person["id"], None)
         if auctions is not None:
             for auction in auctions:
                 # logger.info("Found a join {} - {}".format(auction, person))
                 # Remove entry
-                p_time = person.system_time
-                a_time = auction.system_time
+                p_time = person["system_time"]
+                a_time = auction["system_time"]
                 if p_time is None or a_time is None:
                     s_time = None  # There might be no associated timestamp
                 else:
                     # This is just to measure end-to-end latency considering
                     # as start time the time we have seen both input tuples
                     s_time = p_time if a_time <=p_time else a_time  # Max
-                record = Record(name=person.name, city=person.city,
-                                state=person.state, auction=auction.id,
-                                system_time=s_time)
-                result.append(record)
+                # record = Record(name=person.name, city=person.city,
+                #                 state=person.state, auction=auction.id,
+                #                 system_time=s_time)
+                setattr(person,"auction_id",auction["id"])
+                setattr(person,"system_time",s_time)
+                result.append(person)
         return result
 
 
@@ -244,7 +248,7 @@ if __name__ == "__main__":
         placement["sink"] = [join_node_id] * join_instances
     else:  # Connect to existing cluster
         if pin_processes:
-            pin_processes()  
+            pin_processes()
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")
@@ -281,7 +285,7 @@ if __name__ == "__main__":
                     name="Auctions Source",
                     placement=placement["Auctions Source"]).set_parallelism(
                                                               auction_sources)
-    auctions = auctions_source.partition(lambda auction: auction.seller)
+    auctions = auctions_source.partition(lambda auction: auction["seller"])
 
     # Construct the person source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(persons_file, "Person",
@@ -295,7 +299,7 @@ if __name__ == "__main__":
                     name="Persons Source",
                     placement=placement["Persons Source"]).set_parallelism(
                                                               person_sources)
-    persons = persons_source.partition(lambda person: person.id)
+    persons = persons_source.partition(lambda person: person["id"])
 
     # Add the join
     output = auctions.join(persons,
@@ -322,8 +326,8 @@ if __name__ == "__main__":
     auctions_rate = auctions_rate if auctions_rate > 0 else "inf"
     persons_rate = persons_rate if persons_rate > 0 else "inf"
     all = "-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}".format(
-        num_nodes, auction_sources, auctions_rate,
-        person_sources, persons_rate,
+        num_nodes, auctions_rate, auction_sources,
+        persons_rate, person_sources,
         num_redis_shards, redis_max_memory, plasma_memory,
         sample_period, logging,
         max_queue_size, max_batch_size, batch_timeout, prefetch_depth,

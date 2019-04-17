@@ -88,11 +88,11 @@ parser.add_argument("--max-throughput", default="inf",
 
 # Used to filter auctions based on their ID. A filter could be used instead
 def flatmap_function(bid):
-    if (bid.auction == 1007 or bid.auction == 1020 or bid.auction == 2001 or
-        bid.auction == 2019 or bid.auction == 2087):
-        record = Record(auction=bid.auction, price=bid.price,
-                        system_time=bid.system_time)
-        return [record]
+    if (bid["auction"] == 1007 or bid["auction"] == 1020 or bid["auction"] == 2001 or
+        bid["auction"] == 2019 or bid["auction"] == 2087):
+        # record = Record(auction=bid.auction, price=bid.price,
+        #                 system_time=bid.system_time)
+        return [bid]
     return []
 
 
@@ -179,7 +179,7 @@ if __name__ == "__main__":
         placement["sink"] = [flatmap_node_id] * flatmap_instances
     else:  # Connect to existing cluster
         if pin_processes:
-            pin_processes()  
+            pin_processes()
         ray.init(redis_address="localhost:6379")
         if not placement_file:
             sys.exit("No actor placement specified.")
