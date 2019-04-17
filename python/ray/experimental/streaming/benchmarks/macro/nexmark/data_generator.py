@@ -69,6 +69,14 @@ class NexmarkEventGenerator(object):
                 records += 1
                 if records == self.max_records:
                     break
+        while len(self.events) < self.max_records:
+            last_event_time = self.events[-1]['dateTime']
+            events = []
+            for event in self.events:
+                event = dict(event)
+                event['dateTime'] += last_event_time
+                events.append(event)
+            self.events += events
         logger.info("Done.")
 
     # Returns the next event
