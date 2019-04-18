@@ -49,6 +49,10 @@ parser.add_argument("--placement-file", default="",
             help="Path to the file containing the explicit actor placement")
 parser.add_argument("--bids-file", required=True,
                     help="Path to the bids file")
+parser.add_argument("--auctions-file", required=False,
+                    help="Path to the auctions file")
+parser.add_argument("--persons-file", required=False,
+                    help="Path to the persons file")
 parser.add_argument("--enable-logging", default=False,
                     action='store_true',
                     help="whether to log actor latency and throughput")
@@ -73,7 +77,7 @@ parser.add_argument("--sources", default=1,
                     # TODO (john): Add check
                     help="number of bid sources")
 # Queue-related parameters
-parser.add_argument("--queue-size", default=100,
+parser.add_argument("--queue-size", default=8,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")

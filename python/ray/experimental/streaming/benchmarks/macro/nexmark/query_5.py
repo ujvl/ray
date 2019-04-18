@@ -8,6 +8,7 @@ import math
 import string
 import sys
 import time
+from collections import defaultdict
 
 import ray
 import ray.experimental.streaming.benchmarks.utils as utils
@@ -49,6 +50,10 @@ parser.add_argument("--placement-file", default="",
             help="Path to the file containing the explicit actor placement")
 parser.add_argument("--bids-file", required=True,
                     help="Path to the bids file")
+parser.add_argument("--auctions-file", required=False,
+                    help="Path to the auctions file")
+parser.add_argument("--persons-file", required=False,
+                    help="Path to the persons file")
 parser.add_argument("--enable-logging", default=False,
                     action='store_true',
                     help="whether to log actor latency and throughput")
@@ -73,7 +78,7 @@ parser.add_argument("--bid-sources", default=1,
                     # TODO (john): Add check
                     help="number of bids sources")
 # Queue-related parameters
-parser.add_argument("--queue-size", default=100,
+parser.add_argument("--queue-size", default=8,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
@@ -93,22 +98,14 @@ class AggregationLogic(object):
 
     # Initializes bid counter
     def initialize(self, bid):
-        return (bid.auction, 1)
+        return (bid["auction"], 1)
+
+    def initialize_window(self):
+        return defaultdict(int)
 
     # Updates number of bids per auction with the given record
     def update(self, old_state, bid):
-        updated_state = None  # Tuples are immutable, so create a new one
-        for i, state_object in enumerate(old_state):
-            auction, old_value = state_object
-            if auction == bid.auction:
-                # logger.info("Old count: {}:{}".format(auction,old_value))
-                updated_state = (auction, old_value+1)
-                old_state.pop(i)  # Remove old
-                break
-        assert updated_state is not None
-        # logger.info("New count: {}:{}".format(updated_state[0],
-        #                                       updated_state[1]))
-        old_state.append(updated_state)
+        old_state[bid['auction']] += 1
 
 if __name__ == "__main__":
 
@@ -230,12 +227,13 @@ if __name__ == "__main__":
     bids_source = env.source(source_objects,
                     watermark_interval=watermark_interval,
                     name="Bids Source",
+                    batch_size=max_batch_size,
                     placement=placement["Bids Source"]).set_parallelism(
                                                               bid_sources)
-    bids = bids_source.partition(lambda bid: bid.auction)
+    bids = bids_source.partition(lambda bid: bid["auction"])
 
     # Add the window
-    output = bids.event_time_window(3600000, 60000,  # 60' window, 1' slide
+    output = bids.event_time_window(10000, 5000,  # 60' window, 1' slide
                         # The custom aggregation logic (see above)
                         aggregation_logic=AggregationLogic(),
                         name="Cound Bids",

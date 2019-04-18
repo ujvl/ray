@@ -91,8 +91,8 @@ RAY_CONFIG(int64_t, max_time_for_handler_milliseconds, 1000);
 
 /// This is used by the Python extension when serializing objects as part of
 /// a task spec.
-RAY_CONFIG(int64_t, size_limit, 10000);
-RAY_CONFIG(int64_t, num_elements_limit, 10000);
+RAY_CONFIG(int64_t, size_limit, 1000000);
+RAY_CONFIG(int64_t, num_elements_limit, 1000000);
 
 /// This is used to cause failures when a certain loop in redis.cc which
 /// synchronously looks up object manager addresses in redis is slow.

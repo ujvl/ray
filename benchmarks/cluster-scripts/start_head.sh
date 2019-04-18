@@ -15,9 +15,8 @@ ray start --head \
   --num-redis-shards $NUM_REDIS_SHARDS \
   --resources='{"Node_0": 100}' \
   --plasma-directory=/mnt/hugepages \
-  --object-store-memory 8000000000 \
+  --object-store-memory 800000000 \
   --huge-pages \
-  --object-store-memory 8000000000 \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',

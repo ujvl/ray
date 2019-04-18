@@ -8,6 +8,7 @@ import multiprocessing
 import subprocess
 import sys
 import time
+import numpy as np
 
 try:
     from itertools import zip_longest as zip_longest
@@ -227,13 +228,18 @@ def write_log_files(all_parameters, latency_filename,
     # Collect sampled per-record latencies
     sink_id = dataflow.operator_id("sink")
     local_states = ray.get(dataflow.state_of(sink_id))
-    latencies = [state for state in local_states if state is not None]
+    latencies = [latency for state in local_states for latency in state if state is not None][1:]
+    latencies = [latency for l in latencies for latency in l]
     latency_filename = latency_filename + all_parameters
     with open(latency_filename, "w") as tf:
-        for _, latency_values in latencies:
-            if latency_values is not None:
-                for value in latency_values:
-                    tf.write(str(value) + "\n")
+        for value in latencies:
+            tf.write(str(value) + "\n")
+        if latencies:
+            print("Mean latency:", np.mean(latencies))
+            print("Max latency:", np.max(latencies))
+            tf.write("Mean latency:{}\n".format(np.mean(latencies)))
+        else:
+            print("NO LATENCIES")
 
     # Collect throughputs from all actors
     ids = dataflow.operator_ids()
@@ -242,6 +248,7 @@ def write_log_files(all_parameters, latency_filename,
         logs = ray.get(dataflow.logs_of(id))
         rates.extend(logs)
     throughput_filename = throughput_filename + all_parameters
+    all_rates = []
     with open(throughput_filename, "w") as tf:
         for actor_id, in_rate, out_rate in rates:
             operator_id, instance_id = actor_id
@@ -252,3 +259,4 @@ def write_log_files(all_parameters, latency_filename,
                      operator_name) + ", " + str(
                      instance_id)) + ")" + " | " + str(
                      i) + " | " + str(o) + "\n")
+                all_rates.append(o)

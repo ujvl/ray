@@ -8,6 +8,7 @@ import math
 import string
 import sys
 import time
+from collections import defaultdict
 
 import ray
 import ray.experimental.streaming.benchmarks.utils as utils
@@ -47,6 +48,8 @@ parser.add_argument("--plasma-memory", default=10**9,
 # Dataflow-related parameters
 parser.add_argument("--placement-file", default="",
             help="Path to the file containing the explicit actor placement")
+parser.add_argument("--bids-file", required=False,
+                    help="Path to the bids file")
 parser.add_argument("--auctions-file", required=True,
                     help="Path to the auctions file")
 parser.add_argument("--persons-file", required=True,
@@ -84,7 +87,7 @@ parser.add_argument("--persons-rate", default=-1,
                                 parser.error("Source rate cannot be zero."),
                     help="source output rate (records/s)")
 # Queue-related parameters
-parser.add_argument("--queue-size", default=100,
+parser.add_argument("--queue-size", default=4,
                     help="the queue size in number of batches")
 parser.add_argument("--batch-size", default=1000,
                     help="the batch size in number of elements")
@@ -102,64 +105,77 @@ parser.add_argument("--max-throughput", default="inf",
 class JoinLogic(object):
     def __init__(self):
         # Local state
-        self.auctions = {}  # window -> seller -> auctions
-        self.persons = {}   # window -> id -> person
+        #self.auctions = {}  # window -> seller -> auctions
+        #self.persons = {}   # window -> id -> person
 
-    def process_left(self, left_record):
-        window, auction = left_record.content
+        self.auctions = defaultdict(lambda: defaultdict(list))
+        self.persons = defaultdict(lambda: defaultdict(lambda: None))
+        self.max_window = 0
+
+    def process_left(self, auction):
+        window = auction['window']
+        person = self.persons[window][auction['seller']]
         result = []
-        entry = self.persons.get(window)
-        if entry is None: # Add entry
-            new_entry = self.auctions.setdefault(window, {auction.seller: []})
-            auction.system_time = left_record.system_time
-            new_entry[auction.seller].append(auction)
-        else:  # Window has expired in persons stream
-            person = entry.get(auction.seller)  # Get person
-            if person is not None:  # Found a join
-                # logger.info("Found a join {} - {}".format(auction, person))
-                logger.info(person)
-                p_time = person.system_time
-                a_time = left_record.system_time
-                if p_time is None or a_time is None:
-                    s_time = None  # There might be no assigned timestamp
+        if person is not None:
+            p_time = person['system_time']
+            a_time = auction['system_time']
+            if p_time is None:
+                s_time = a_time
+            else:
+                if a_time is not None and a_time > p_time:
+                    s_time = a_time
                 else:
-                    # This is to measure end-to-end latency considering
-                    # as start time the time we have seen both inputs
-                    s_time = p_time if a_time <= p_time else a_time  # Max
-                record = Record(name=person.name, city=person.city,
-                                state=person.state, auction=auction.id,
-                                system_time=s_time)
-                result.append(record)
+                    s_time = p_time
+            record = Record(name=person['name'], city=person['city'],
+                            state=person['state'], auction=auction['id'],
+                            system_time=s_time).__dict__
+            result.append(record)
+        else:
+            self.auctions[window][auction['seller']].append(auction)
+
+        if window > self.max_window:
+            if self.max_window in self.persons:
+                self.persons.pop(self.max_window)
+            if self.max_window in self.auctions:
+                self.auctions.pop(self.max_window)
+            self.max_window = window
+
         return result
 
-    def process_right(self, right_record):
-        window, person = right_record.content
+    def process_right(self, person):
+        window = person['window']
+        auctions = self.auctions[window][person['id']]
         result = []
-        entry = self.auctions.get(window)
-        if entry is None:  # Add entry
-            # Keep watermark's timestamp
-            person.system_time = right_record.system_time
-            new_entry = self.persons.setdefault(window, {person.id: person})
-        else:  # Window has expired in auctions stream
-            auctions = entry.pop(person.id, None)
-            if auctions is not None:
-                for auction in auctions:
-                    # logger.info("Found a join {} - {}".format(auction,
-                    #                                           person))
-                    # Remove entry
-                    p_time = right_record.system_time
-                    a_time = auction.system_time
-                    if p_time is None or a_time is None:
-                        s_time = None  # There might be no assigned timestamp
+        if auctions:
+            for auction in auctions:
+                p_time = person['system_time']
+                a_time = auction['system_time']
+                if p_time is None:
+                    s_time = a_time
+                else:
+                    if a_time is not None and a_time > p_time:
+                        s_time = a_time
                     else:
-                        # This is to measure end-to-end latency considering
-                        # as start time the time we have seen both inputs
-                        s_time = p_time if a_time <=p_time else a_time  # Max
-                    record = Record(name=person.name, city=person.city,
-                                    state=person.state, auction=auction.id,
-                                    system_time=s_time)
-                    result.append(record)
+                        s_time = p_time
+                record = Record(name=person['name'], city=person['city'],
+                                state=person['state'], auction=auction['id'],
+                                system_time=s_time).__dict__
+                result.append(record)
+            # We found the seller of the auction, so no need to remember the
+            # auctions anymore.
+            self.auctions[window].pop(person['id'])
+        self.persons[window][person['id']] = person
+
+        if window > self.max_window:
+            if self.max_window in self.persons:
+                self.persons.pop(self.max_window)
+            if self.max_window in self.auctions:
+                self.auctions.pop(self.max_window)
+            self.max_window = window
+
         return result
+
+
 
 if __name__ == "__main__":
 
@@ -298,10 +314,11 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     auctions_source = env.source(source_objects,
                     name="Auctions Source",
+                    batch_size=max_batch_size,
                     watermark_interval=watermark_interval,
                     placement=placement["Auctions Source"]).set_parallelism(
                                                               auction_sources)
-    auctions = auctions_source.partition(lambda auction: auction.seller)
+    auctions = auctions_source.partition(lambda auction: auction['seller'])
 
     # Construct the person source objects (all read from the same file)
     source_objects = [dg.NexmarkEventGenerator(persons_file, "Person",
@@ -313,20 +330,21 @@ if __name__ == "__main__":
     # Add auction sources to the dataflow
     persons_source = env.source(source_objects,
                     name="Persons Source",
+                    batch_size=max_batch_size,
                     watermark_interval=watermark_interval,
                     placement=placement["Persons Source"]).set_parallelism(
                                                               person_sources)
-    persons = persons_source.partition(lambda person: person.id)
+    persons = persons_source.partition(lambda person: person['id'])
 
     # 60' tumbling window
-    auctions_window = auctions.event_time_window(3600000, 3600000,
+    auctions_window = auctions.event_time_window(10000, 5000,
                         name="Auctions per Window",
                         placement=placement[
                                 "Auctions per Window"]).set_parallelism(
                                                             window_instances)
 
     # 60' tumbling window
-    persons_window = persons.event_time_window(3600000, 3600000,
+    persons_window = persons.event_time_window(10000, 5000,
                         name="Persons per Window",
                         placement=placement[
                                 "Persons per Window"]).set_parallelism(
