@@ -265,9 +265,13 @@ class Environment(object):
             actor_handle = operator_instance.Union._remote(args=args,
                                                     kwargs=None,
                                                     resources={node_id: 1})
-        elif operator.type == OpType.Reduce:
-            actor_handle = operator_instance.Reduce.remote(actor_id, operator,
-                                                    input, output)
+        elif ((operator.type == OpType.Reduce) or
+              (operator.type ==  OpType.Sum)):
+            args.append(self.config)
+            node_id = operator.placement[instance_id]
+            actor_handle = operator_instance.Reduce._remote(args=args,
+                                                    kwargs=None,
+                                                    resources={node_id: 1})
         elif operator.type == OpType.EventTimeWindow:
                 node_id = operator.placement[instance_id]
                 logger.info("Placing event time window {} at {}.".format(
@@ -282,10 +286,6 @@ class Environment(object):
         elif operator.type == OpType.KeyBy:
             actor_handle = operator_instance.KeyBy.remote(actor_id, operator,
                                                           input, output)
-        elif operator.type == OpType.Sum:
-            actor_handle = operator_instance.Reduce.remote(actor_id, operator,
-                                                           input, output,
-                                                           self.config)
         elif operator.type == OpType.Sink:
             node_id = operator.placement[instance_id]
             logger.info("Placing sink {} at {}.".format(actor_id, node_id))
@@ -847,7 +847,8 @@ class DataStream(object):
         return self.__register(op)
 
     # Registers Sum operator to the environment
-    def sum(self, attribute_selector, name="Sum_"+_generate_uuid()):
+    def sum(self, attribute_selector, name="Sum_"+_generate_uuid(),
+            placement=None):
         """Applies a rolling sum operator to the stream.
 
         Attributes:
@@ -861,7 +862,8 @@ class DataStream(object):
             name,
             _sum,
             num_instances=self.env.config.parallelism,
-            logging=self.env.config.logging)
+            logging=self.env.config.logging,
+            placement=placement)
         return self.__register(op)
 
     # Registers union operator to the environment

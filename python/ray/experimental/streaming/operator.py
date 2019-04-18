@@ -142,14 +142,16 @@ class SumOperator(Operator):
                  name="",
                  logic=None,
                  num_instances=1,
-                 logging=False):
+                 logging=False,
+                 placement=None):
         Operator.__init__(self,
                           id,
                           type,
                           name,
                           logic,
                           num_instances,
-                          logging)
+                          logging,
+                          placement)
         self.attribute_selector = attribute_selector
 
 class EventTimeWindowOperator(Operator):

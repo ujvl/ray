@@ -1001,8 +1001,8 @@ class Reduce(OperatorInstance):
 
     # Task-based reduce execution on a set of batches
     def _apply(self, record):
-        key, rest = record
-        new_value = self.attribute_selector(rest)
+        _time, key, rest = record
+        new_value = self.attribute_selector(record)
         # TODO (john): Is there a way to update state with
         # a single dictionary lookup?
         try:
@@ -1011,11 +1011,11 @@ class Reduce(OperatorInstance):
             self.state[key] = new_value
         except KeyError:  # Key does not exist in state
             self.state.setdefault(key, new_value)
-        self.output._push((key, new_value), event=self.num_records_seen)
+        self.output._push((_time, key, new_value), event=self.num_records_seen)
 
     def _replay_apply(self, record, flush=False):
-        key, rest = record
-        new_value = self.attribute_selector(rest)
+        _time, key, rest = record
+        new_value = self.attribute_selector(record)
         # TODO (john): Is there a way to update state with
         # a single dictionary lookup?
         try:
@@ -1023,7 +1023,7 @@ class Reduce(OperatorInstance):
             new_value = self.reduce_fn(old_value, new_value)
             self.state[key] = new_value
         except KeyError:  # Key does not exist in state
-            self.state.setdefault(key, new_value)
+            self.state.setdefault(_time, key, new_value)
         self.output._replay_push(record, flush=flush)
 
 
