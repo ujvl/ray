@@ -48,6 +48,8 @@ parser.add_argument("--plasma-memory", default=10**9,
 # Dataflow-related parameters
 parser.add_argument("--placement-file", default="",
             help="Path to the file containing the explicit actor placement")
+parser.add_argument("--bids-file", required=False,
+                    help="Path to the bids file")
 parser.add_argument("--auctions-file", required=True,
                     help="Path to the auctions file")
 parser.add_argument("--persons-file", required=True,
