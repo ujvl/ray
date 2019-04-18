@@ -14,20 +14,10 @@ import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
 
-DEBUG = False
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
+LOG_LEVEL = logging.WARNING
 
-logger = logging.getLogger(__name__)
-logger.setLevel("DEBUG")
-
-def debug(*args):
-    if DEBUG:
-        print(
-            "task ID:",
-            ray.worker.global_worker.current_task_id,
-            *args,
-            flush=True)
 
 def wait_queue(queue, max_queue_length):
     wait_time = 0
@@ -47,7 +37,7 @@ def wait_queue(queue, max_queue_length):
 # A custom data source that reads articles from wikipedia
 # Custom data sources need to implement a get_next() method
 # that returns the next data element, in this case sentences
-@ray.remote
+@ray.remote(max_reconstructions=100)
 class WordSource(object):
     def __init__(self,
             operator_id,
@@ -55,6 +45,9 @@ class WordSource(object):
             max_queue_length,
             checkpoint_interval,
             words_file):
+        logging.basicConfig(level=LOG_LEVEL)
+        self.logger = logging.getLogger(__name__)
+
         # Titles in this file will be as queries
         self.words_file = words_file
 
@@ -78,7 +71,9 @@ class WordSource(object):
         i = 0
         handle = self.handles[i]
         while self.num_records_seen < num_records:
-            batch = [(time.time(), self.reader.readline()) for _ in range(batch_size)]
+            batch = [(None, self.reader.readline()) for _ in range(batch_size)]
+            # TODO: Set timestmap interval.
+            batch[0] = (time.time(), batch[0][1])
             assert(len(batch) > 0), len(batch)
 
             self.records_since_checkpoint += len(batch)
@@ -98,9 +93,17 @@ class WordSource(object):
         throughput = self.num_records_seen / (time.time() - start_time)
         return throughput
 
+    def ping(self):
+        return
+
 
 class NondeterministicOperator(ray.actor.Checkpointable):
+
     def __init__(self, operator_id, handles, max_queue_length, upstream_ids, checkpoint_dir, batch_size):
+        logging.basicConfig(level=LOG_LEVEL)
+        self.logger = logging.getLogger(__name__)
+        print("Set logger to level", LOG_LEVEL)
+
         self.operator_id = operator_id
         self.handles = handles
         self._ray_downstream_actors = [handle._ray_actor_id for handle in handles]
@@ -137,16 +140,16 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             # This is the first checkpoint marker for the new checkpoint
             # interval that we've received so far.
             if len(self.checkpoints_pending) == 0:
-                debug("Starting checkpoint", self.checkpoint_epoch)
+                self.logger.debug("Starting checkpoint %d", self.checkpoint_epoch)
                 self.checkpoints_pending = set(self.upstream_ids)
             # Record the checkpoint marker received from this upstream actor's
             # operator_id.
-            debug("Received checkpoint marker", checkpoint_epoch, "from", upstream_id)
+            self.logger.debug("Received checkpoint marker %d from %s", checkpoint_epoch, upstream_id)
             self.checkpoints_pending.discard(upstream_id)
             # If we've received all checkpoint markers from all upstream
             # actors, then take the checkpoint.
             if len(self.checkpoints_pending) == 0:
-                debug("Received all checkpoint markers, taking checkpoint for interval", self.checkpoint_epoch)
+                self.logger.debug("Received all checkpoint markers, taking checkpoint for interval %d", self.checkpoint_epoch)
                 self._should_checkpoint = True
             process_record = False
         else:
@@ -156,7 +159,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
     def push(self, upstream_id, records, checkpoint_epoch):
         if ray.worker.global_worker.task_context.nondeterministic_events is not None:
             submit_log = [int(event.decode('ascii')) for event in ray.worker.global_worker.task_context.nondeterministic_events]
-            debug("REPLAY: Submit log", submit_log)
+            self.logger.debug("REPLAY: Submit log %s", submit_log)
         else:
             submit_log = None
 
@@ -171,7 +174,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
     def replay_push(self, upstream_id, records, checkpoint_epoch, submit_log):
         process_records = self.checkpoint(upstream_id, checkpoint_epoch)
-        debug("REPLAY: process records?", process_records)
+        self.logger.debug("REPLAY: process records? %s", process_records)
 
         if process_records:
             if len(records) == 0:
@@ -193,13 +196,13 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                             self.handle._ray_actor_counter)
                     task = ray.global_state.task_table(task_id=next_task_id)
                     if not task or task["ExecutionSpec"]["NumExecutions"] < 1:
-                        debug("REPLAY: never executed task", next_task_id)
+                        self.logger.debug("REPLAY: never executed task %s", next_task_id)
                         break
                     #else:
                     #    assert task["ExecutionSpec"]["NumExecutions"] >= 1, task
 
                     num_skip_records = submit_log[0] - self.num_records_seen
-                    debug("REPLAY: submit:", submit_log[0], " skipping:", num_skip_records, "seen:", self.num_records_seen, "num records:", len(records))
+                    self.logger.debug("REPLAY: submit: %d, skipping: %d, seen: %d, num records: %d", submit_log[0], num_skip_records, self.num_records_seen, len(records))
                     assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
 
                     flush = num_skip_records <= len(records)
@@ -212,16 +215,16 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
                     if flush:
                         future = self.flush()
-                        debug("REPLAY: skipping submit after", self.num_records_seen, future)
+                        self.logger.debug("REPLAY: skipping submit after %d, object %s", self.num_records_seen, future)
                         submit_log.pop(0)
                 for record in records:
-                    debug("REPLAY RECORD:", upstream_id, record)
+                    self.logger.debug("REPLAY RECORD: from %s, %s", upstream_id, record)
                     # Process the record.
                     self.flush_buffer.append(record)
                     self.num_records_seen += 1
                     if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
                         future = self.flush()
-                        debug("REPLAY: submit after", self.num_records_seen, future)
+                        debug("REPLAY: submit after %d, object %s", self.num_records_seen, future)
                         submit_log.pop(0)
 
         else:
@@ -230,7 +233,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
     def log_push(self, upstream_id, records, checkpoint_epoch):
         process_records = self.checkpoint(upstream_id, checkpoint_epoch)
-        debug("PUSH: process records?", process_records)
+        self.logger.debug("PUSH: process records? %s", process_records)
 
         if process_records:
             if len(records) == 0:
@@ -245,7 +248,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
             else:
                 for record in records:
-                    debug("RECORD:", upstream_id, record)
+                    self.logger.debug("RECORD: from %s, %s", upstream_id, record)
                     records = self.process(record)
                     # Process the record.
                     for key, record in records:
@@ -257,14 +260,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         else:
             self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
 
-    def key(self, word):
-        return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_reducers
-
-    def process(self, record):
-        timestamp, line = record
-        words = line.strip().split(' ')
-        return [(self.key(word), (timestamp, word, 1)) for word in words]
-
     def try_flush(self, buffer_index):
         # Flush randomly.
         do_flush = len(self.flush_buffers[buffer_index]) >= self.batch_size
@@ -273,7 +268,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         if do_flush:
             #future = self.flush(event=str(self.num_records_seen).encode('ascii'))
             future = self.flush(buffer_index)
-            debug("Flushing after", self.num_records_seen, future)
+            self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
             self.queue.append(future)
             wait_queue(self.queue, self.max_queue_length)
 
@@ -295,48 +290,51 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         return should_checkpoint
 
     def save_checkpoint(self, actor_id, checkpoint_id):
-        debug("Saving checkpoint", self.checkpoint_epoch, checkpoint_id)
-        assert len(self.checkpoints_pending) == 0
-        checkpoint = {
-                "state": self.state,
-                "handles": self.handles,
-                "checkpoint_id": checkpoint_id,
-                "checkpoint_epoch": self.checkpoint_epoch,
-                "buffer": self.checkpoint_buffer,
-                "num_records_seen": self.num_records_seen,
-                }
-        checkpoint = pickle.dumps(checkpoint)
-        # NOTE: The default behavior is to register a random actor handle
-        # whenever a handle is pickled, so that the execution dependency is
-        # never removed and anytime the handle is unpickled, we will be able to
-        # submit tasks.  However, we do not need to do this since we are only
-        # going to unpickle the handle once, when the actor recovers from the
-        # checkpoint.
-        [handle._ray_new_actor_handles.clear() for handle in self.handles]
-        checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
-        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
-        with open(checkpoint_path, 'wb+') as f:
-            f.write(checkpoint)
+        with ray.profiling.profile("save_checkpoint"):
+            self.logger.debug("Saving checkpoint %d %s", self.checkpoint_epoch, checkpoint_id)
+            assert len(self.checkpoints_pending) == 0
+            checkpoint = {
+                    "state": self.state,
+                    "handles": self.handles,
+                    "checkpoint_id": checkpoint_id,
+                    "checkpoint_epoch": self.checkpoint_epoch,
+                    "buffer": self.checkpoint_buffer,
+                    "num_records_seen": self.num_records_seen,
+                    }
+            checkpoint = pickle.dumps(checkpoint)
+            self.logger.debug("Checkpoint size is %d", len(checkpoint))
+            # NOTE: The default behavior is to register a random actor handle
+            # whenever a handle is pickled, so that the execution dependency is
+            # never removed and anytime the handle is unpickled, we will be able to
+            # submit tasks.  However, we do not need to do this since we are only
+            # going to unpickle the handle once, when the actor recovers from the
+            # checkpoint.
+            [handle._ray_new_actor_handles.clear() for handle in self.handles]
+            checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+            with open(checkpoint_path, 'wb+') as f:
+                f.write(checkpoint)
 
-        self.checkpoint_epoch += 1
-        self.flush_checkpoint_buffer = True
+            self.checkpoint_epoch += 1
+            self.flush_checkpoint_buffer = True
 
     def push_checkpoint_buffer(self, submit_log=None):
-        debug("Pushing checkpoint buffer", self.checkpoint_epoch)
+        with ray.profiling.profile("flush_checkpoint_buffer"):
+            self.logger.debug("Pushing checkpoint buffer %d, length %d", self.checkpoint_epoch, len(self.checkpoint_buffer))
 
-        # Make a copy of the checkpoint buffer and try to process them again.
-        checkpoint_buffer = self.checkpoint_buffer[:]
-        self.checkpoint_buffer.clear()
-        if submit_log is not None:
-            for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
-                self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
-        else:
-            for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
-                self.log_push(upstream_id, records, checkpoint_epoch)
-        debug("Done pushing checkpoint buffer", self.checkpoint_epoch)
+            # Make a copy of the checkpoint buffer and try to process them again.
+            checkpoint_buffer = self.checkpoint_buffer[:]
+            self.checkpoint_buffer.clear()
+            if submit_log is not None:
+                for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+                    self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
+            else:
+                for upstream_id, records, checkpoint_epoch in checkpoint_buffer:
+                    self.log_push(upstream_id, records, checkpoint_epoch)
+            self.logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
-        debug("Available checkpoints", available_checkpoints)
+        self.logger.debug("Available checkpoints %s", available_checkpoints)
 
         # Get the latest checkpoint that completed.
         checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
@@ -362,18 +360,34 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         #    self.replay_push(upstream_id, record, checkpoint_epoch)
 
         checkpoint_id = checkpoint["checkpoint_id"]
-        debug("Reloaded checkpoint", latest_checkpoint_interval, checkpoint_id)
+        self.logger.debug("Reloaded checkpoint %d %s", latest_checkpoint_interval, checkpoint_id)
         return checkpoint_id
 
     def checkpoint_expired(self, actor_id, checkpoint_id):
         return
 
-@ray.remote
+@ray.remote(max_reconstructions=100)
+class Mapper(NondeterministicOperator):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.logger.debug("MAPPER: %s", self.operator_id)
+
+    def key(self, word):
+        return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_reducers
+
+    def process(self, record):
+        timestamp, line = record
+        words = line.strip().split(' ')
+        return [(self.key(word), (timestamp, word, 1)) for word in words]
+
+
+@ray.remote(max_reconstructions=100)
 class Reducer(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
         self.state = {
                 }
+        self.logger.debug("REDUCER: %s", self.operator_id)
 
     def process(self, record):
         timestamp, word, count = record
@@ -385,29 +399,35 @@ class Reducer(NondeterministicOperator):
     def get_counts(self):
         return self.state
 
-class Sink(object):
-    def __init__(self, operator_id, source_keys, checkpoint_tracker):
-        self.operator_id = operator_id
-        self.checkpoint_tracker = checkpoint_tracker
-        self.checkpoint_epoch = 0
-        self.latencies = []
+@ray.remote(max_reconstructions=100)
+class Sink(NondeterministicOperator):
+    def __init__(self, output_filename, *args):
+        super().__init__(*args)
+        self.output_file = open(output_filename, 'w+')
 
-    def push(self, upstream_id, records, checkpoint_epoch):
-        for record in records:
-            timestamp, source_key, val = record
-            self.latencies.append(time.time() - timestamp)
+        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        self.logger.debug("SINK: %s", self.operator_id)
 
-            # TODO: Normally we would also take a checkpoint on the sink, then
-            # release the new checkpoint interval to the tracker.
-            if checkpoint_epoch > self.checkpoint_epoch:
-                assert checkpoint_epoch == self.checkpoint_epoch + 1, ("Sink did not receive any records for checkpoint", checkpoint_epoch)
-                # Notify the checkpoint tracker that we have completed this
-                # checkpoint.
-                self.checkpoint_tracker.notify_checkpoint_complete.remote(self.operator_id, self.checkpoint_epoch)
-                self.checkpoint_epoch = checkpoint_epoch
+    def process(self, record):
+        timestamp, _, _ = record
+        if timestamp is not None:
+            self.output_file.write('{}\n'.format(time.time() - timestamp))
+        return []
 
-    def get_latencies(self):
-        return self.latencies
+    def save_checkpoint(self, actor_id, checkpoint_id):
+        super().save_checkpoint(actor_id, checkpoint_id)
+        # Notify the checkpoint tracker that we have completed this
+        # checkpoint.
+        self.checkpoint_tracker.notify_checkpoint_complete.remote(self.operator_id, self.checkpoint_epoch - 1)
+
+    def flush_latencies(self):
+        self.output_file.close()
+
+def create_local_node(cluster, i, node_kwargs):
+    resource = "Node{}".format(i)
+    node_kwargs["resources"] = {resource: 100}
+    node = cluster.add_node(**node_kwargs)
+    return node, resource
 
 @ray.remote(resources={"Node0": 1})
 class CheckpointTracker(object):
@@ -433,19 +453,30 @@ class CheckpointTracker(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Benchmarks.')
     parser.add_argument(
-        '--num-workers',
+        '--redis-address',
+        default=None,
+        type=str,
+        help='The address of the redis server.')
+    parser.add_argument(
+        '--dump',
+        default=None,
+        type=str,
+        help='A filename to dump the task timeline')
+    parser.add_argument(
+        '--num-mappers',
         default=1,
         type=int,
-        help='The number of intermediate, nondeterministic operators to use.')
+        help='The number of mappers to use.')
+    parser.add_argument(
+        '--num-reducers',
+        default=1,
+        type=int,
+        help='The number of reducers to use.')
     parser.add_argument(
         '--checkpoint-interval',
         default=10000,
         type=int,
         help='The number of records to process per source in one checkpoint epoch.')
-    parser.add_argument(
-        '--same-node',
-        action='store_true',
-        help='Place all intermediate operators on the same node.')
     parser.add_argument(
         '--words-file',
         type=str,
@@ -471,6 +502,11 @@ if __name__ == '__main__':
         type=float,
         default=1.0,
         help='The probability of flushing a batch on the nondeterministic operator.')
+    parser.add_argument(
+        '--latency-file',
+        type=str,
+        default='latency.txt',
+        help='')
     args = parser.parse_args()
 
     # Create the checkpoint directory.
@@ -482,48 +518,53 @@ if __name__ == '__main__':
         pass
 
 
-    internal_config = json.dumps({
-        "initial_reconstruction_timeout_milliseconds": 200,
-        "num_heartbeats_timeout": 20,
-        "object_manager_repeated_push_delay_ms": 1000,
-        "object_manager_pull_timeout_ms": 1000,
-        "gcs_delay_ms": 100,
-        # We will kill all nondeterministic workers, so make sure we can
-        # tolerate that many failures.
-        "lineage_stash_max_failures": args.num_workers,
-        "node_manager_forward_task_retry_timeout_milliseconds": 100,
-    })
+    # Initialize Ray.
+    if args.redis_address is None:
+        internal_config = json.dumps({
+            "initial_reconstruction_timeout_milliseconds": 200,
+            "num_heartbeats_timeout": 20,
+            "object_manager_repeated_push_delay_ms": 1000,
+            "object_manager_pull_timeout_ms": 1000,
+            "gcs_delay_ms": 0,
+            "lineage_stash_max_failures": -1,
+            "node_manager_forward_task_retry_timeout_milliseconds": 100,
+        })
 
-    node_kwargs = {
-        "num_cpus": 4,
-        "object_store_memory": 10**9,
-        "_internal_config": internal_config,
-    }
+        node_kwargs = {
+            "num_cpus": 4,
+            "object_store_memory": 10**9,
+            "_internal_config": internal_config,
+        }
 
-    cluster = Cluster(initialize_head=True, head_node_args=node_kwargs)
-    if args.same_node:
-        # One node for all nondeterministic operators, plus one for the source
-        # operators, plus one for the sink operators.
-        num_nodes = 1 + 1 + 1
+        cluster = Cluster(initialize_head=True, head_node_args=node_kwargs)
+        # One source and mapper per mapper node. One reducer per reducer node. One
+        # sink.
+        mapper_nodes, mapper_resources = [], []
+        reducer_nodes, reducer_resources = [], []
+        sink_node, sink_resource = None, None
+        nodes = []
+        i = 0
+        for _ in range(args.num_mappers):
+            node, resource = create_local_node(cluster, i, node_kwargs)
+            mapper_nodes.append(node)
+            mapper_resources.append(resource)
+            i += 1
+        for _ in range(args.num_reducers):
+            node, resource = create_local_node(cluster, i, node_kwargs)
+            reducer_nodes.append(node)
+            reducer_resources.append(resource)
+            i += 1
+        sink_node, sink_resource = create_local_node(cluster, i, node_kwargs)
+        redis_address = cluster.redis_address
     else:
-        # One node for each nondeterministic operator, plus one for the source
-        # operators, plus one for the sink operators.
-        num_nodes = args.num_workers + 1 + 1
-    resources = []
-    nodes = []
-    for i in range(num_nodes):
-        resource = "Node{}".format(i)
-        node_kwargs["resources"] = {resource: 100}
-        resources.append(resource)
-        nodes.append(cluster.add_node(**node_kwargs))
-    redis_address = cluster.redis_address
+        redis_address = args.redis_address
     ray.init(redis_address=redis_address)
 
-    num_sources = 1
     operator_ids = list(string.ascii_uppercase)
-    source_keys = [operator_ids.pop(0) for _ in range(num_sources)]
-    intermediate_keys = [operator_ids.pop(0) for _ in range(args.num_workers)]
-    reducer_key = operator_ids.pop(0)
+    # One source per mapper.
+    source_keys = [operator_ids.pop(0) for _ in range(args.num_mappers)]
+    mapper_keys = [operator_ids.pop(0) for _ in range(args.num_mappers)]
+    reducer_keys = [operator_ids.pop(0) for _ in range(args.num_reducers)]
     # One sink.
     sink_key = operator_ids.pop(0)
 
@@ -531,54 +572,63 @@ if __name__ == '__main__':
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
     # Create the sink.
-    sink_cls = ray.remote(resources={
-            resources[-1]: 1
-            })(Sink)
-    sink = sink_cls.remote(sink_key, source_keys, checkpoint_tracker)
+    sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
+    sink = Sink._remote(
+            args=sink_args,
+            kwargs={},
+            resources={sink_resource: 1})
+    ray.get(sink.ping.remote())
 
-    upstream_keys = intermediate_keys
-    reducer = Reducer.remote(reducer_key, [sink], args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size)
+    # Create the reducers.
+    upstream_keys = mapper_keys
+    reducers = []
+    for i, reducer_key in enumerate(reducer_keys):
+        resource = reducer_resources[i]
+        reducer_args = [reducer_key, [sink], args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        print("Starting reducer", reducer_key, "upstream:", upstream_keys, "resource:", resource)
+        reducer = Reducer._remote(
+                args=reducer_args,
+                kwargs={},
+                resources={resource: 1})
+        reducers.append(reducer)
+    ray.get([reducer.ping.remote() for reducer in reducers])
 
     # Create the intermediate operators.
-    operators = []
-    operator = reducer
-    for i, key in reversed(list(enumerate(intermediate_keys))):
-        if args.same_node:
-            # All nondeterministic operators are placed on the same node.
-            resource = resources[1]
-        else:
-            # Each nondeterministic operator is placed on a different node.
-            resource = resources[i + 1]
-
-        cls = ray.remote(resources={
-            resource: 1,
-            }, max_reconstructions=100)(NondeterministicOperator)
-        if i == 0:
-            upstream_keys = source_keys
-        else:
-            upstream_keys = [intermediate_keys[i-1]]
-        print("Starting intermediate operator", key, upstream_keys)
-        operator = cls.remote(key, [operator], args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size)
-        operators.append(operator)
-
-    ray.get([operator.ping.remote() for operator in operators])
-
+    mappers = []
+    for i, mapper_key in enumerate(mapper_keys):
+        resource = mapper_resources[i]
+        upstream_keys = [source_keys[i]]
+        mapper_key = mapper_keys[i]
+        mapper_args = [mapper_key, reducers, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        print("Starting mapper", mapper_key, "upstream:", upstream_keys, "resource:", resource)
+        mapper = Mapper._remote(
+                args=mapper_args,
+                kwargs={},
+                resources={resource: 1})
+        mappers.append(mapper)
+    ray.get([mapper.ping.remote() for mapper in mappers])
 
     # Create the sources.
-    source_args = [None, operators, args.max_queue_length, args.checkpoint_interval, args.words_file]
     sources = []
-    for key in source_keys:
-        source_args[0] = key
-        sources.append(WordSource._remote(args=source_args, kwargs={}, resources={"Node0": 1}))
+    for i, source_key in enumerate(source_keys):
+        resource = mapper_resources[i]
+        mapper = mappers[i]
+        source_args = [source_key, [mapper], args.max_queue_length, args.checkpoint_interval, args.words_file]
+        print("Starting source", source_key, "resource:", resource)
+        sources.append(WordSource._remote(
+            args=source_args,
+            kwargs={},
+            resources={resource: 1}))
+    ray.get([source.ping.remote() for source in sources])
 
     start = time.time()
-    generators = [source.generate.remote(args.num_records, args.batch_size) for source in sources]
+    generators = [source.generate.remote(args.num_records // len(sources), args.batch_size) for source in sources]
 
     time.sleep(2)
     # The intermediate operators are on all nodes except the source node and
     # the sink node.
-    intermediate_nodes = nodes[1:-1]
-    intermediate_resources = resources[1:-1]
+    #intermediate_nodes = nodes[1:-1]
+    #intermediate_resources = resources[1:-1]
     # Kill and restart all intermediate operators.
     #for node in intermediate_nodes:
     #    cluster.remove_node(node)
@@ -590,17 +640,22 @@ if __name__ == '__main__':
     end = time.time()
     print("Elapsed time:", end - start)
     print("Source throughputs:", throughputs)
-    latencies = ray.get(sink.get_latencies.remote())
+    ray.get(sink.flush_latencies.remote())
+    latencies = []
+    with open(args.latency_file, 'r') as f:
+        for line in f.readlines():
+            latency = float(line.strip())
+            latencies.append(latency)
     print("Mean latency:", np.mean(latencies), "max latency:", np.max(latencies))
 
-    state = ray.get(reducer.get_counts.remote())
-    counts_200000 = {'hello': 200000, 'bye': 66666, 'there': 133334, 'hi': 66667, 'good': 66666}
-    print("Final count is", state)
-    for key, value in state.items():
-        assert counts_200000[key] == value
-    for key, value in counts_200000.items():
-        assert state[key] == value
 
-    events = ray.global_state.chrome_tracing_dump()
-    with open("test.json", "w") as outfile:
-        json.dump(events, outfile)
+    if args.dump is not None:
+        events = ray.global_state.chrome_tracing_dump()
+        with open(args.dump, "w") as outfile:
+            json.dump(events, outfile)
+
+    all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
+    counts = {}
+    for count in all_counts:
+        counts.update(count)
+    print("Final count is", counts)
