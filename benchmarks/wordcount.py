@@ -14,7 +14,7 @@ import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
 
-DEBUG = True
+DEBUG = False
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 
@@ -126,6 +126,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         self.queue = []
         self.max_queue_length = max_queue_length
+
+        self.state = None
 
     def ping(self):
         return
@@ -296,6 +298,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         debug("Saving checkpoint", self.checkpoint_epoch, checkpoint_id)
         assert len(self.checkpoints_pending) == 0
         checkpoint = {
+                "state": self.state,
                 "handles": self.handles,
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_epoch": self.checkpoint_epoch,
@@ -344,6 +347,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
+        self.state = checkpoint["state"]
         self.handles = checkpoint["handles"]
         [handle.reset_handle_id() for handle in self.handles]
         self.num_records_seen = checkpoint["num_records_seen"]
@@ -368,18 +372,18 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 class Reducer(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
-        self.counts = {
+        self.state = {
                 }
 
     def process(self, record):
         timestamp, word, count = record
-        if word not in self.counts:
-            self.counts[word] = 0
-        self.counts[word] += count
-        return [(0, (timestamp, word, self.counts[word]))]
+        if word not in self.state:
+            self.state[word] = 0
+        self.state[word] += count
+        return [(0, (timestamp, word, self.state[word]))]
 
     def get_counts(self):
-        return self.counts
+        return self.state
 
 class Sink(object):
     def __init__(self, operator_id, source_keys, checkpoint_tracker):
@@ -589,13 +593,13 @@ if __name__ == '__main__':
     latencies = ray.get(sink.get_latencies.remote())
     print("Mean latency:", np.mean(latencies), "max latency:", np.max(latencies))
 
-    counts = ray.get(reducer.get_counts.remote())
+    state = ray.get(reducer.get_counts.remote())
     counts_200000 = {'hello': 200000, 'bye': 66666, 'there': 133334, 'hi': 66667, 'good': 66666}
-    print("Final count is", counts)
-    for key, value in counts.items():
+    print("Final count is", state)
+    for key, value in state.items():
         assert counts_200000[key] == value
     for key, value in counts_200000.items():
-        assert counts[key] == value
+        assert state[key] == value
 
     events = ray.global_state.chrome_tracing_dump()
     with open("test.json", "w") as outfile:
