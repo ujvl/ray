@@ -65,6 +65,7 @@ class WordSource(object):
             operator_id,
             handles,
             max_queue_length,
+            checkpoint_dir,
             checkpoint_interval,
             words_file):
         logging.basicConfig(level=LOG_LEVEL)
@@ -74,7 +75,6 @@ class WordSource(object):
         self.words_file = words_file
 
         self.operator_id = operator_id
-        self.index = 0
         self.handles = handles
         self.queue = []
         self.max_queue_length = max_queue_length
@@ -85,43 +85,114 @@ class WordSource(object):
         self.checkpoint_interval = checkpoint_interval
         self.records_since_checkpoint = 0
         self.num_records_seen = 0
+        self.num_flushes = 0
+        self.record_timestamp = None
 
-    # Returns next sentence from the input file
+        # Create the checkpoint directory.
+        self.checkpoint_dir = checkpoint_dir
+        try:
+            os.makedirs(self.checkpoint_dir)
+        except FileExistsError:
+            pass
+
+        self.checkpoint_attrs = [
+                "words_file",
+                "handles",
+                "checkpoint_epoch",
+                "records_since_checkpoint",
+                "num_records_seen",
+                "num_flushes",
+                "record_timestamp",
+                ]
+        self.load_checkpoint()
+
+    def save_checkpoint(self):
+        with ray.profiling.profile("save_checkpoint"):
+            self.logger.debug("Saving checkpoint %d", self.checkpoint_epoch)
+
+            checkpoint = {
+                    attr: getattr(self, attr) for attr in self.checkpoint_attrs
+                    }
+            checkpoint = pickle.dumps(checkpoint)
+            self.logger.debug("Checkpoint size is %d", len(checkpoint))
+            # NOTE: The default behavior is to register a random actor handle
+            # whenever a handle is pickled, so that the execution dependency is
+            # never removed and anytime the handle is unpickled, we will be able to
+            # submit tasks.  However, we do not need to do this since we are only
+            # going to unpickle the handle once, when the actor recovers from the
+            # checkpoint.
+            [handle._ray_new_actor_handles.clear() for handle in self.handles]
+
+            actor_id = ray.worker.global_worker.actor_id
+            checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), self.checkpoint_epoch)
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+            with open(checkpoint_path, 'wb+') as f:
+                f.write(checkpoint)
+
+            self.checkpoint_epoch += 1
+
+    def load_checkpoint(self):
+        with ray.profiling.profile("load_checkpoint"):
+            checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+            latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
+            if latest_checkpoint_interval < 0:
+                return False
+            # Read the latest checkpoint from disk.
+            checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint = pickle.loads(f.read())
+            for attr, value in self.checkpoint_attrs.items():
+                setattr(self, attr, value)
+            [handle.reset_handle_id() for handle in self.handles]
+
+            self.checkpoint_epoch += 1
+
+            # Replay up to the saved index into the file.
+            self.logger.debug("Replaying %d lines", self.num_records_seen)
+            for _ in range(self.num_records_seen):
+                self.reader.readline()
+
+
     def generate(self, num_records, batch_size, target_throughput=-1):
-        start_time = time.time()
         self.reader = open(self.words_file, 'r')
-        i = 0
-        handle = self.handles[i]
+        handle = self.handles[self.num_flushes]
 
         if target_throughput > -1:
             time_slice = batch_size / target_throughput
 
+        start_time = time.time()
+        if self.record_timestamp is None:
+            self.record_timestamp = start_time
         while self.num_records_seen < num_records:
             start = time.time()
             batch = [(None, self.reader.readline()) for _ in range(batch_size)]
             # TODO: Set timestmap interval.
-            batch[0] = (time.time(), batch[0][1])
+            batch[0] = (self.record_timestamp, batch[0][1])
             assert(len(batch) > 0), len(batch)
 
-            self.records_since_checkpoint += len(batch)
-            if self.records_since_checkpoint >= self.checkpoint_interval:
-                self.checkpoint_epoch += 1
-                self.records_since_checkpoint -= self.checkpoint_interval
-                # TODO: take a checkpoint.
-
             args = [self.operator_id, batch, self.checkpoint_epoch]
-            backpressured_push(handle, self.queue, i, self.max_queue_length, args)
+            backpressured_push(handle, self.queue, self.num_flushes, self.max_queue_length, args)
 
             self.num_records_seen += len(batch)
-            i += 1
-            handle = self.handles[(i + 1) % len(self.handles)]
+            self.num_flushes += 1
+            handle = self.handles[(self.num_flushes + 1) % len(self.handles)]
 
+            # Save a checkpoint if we have passed the checkpoint interval.
+            self.records_since_checkpoint += len(batch)
+            if self.records_since_checkpoint >= self.checkpoint_interval:
+                self.save_checkpoint()
+                self.records_since_checkpoint -= self.checkpoint_interval
+
+            duration = time.time() - start
             if target_throughput > -1:
-                end = time.time()
-                remaining = time_slice - (end - start)
+                remaining = time_slice - duration
                 if remaining > 0.001:
                     self.logger.debug("Sleeping for %f, time slice %d", remaining, time_slice)
                     time.sleep(remaining)
+                self.record_timestamp += time_slice
+            else:
+                self.record_timestamp += duration
 
         ray.get([handle.push.remote(self.operator_id, [], self.checkpoint_epoch) for handle in self.handles])
         throughput = self.num_records_seen / (time.time() - start_time)
@@ -423,6 +494,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 class Mapper(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
+        # Mappers only have one upstream actor.
+        self._ray_downstream_actors.clear()
         self.logger.info("MAPPER: %s", self.operator_id)
 
     def key(self, word):
@@ -525,6 +598,11 @@ if __name__ == '__main__':
         default=1,
         type=int,
         help='The number of reducers to use.')
+    parser.add_argument(
+        '--num-failures',
+        default=0,
+        type=int,
+        help='')
     parser.add_argument(
         '--checkpoint-interval',
         default=10000,
@@ -671,7 +749,7 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i]
         mapper = mappers[i]
-        source_args = [source_key, [mapper], args.max_queue_length, args.checkpoint_interval, args.words_file]
+        source_args = [source_key, [mapper], args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
