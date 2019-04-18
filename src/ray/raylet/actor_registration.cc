@@ -26,6 +26,7 @@ ActorRegistration::ActorRegistration(const ActorTableDataT &actor_table_data,
     frontier_entry.task_counter = checkpoint_data.task_counters[i];
     frontier_entry.execution_dependency =
         ObjectID::from_binary(checkpoint_data.frontier_dependencies[i]);
+    RAY_LOG(DEBUG) << "Checkpoint frontier entry " << handle_id << ": " << frontier_entry.task_counter << " " << frontier_entry.execution_dependency;
   }
   // Restore `dummy_objects_`.
   for (size_t i = 0; i < checkpoint_data.unreleased_dummy_objects.size(); i++) {
