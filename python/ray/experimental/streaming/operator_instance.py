@@ -794,16 +794,27 @@ class EventTimeWindow(OperatorInstance):
         indexes = []
         for w, window in self.state.items():
             if w < min_open_window: # Window has expired
-                for record in window:
-                    record['window'] = w
-                    record['system_time'] = watermark['system_time']
-                result += window
+                if self.aggregator is None:
+                    for record in window:
+                        record['window'] = w
+                        record['system_time'] = watermark['system_time']
+                    result += window
+                else:
+                    for auction, count in window.items():
+                        record = {
+                                'auction': auction,
+                                'count': count,
+                                'window': w,
+                                'system_time': watermark['system_time'],
+                                'event_type': 'Record',
+                                }
+                        result.append(record)
                 indexes.append(w)
                 logger.debug("XXX Firing window %d on time %d", w, event_time)
         for i in indexes:
             self.state.pop(i)
         return result
-    
+
     # Collects windows that have expired
     def __collect_expired_windows(self, watermark):
         result = []
@@ -1157,7 +1168,8 @@ class Source(OperatorInstance):
                     return
                 self.output._push_batch(record_batch)
                 logger.debug("SOURCE %s watermark:%d max_time:%f, record_time:%f", len(record_batch), self.watermark_interval, self.max_event_time, record_batch[-1]["dateTime"])
-                watermark = self.__watermark_batch(record_batch)
+                if self.watermark_interval > 0:
+                    self.__watermark_batch(record_batch)
 
                 self.num_records_seen += len(record_batch)
                 if self.num_records_seen % 10000 == 0:

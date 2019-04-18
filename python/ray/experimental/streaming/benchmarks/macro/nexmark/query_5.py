@@ -8,7 +8,7 @@ import math
 import string
 import sys
 import time
-import defaultdict
+from collections import defaultdict
 
 import ray
 import ray.experimental.streaming.benchmarks.utils as utils
@@ -96,12 +96,12 @@ class AggregationLogic(object):
     def initialize(self, bid):
         return (bid["auction"], 1)
 
-    def initialize_window(self, bid):
+    def initialize_window(self):
         return defaultdict(int)
 
     # Updates number of bids per auction with the given record
     def update(self, old_state, bid):
-        old_state[bid] += 1
+        old_state[bid['auction']] += 1
 
 if __name__ == "__main__":
 
