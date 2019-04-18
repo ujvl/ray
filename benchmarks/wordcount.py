@@ -16,7 +16,7 @@ from ray.experimental import named_actors
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
-LOG_LEVEL = logging.WARNING
+LOG_LEVEL = logging.INFO
 
 
 def wait_queue(queue, max_queue_length):
@@ -70,7 +70,12 @@ class WordSource(object):
         self.reader = open(self.words_file, 'r')
         i = 0
         handle = self.handles[i]
+
+        if target_throughput > -1:
+            time_slice = batch_size / target_throughput
+
         while self.num_records_seen < num_records:
+            start = time.time()
             batch = [(None, self.reader.readline()) for _ in range(batch_size)]
             # TODO: Set timestmap interval.
             batch[0] = (time.time(), batch[0][1])
@@ -88,6 +93,13 @@ class WordSource(object):
             self.num_records_seen += len(batch)
             i += 1
             handle = self.handles[(i + 1) % len(self.handles)]
+
+            if target_throughput > -1:
+                end = time.time()
+                remaining = time_slice - (end - start)
+                if remaining > 0.001:
+                    self.logger.debug("Sleeping for %f, time slice %d", remaining, time_slice)
+                    time.sleep(remaining)
 
         ray.get([handle.push.remote(self.operator_id, [], self.checkpoint_epoch) for handle in self.handles])
         throughput = self.num_records_seen / (time.time() - start_time)
@@ -132,8 +144,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         self.state = None
 
-    def ping(self):
-        return
+    def register_self_handle(self, self_handle):
+        self.self_handle = self_handle
 
     def checkpoint(self, upstream_id, checkpoint_epoch):
         if checkpoint_epoch > self.checkpoint_epoch:
@@ -165,7 +177,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         if self.flush_checkpoint_buffer:
             self.push_checkpoint_buffer(submit_log)
-            self.flush_checkpoint_buffer = False
 
         if submit_log is not None:
             self.replay_push(upstream_id, records, checkpoint_epoch, submit_log)
@@ -295,6 +306,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             assert len(self.checkpoints_pending) == 0
             checkpoint = {
                     "state": self.state,
+                    "self_handle": self.self_handle,
                     "handles": self.handles,
                     "checkpoint_id": checkpoint_id,
                     "checkpoint_epoch": self.checkpoint_epoch,
@@ -317,8 +329,12 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
             self.checkpoint_epoch += 1
             self.flush_checkpoint_buffer = True
+            self.self_handle.push_checkpoint_buffer.remote()
 
     def push_checkpoint_buffer(self, submit_log=None):
+        if not self.flush_checkpoint_buffer:
+            return
+        self.flush_checkpoint_buffer = False
         with ray.profiling.profile("flush_checkpoint_buffer"):
             self.logger.debug("Pushing checkpoint buffer %d, length %d", self.checkpoint_epoch, len(self.checkpoint_buffer))
 
@@ -346,6 +362,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
         self.state = checkpoint["state"]
+        self.self_handle = checkpoint["self_handle"]
+        self.self_handle.reset_handle_id()
         self.handles = checkpoint["handles"]
         [handle.reset_handle_id() for handle in self.handles]
         self.num_records_seen = checkpoint["num_records_seen"]
@@ -370,7 +388,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 class Mapper(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
-        self.logger.debug("MAPPER: %s", self.operator_id)
+        self.logger.info("MAPPER: %s", self.operator_id)
 
     def key(self, word):
         return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_reducers
@@ -387,7 +405,7 @@ class Reducer(NondeterministicOperator):
         super().__init__(*args)
         self.state = {
                 }
-        self.logger.debug("REDUCER: %s", self.operator_id)
+        self.logger.info("REDUCER: %s", self.operator_id)
 
     def process(self, record):
         timestamp, word, count = record
@@ -406,7 +424,7 @@ class Sink(NondeterministicOperator):
         self.output_file = open(output_filename, 'w+')
 
         self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
-        self.logger.debug("SINK: %s", self.operator_id)
+        self.logger.info("SINK: %s", self.operator_id)
 
     def process(self, record):
         timestamp, _, _ = record
@@ -507,6 +525,11 @@ if __name__ == '__main__':
         type=str,
         default='latency.txt',
         help='')
+    parser.add_argument(
+        '--target-throughput',
+        type=int,
+        default=-1,
+        help='')
     args = parser.parse_args()
 
     # Create the checkpoint directory.
@@ -577,7 +600,7 @@ if __name__ == '__main__':
             args=sink_args,
             kwargs={},
             resources={sink_resource: 1})
-    ray.get(sink.ping.remote())
+    ray.get(sink.register_self_handle.remote(sink))
 
     # Create the reducers.
     upstream_keys = mapper_keys
@@ -591,7 +614,7 @@ if __name__ == '__main__':
                 kwargs={},
                 resources={resource: 1})
         reducers.append(reducer)
-    ray.get([reducer.ping.remote() for reducer in reducers])
+    ray.get([reducer.register_self_handle.remote(reducer) for reducer in reducers])
 
     # Create the intermediate operators.
     mappers = []
@@ -606,7 +629,7 @@ if __name__ == '__main__':
                 kwargs={},
                 resources={resource: 1})
         mappers.append(mapper)
-    ray.get([mapper.ping.remote() for mapper in mappers])
+    ray.get([mapper.register_self_handle.remote(mapper) for mapper in mappers])
 
     # Create the sources.
     sources = []
@@ -622,7 +645,9 @@ if __name__ == '__main__':
     ray.get([source.ping.remote() for source in sources])
 
     start = time.time()
-    generators = [source.generate.remote(args.num_records // len(sources), args.batch_size) for source in sources]
+    num_records = args.num_records // len(sources)
+    target_throughput = args.target_throughput // len(sources)
+    generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
     time.sleep(2)
     # The intermediate operators are on all nodes except the source node and
