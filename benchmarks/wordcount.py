@@ -20,6 +20,15 @@ LOG_LEVEL = logging.INFO
 
 
 def wait_queue(queue, max_queue_length):
+    if len(queue) <= max_queue_length:
+        return
+
+    # Check pending downstream tasks. Update queue in place.
+    _, queue[:] = ray.wait(
+            queue,
+            num_returns=len(queue),
+            timeout=0)
+
     wait_time = 0
     while len(queue) > max_queue_length:
         _, queue[:-1] = ray.wait(queue[:-1], len(queue) - 1, timeout=0.1, request_once=True)
@@ -31,7 +40,20 @@ def wait_queue(queue, max_queue_length):
         if wait_time > 0.3 and len(queue) > 0:
             last_item = queue[-1]
             ray.wait([last_item], 1, timeout=0)
+            wait_time = 0
 
+def backpressured_push(handle, queue, num_tasks, max_queue_length, args, nondeterministic_event=None):
+    num_return_vals = 0
+    if num_tasks % max_queue_length  == 0:
+        num_return_vals = 1
+    obj_id = handle.push._remote(
+            args=args,
+            kwargs={},
+            num_return_vals=num_return_vals,
+            nondeterministic_event=nondeterministic_event)
+    if obj_id:
+        queue.append(obj_id)
+        wait_queue(queue, 1)
 
 
 # A custom data source that reads articles from wikipedia
@@ -87,8 +109,8 @@ class WordSource(object):
                 self.records_since_checkpoint -= self.checkpoint_interval
                 # TODO: take a checkpoint.
 
-            self.queue.append(handle.push.remote(self.operator_id, batch, self.checkpoint_epoch))
-            wait_queue(self.queue, self.max_queue_length)
+            args = [self.operator_id, batch, self.checkpoint_epoch]
+            backpressured_push(handle, self.queue, i, self.max_queue_length, args)
 
             self.num_records_seen += len(batch)
             i += 1
@@ -143,6 +165,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self.max_queue_length = max_queue_length
 
         self.state = None
+        self.num_flushes = 0
 
     def register_self_handle(self, self_handle):
         self.self_handle = self_handle
@@ -278,10 +301,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         do_flush = do_flush or self._should_checkpoint
         if do_flush:
             #future = self.flush(event=str(self.num_records_seen).encode('ascii'))
-            future = self.flush(buffer_index)
+            future = self.backpressured_flush(buffer_index)
             self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
-            self.queue.append(future)
-            wait_queue(self.queue, self.max_queue_length)
 
     def flush(self, buffer_index, event=None):
         flush_buffer = self.flush_buffers[buffer_index]
@@ -289,6 +310,20 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 args=[self.operator_id, flush_buffer, self.checkpoint_epoch],
                 kwargs={},
                 nondeterministic_event=event)
+        flush_buffer.clear()
+        return future
+
+    def backpressured_flush(self, buffer_index, event=None):
+        flush_buffer = self.flush_buffers[buffer_index]
+        args=[self.operator_id, flush_buffer, self.checkpoint_epoch]
+        future = backpressured_push(
+                self.handles[buffer_index],
+                self.queue,
+                self.num_flushes,
+                self.max_queue_length,
+                args,
+                nondeterministic_event=event)
+        self.num_flushes += 1
         flush_buffer.clear()
         return future
 
