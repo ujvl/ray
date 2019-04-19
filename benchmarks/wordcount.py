@@ -54,7 +54,6 @@ def backpressured_push(logger, handle, queue, num_tasks, max_queue_length, args,
             nondeterministic_event=nondeterministic_event)
     if obj_id:
         queue.append(obj_id)
-        wait_queue(logger, queue, 1)
     return obj_id
 
 
@@ -181,13 +180,41 @@ class WordSource(object):
             assert(len(batch) > 0), len(batch)
 
             # TODO: Set timestamps.
-            for i in range(self.timestamps_per_batch):
-                timestamp_index = -i // self.timestamps_per_batch
-                batch[-timestamp_index] = (self.record_timestamp, batch[-timestamp_index][1])
+            #for i in range(self.timestamps_per_batch):
+            #    timestamp_index = -i // self.timestamps_per_batch
+            #    batch[-timestamp_index] = (self.record_timestamp, batch[-timestamp_index][1])
+            batch[0] = (self.record_timestamp, batch[0][1])
+
+            if target_throughput > -1:
+                self.record_timestamp += time_slice
+            else:
+                duration = time.time() - start
+                self.record_timestamp += duration
+
+            remaining = self.record_timestamp - time.time()
+            self.logger.debug("REMAINING: %f", remaining)
+            if target_throughput == -1 or remaining > 0:
+                # We are faster than the downstream actor, so wait for it to
+                # catch up.
+                wait_queue(self.logger, self.queue, 1)
+                remaining = self.record_timestamp - time.time()
+                if remaining > 0.001:
+                    self.logger.debug("Sleeping for %f, time slice %d", remaining, time_slice)
+                    time.sleep(remaining)
+                backpressure = True
+            else:
+                # We're falling beihnd. This is because we are replaying the source.
+                backpressure = False
 
             args = [self.operator_id, batch, self.checkpoint_epoch]
-            self.logger.info("Pushing, queue is %s, task counter: %d, num flushes: %d, max queue length: %d", self.queue, handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
-            backpressured_push(self.logger, handle, self.queue, self.num_flushes, self.max_queue_length, args)
+            self.logger.info("Pushing after %f, queue length: %s, task counter: %d, num flushes: %d, max queue length: %d", time.time() - batch[0][0], len(self.queue), handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
+            if backpressure:
+                backpressured_push(self.logger, handle, self.queue, self.num_flushes, self.max_queue_length, args)
+            else:
+                handle.push._remote(
+                        args=args,
+                        kwargs={},
+                        num_return_vals=0)
 
             self.num_records_seen += len(batch)
             self.num_flushes += 1
@@ -198,16 +225,6 @@ class WordSource(object):
             if self.records_since_checkpoint >= self.checkpoint_interval:
                 self.save_checkpoint()
                 self.records_since_checkpoint -= self.checkpoint_interval
-
-            duration = time.time() - start
-            if target_throughput > -1:
-                remaining = time_slice - duration
-                if remaining > 0.001:
-                    self.logger.debug("Sleeping for %f, time slice %d", remaining, time_slice)
-                    time.sleep(remaining)
-                self.record_timestamp += time_slice
-            else:
-                self.record_timestamp += duration
 
         done = [handle.push.remote(self.operator_id, [], self.checkpoint_epoch) for handle in self.handles]
         self.logger.debug("Waiting for done objects %s", done)
@@ -444,6 +461,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 self.max_queue_length,
                 args,
                 nondeterministic_event=event)
+        wait_queue(self.logger, self.queue, 1)
         self.num_flushes += 1
         flush_buffer.clear()
         return future
@@ -466,7 +484,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     }
             checkpoint["checkpoint_id"] = checkpoint_id
             checkpoint = pickle.dumps(checkpoint)
-            self.logger.debug("Checkpoint size is %d", len(checkpoint))
+            self.logger.debug("Checkpoint size is %d, num records %d, buffer size is %d", len(checkpoint), len(self.checkpoint_buffer), sum([len(records) for _, records, _ in self.checkpoint_buffer]))
             # NOTE: The default behavior is to register a random actor handle
             # whenever a handle is pickled, so that the execution dependency is
             # never removed and anytime the handle is unpickled, we will be able to
@@ -656,7 +674,7 @@ if __name__ == '__main__':
         help='')
     parser.add_argument(
         '--checkpoint-interval',
-        default=10000,
+        default=100000,
         type=int,
         help='The number of records to process per source in one checkpoint epoch.')
     parser.add_argument(
@@ -841,7 +859,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    time.sleep(3)
+    time.sleep(10)
     # Kill and restart mappers and reducers.
     nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
     resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
