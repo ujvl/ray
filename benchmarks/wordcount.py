@@ -55,6 +55,7 @@ def backpressured_push(logger, handle, queue, num_tasks, max_queue_length, args,
     if obj_id:
         queue.append(obj_id)
         wait_queue(logger, queue, 1)
+    return obj_id
 
 
 # A custom data source that reads articles from wikipedia
@@ -324,44 +325,67 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 # records.
                 ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
             else:
-                while submit_log and records:
-                    next_task_id = ray._raylet.generate_actor_task_id(
-                            ray.worker.global_worker.task_driver_id,
-                            self.handle._ray_actor_id,
-                            self.handle._ray_actor_handle_id,
-                            self.handle._ray_actor_counter)
-                    task = ray.global_state.task_table(task_id=next_task_id)
-                    if not task or task["ExecutionSpec"]["NumExecutions"] < 1:
-                        self.logger.debug("REPLAY: never executed task %s", next_task_id)
+                while submit_log and len(records) > self.batch_size:
+                    executed = True
+                    for handle in self.handles:
+                        next_task_id = ray._raylet.generate_actor_task_id(
+                                ray.worker.global_worker.task_driver_id,
+                                handle._ray_actor_id,
+                                handle._ray_actor_handle_id,
+                                handle._ray_actor_counter)
+                        task = ray.global_state.task_table(task_id=next_task_id)
+                        if not task or task["ExecutionSpec"]["NumExecutions"] < 1:
+                            self.logger.debug("REPLAY: never executed task %s", next_task_id)
+                            executed = False
+                            break
+                    if not executed:
                         break
-                    #else:
-                    #    assert task["ExecutionSpec"]["NumExecutions"] >= 1, task
 
-                    num_skip_records = submit_log[0] - self.num_records_seen
-                    self.logger.debug("REPLAY: submit: %d, skipping: %d, seen: %d, num records: %d", submit_log[0], num_skip_records, self.num_records_seen, len(records))
+                    num_skip_records = self.batch_size
+                    if submit_log and submit_log[0] - self.num_records_seen < self.batch_size:
+                        num_skip_records = submit_log[0] - self.num_records_seen
+                    self.logger.debug("REPLAY: skipping: %d, seen: %d, num records: %d", num_skip_records, self.num_records_seen, len(records))
                     assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
 
-                    flush = num_skip_records <= len(records)
+
                     num_records = len(records)
-                    #for record in records[:num_skip_records]:
-                    #    debug("SKIP RECORD:", upstream_id, record)
                     records = records[num_skip_records:]
                     num_skipped = num_records - len(records)
                     self.num_records_seen += num_skipped
 
-                    if flush:
-                        future = self.flush()
-                        self.logger.debug("REPLAY: skipping submit after %d, object %s", self.num_records_seen, future)
-                        submit_log.pop(0)
+                    # If initially, we flushed mid-batch or flushed because of
+                    # a checkpoint, do the same now.
+                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
+                    was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
+                    do_flush = do_flush or was_nondeterministic_flush
+                    if do_flush:
+                        # Replay an empty flush.
+                        for i in range(self.num_handles):
+                            future = self.backpressured_flush(i)
+                            self.logger.debug("REPLAY: skipping flush after %d, object %s", self.num_records_seen, future)
+                        # We replayed a nondeterministic flush. Pop it from the log.
+                        if was_nondeterministic_flush:
+                            submit_log.pop(0)
+
                 for record in records:
-                    self.logger.debug("REPLAY RECORD: from %s, %s", upstream_id, record)
+                    records = self.process(record)
                     # Process the record.
-                    self.flush_buffer.append(record)
+                    for key, record in records:
+                        self.flush_buffers[key].append(record)
                     self.num_records_seen += 1
-                    if len(submit_log) > 0 and submit_log[0] == self.num_records_seen:
-                        future = self.flush()
-                        debug("REPLAY: submit after %d, object %s", self.num_records_seen, future)
-                        submit_log.pop(0)
+
+                    # If we are about to take a checkpoint, then force a flush.
+                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
+                    was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
+                    do_flush = do_flush or was_nondeterministic_flush
+                    if do_flush:
+                        for i in range(self.num_handles):
+                            future = self.backpressured_flush(i)
+                            self.logger.debug("REPLAY: Flushing after %d, object %s", self.num_records_seen, future)
+
+                        if was_nondeterministic_flush:
+                            # Replay the nondeterministic flush.
+                            submit_log.pop(0)
 
         else:
             self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
