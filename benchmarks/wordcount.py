@@ -68,13 +68,15 @@ class WordSource(object):
             max_queue_length,
             checkpoint_dir,
             checkpoint_interval,
-            words_file):
+            words_file,
+            timestamps_per_batch):
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
 
         # Titles in this file will be as queries
         self.words_file = words_file
         self.reader = open(self.words_file, 'r')
+        self.timestamps_per_batch = timestamps_per_batch
 
         self.operator_id = operator_id
         self.handles = handles
@@ -175,9 +177,12 @@ class WordSource(object):
         while self.num_records_seen < num_records:
             start = time.time()
             batch = [(None, self.reader.readline()) for _ in range(batch_size)]
-            # TODO: Set timestmap interval.
-            batch[0] = (self.record_timestamp, batch[0][1])
             assert(len(batch) > 0), len(batch)
+
+            # TODO: Set timestamps.
+            for i in range(self.timestamps_per_batch):
+                timestamp_index = -i // self.timestamps_per_batch
+                batch[-timestamp_index] = (self.record_timestamp, batch[-timestamp_index][1])
 
             args = [self.operator_id, batch, self.checkpoint_epoch]
             self.logger.info("Pushing, queue is %s, task counter: %d, num flushes: %d, max queue length: %d", self.queue, handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
@@ -241,7 +246,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         self.batch_size = batch_size
         self.flush_buffers = [list() for _ in range(len(handles))]
-        self.num_reducers = len(handles)
+        self.num_handles = len(handles)
 
         self.queue = []
         self.max_queue_length = max_queue_length
@@ -384,21 +389,16 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     for key, record in records:
                         self.flush_buffers[key].append(record)
                     self.num_records_seen += 1
-                    for i in range(self.num_reducers):
-                        self.try_flush(i)
+
+                    # If we are about to take a checkpoint, then force a flush.
+                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
+                    if do_flush:
+                        for i in range(self.num_handles):
+                            future = self.backpressured_flush(i)
+                            self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
 
         else:
             self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
-
-    def try_flush(self, buffer_index):
-        # Flush randomly.
-        do_flush = len(self.flush_buffers[buffer_index]) >= self.batch_size
-        # If we are about to take a checkpoint, then force a flush.
-        do_flush = do_flush or self._should_checkpoint
-        if do_flush:
-            #future = self.flush(event=str(self.num_records_seen).encode('ascii'))
-            future = self.backpressured_flush(buffer_index)
-            self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
 
     def flush(self, buffer_index, event=None):
         flush_buffer = self.flush_buffers[buffer_index]
@@ -520,7 +520,7 @@ class Mapper(NondeterministicOperator):
         self.logger.info("MAPPER: %s", self.operator_id)
 
     def key(self, word):
-        return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_reducers
+        return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_handles
 
     def process(self, record):
         timestamp, line = record
@@ -666,6 +666,11 @@ if __name__ == '__main__':
         default='latency.txt',
         help='')
     parser.add_argument(
+        '--timestamps-per-batch',
+        type=int,
+        default=1,
+        help='')
+    parser.add_argument(
         '--target-throughput',
         type=int,
         default=-1,
@@ -795,7 +800,7 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i]
         handles = ray.put([mappers[i]])
-        source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file]
+        source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamps_per_batch]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
