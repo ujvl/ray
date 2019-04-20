@@ -646,7 +646,8 @@ class Worker(object):
                 elif ray._raylet.check_simple_value(arg):
                     args_for_local_scheduler.append(arg)
                 else:
-                    args_for_local_scheduler.append(put(arg))
+                    with profiling.profile("store_argument"):
+                        args_for_local_scheduler.append(put(arg))
 
             # By default, there are no execution dependencies.
             if execution_dependencies is None:

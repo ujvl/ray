@@ -1,8 +1,23 @@
 #!python
+# cython: profile=True
+# cython: linetrace=True
 # cython: embedsignature=True, binding=True
+# distutils: language = c++
+# cython: language_level = 3
+# distutils: define_macros=CYTHON_TRACE_NOGIL=1
 
+from libcpp.unordered_map cimport unordered_map
+from libcpp.pair cimport pair
+from libcpp.string cimport string as c_string
+from libcpp.unordered_set cimport unordered_set
+from libcpp.list cimport list
+from collections import defaultdict
 
-def simple_func(x, y, z):
+from cython.operator import dereference, postincrement
+
+import yep
+
+def simple_blahfunc(x, y, z):
     return x + y + z
 
 
@@ -46,3 +61,83 @@ class simple_class(object):
     def increment(self):
         self.value += 1
         return self.value
+
+#def cython_process_batch(batch, num_reducers):
+#    timestamp = batch[0][0]
+#    timestamped = set(batch[0][1].split(b' '))
+#
+#    counts = defaultdict(int)
+#    for _, row in batch:
+#        for word in row.split(b' '):
+#            counts[word] += 1
+#
+#    keyed_counts = {
+#            key: [] for key in range(num_reducers)
+#            }
+#    for word, count in counts.items():
+#        keyed_counts[hash(word) % num_reducers].append((timestamp if word in timestamped else 0, (word, count)))
+#    return keyed_counts
+
+def cython_process_batch(batch, int num_reducers):
+
+    cdef:
+        unordered_map[c_string, int] counts
+        unordered_set[c_string] timestamped
+        #list[c_string] line
+        c_string row
+        size_t start = 0
+        size_t end = 0
+        c_string word
+    for w in batch[0][1].split(b' '):
+        timestamped.insert(w)
+
+    #for _, row in batch:
+    #    end = row.find(b' ');
+    #    while (end != row.size()):
+    #        word = row.substr(start, end)
+    #        start = end + 1
+    #        end = row.find(b' ', start)
+    #        counts[word] += 1
+        #for w in row.split(b' '):
+        #    counts[w] += 1
+
+    #keyed_counts = {
+    #        key: [] for key in range(num_reducers)
+    #        }
+    cdef:
+        unordered_map[c_string, int].iterator it = counts.begin()
+        unordered_map[int, unordered_map[c_string, pair[float, int]]] keyed_counts
+        int count
+        int h
+        int i
+        float new_timestamp
+        float timestamp = batch[0][0]
+
+    #while it != counts.end():
+    #    word = dereference(it).first
+    #    count = dereference(it).second
+    #    h = hash(word)
+    #    keyed_counts[h % num_reducers][word] = (timestamp if timestamped.count(word) == 1 else 0, count)
+    #    postincrement(it)
+
+    #timestamp = batch[0][0]
+    row = batch[0][1]
+    for i in range(len(batch)):
+        end = row.find(b' ');
+        while (end != row.size()):
+            word = row.substr(start, end)
+            #counts[word] += 1
+            h = hash(word)
+            h = h % num_reducers
+            count = keyed_counts[h][word].second
+            new_timestamp = 0
+            if timestamped.count(word) == 1:
+                new_timestamp = timestamp
+            keyed_counts[h][word].first = new_timestamp
+            keyed_counts[h][word].second = count + 1
+
+            start = end + 1
+            end = row.find(b' ', start)
+
+    return None
+
