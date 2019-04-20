@@ -29,37 +29,19 @@ with open('out', 'wb+') as f:
         f.write(b'\n')
 
 def process_batch(batch, num_reducers):
-
-    #[
-    # (timestamp, "<word> <word> ... <word>"),
-    # ...
-    # ]
-
-
-    timestamp = batch[0][0]
-    timestamped = set(batch[0][1].split(b' '))
-
-    counts = defaultdict(int)
-    for _, row in batch:
-        for word in row.split(b' '):
-            counts[word] += 1
-
     keyed_counts = {
             key: [] for key in range(num_reducers)
             }
-    for word, count in counts.items():
-        keyed_counts[partition[word]].append((timestamp if word in timestamped else 0, (word, count)))
-    #{
-    #  reducer key: [
-    #     (timestamp, (word, count)),
-    #     ...
-    #     ]
-    # }
+    for timestamp, row in batch:
+        for word in row.split(b' '):
+            keyed_counts[hash(word) % num_reducers].append((timestamp, (word, 1)))
 
     return keyed_counts
 
+
 start = time.time()
 D = process_batch(batch, num_reducers)
+print("TIMESTAMP", D[0][0][0])
 end = time.time()
 print("Took", end - start)
 
@@ -78,6 +60,7 @@ import gc
 gc.disable()
 start = time.time()
 d = cython_process_batch(batch, num_reducers)
+print("CYTHON TIMESTAMP", d[0][0][0])
 end = time.time()
 print("CYTHON (no gc): Took", end - start, type(d))
 
