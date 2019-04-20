@@ -34,7 +34,7 @@ setup(
         description="Cython examples for Ray",
         packages=[pkg_dir],
         ext_modules=[
-            Extension(pkg_dir,
+            Extension(pkg_dir + ".cython_simple",
                 sources=modules,
                 language='c++',
                 extra_compile_args=['-std=c++11'])],
