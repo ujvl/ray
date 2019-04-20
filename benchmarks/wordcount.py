@@ -14,6 +14,8 @@ from ray.tests.cluster_utils import Cluster
 import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
+from cython_examples import cython_process_batch
+
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 SENTENCE_LENGTH = 100
@@ -597,6 +599,9 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 @ray.remote(max_reconstructions=100)
 class Mapper(NondeterministicOperator):
     def __init__(self, words_file, *args):
+        import gc
+        gc.disable()
+
         super().__init__(*args)
         self.logger.info("MAPPER: %s", self.operator_id)
 
@@ -615,17 +620,18 @@ class Mapper(NondeterministicOperator):
     #    return [(self.key(word), (timestamp, word, 1)) for word in words]
 
     def process_batch(self, batch):
-        keyed_counts = {
-                key: [] for key in range(self.num_handles)
-                }
-        timestamp = batch[0][0]
-        timestamped = set(batch[0][1].split(b' '))
-        with ray.profiling.profile("counts"):
-            for timestamp, row in batch:
-                for word in row.split(b' '):
-                    keyed_counts[hash(word) % self.num_handles].append((timestamp, (word, 1)))
+        return cython_process_batch(batch, self.num_handles)
 
-        return keyed_counts
+    #def process_batch(self, batch):
+    #    keyed_counts = {
+    #            key: [] for key in range(self.num_handles)
+    #            }
+    #    with ray.profiling.profile("counts"):
+    #        for timestamp, row in batch:
+    #            for word in row.split(b' '):
+    #                keyed_counts[hash(word) % self.num_handles].append((timestamp, (word, 1)))
+
+    #    return keyed_counts
 
 
 @ray.remote(max_reconstructions=100)

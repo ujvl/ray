@@ -1889,16 +1889,18 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
                 //  on-const variable.)
                 assigned_task.SetExecutionDependencies({execution_dependency});
                 execution_dependency = spec.ActorDummyObject();
-
-                assigned_task.IncrementNumExecutions();
-                // We started running the task, so the task is ready to write to GCS.
-                RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
               } else {
                 RAY_CHECK(spec.NewActorHandles().empty());
               }
             }
           }
 
+
+          for (auto &assigned_task : assigned_tasks) {
+            assigned_task.IncrementNumExecutions();
+            // We started running the task, so the task is ready to write to GCS.
+            RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+          }
           // We successfully assigned the task to the worker.
           worker->AssignTaskIds(task_ids);
           worker->AssignDriverId(first_spec.DriverId());
