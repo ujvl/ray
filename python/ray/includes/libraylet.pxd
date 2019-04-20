@@ -54,9 +54,10 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
             const c_vector[CObjectID] &execution_dependencies,
             const CTaskSpecification &task_spec,
             const c_string &nondeterministic_event)
-        CRayStatus GetTask(unique_ptr[CTaskSpecification] *task_spec,
-            c_bool *reexecution,
-            c_vector[c_string] *nondeterministic_events)
+        CRayStatus GetTasks(
+            c_vector[unique_ptr[CTaskSpecification]] *task_specs,
+            c_vector[c_bool] *reexecutions,
+            c_vector[c_vector[c_string]] *nondeterministic_logs)
         CRayStatus TaskDone()
         CRayStatus FetchOrReconstruct(c_vector[CObjectID] &object_ids,
                                       c_bool fetch_only,
@@ -75,6 +76,7 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
         CRayStatus FreeObjects(const c_vector[CObjectID] &object_ids,
                                c_bool local_only)
         CRayStatus PrepareActorCheckpoint(const CActorID &actor_id,
+                                          const CTaskID &task_id,
                                           CActorCheckpointID &checkpoint_id,
                                           const c_vector[CActorID] &downstream_actor_ids,
                                           const c_vector[CActorHandleID] &upstream_actor_handle_ids)

@@ -29,11 +29,10 @@ enum MessageType:int {
   // Notify the local scheduler that this client is disconnecting gracefully.
   // This is sent from a worker to a local scheduler.
   IntentionalDisconnectClient,
-  // Get a new task from the local scheduler. This is sent from a worker to a
+  // Get new tasks from the local scheduler. This is sent from a worker to a
   // local scheduler.
-  GetTask,
-  // Tell a worker to execute a task. This is sent from a local scheduler to a
-  // worker.
+  GetTasks,
+  // Tell a worker to execute tasks. This is sent from a local scheduler to a worker.
   ExecuteTask,
   // Reconstruct or fetch possibly lost objects. This is sent from a worker to
   // a local scheduler.
@@ -126,16 +125,20 @@ table ResourceIdSetInfo {
 table DisconnectClient {
 }
 
+table NondeterministicLog {
+  nondeterministic_events: [string];
+}
+
 // This message is sent from the local scheduler to a worker.
-table GetTaskReply {
-  // A string of bytes representing the task specification.
-  task_spec: string;
+table GetTasksReply {
+  // A list of byte strings, each representing a task specification.
+  task_specs: [string];
   // Whether this task is a re-execution. If this is true, then for
   // nondeterministic tasks, the application must replay the events in
   // nondeterministic_events for correctness.
-  reexecution: bool;
+  reexecutions: [bool];
   // The list of nondeterministic events that occured, if any.
-  nondeterministic_events: [string];
+  nondeterministic_logs: [NondeterministicLog];
   // A list of the resources reserved for this worker.
   fractional_resource_ids: [ResourceIdSetInfo];
 }
@@ -239,6 +242,8 @@ table FreeObjectsRequest {
 table PrepareActorCheckpointRequest {
   // ID of the actor.
   actor_id: string;
+  // Currently executing task.
+  task_id: string;
   // IDs of any downstream actors, for nondeterministic operators.
   downstream_actor_ids: [string];
   // Handle IDs of upstream actors, for nondeterministic operators. If this is

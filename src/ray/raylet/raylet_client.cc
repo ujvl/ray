@@ -234,18 +234,18 @@ ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_depe
   return conn_->WriteMessage(MessageType::SubmitTask, &fbb);
 }
 
-ray::Status RayletClient::GetTask(
-    std::unique_ptr<ray::raylet::TaskSpecification> *task_spec,
-    bool *reexecution,
-    std::vector<std::string> *nondeterministic_events) {
+ray::Status RayletClient::GetTasks(
+    std::vector<std::unique_ptr<ray::raylet::TaskSpecification>> *task_specs,
+    std::vector<bool> *reexecutions,
+    std::vector<std::vector<std::string>> *nondeterministic_logs) {
   std::unique_ptr<uint8_t[]> reply;
   // Receive a task from the raylet. This will block until the local
   // scheduler gives this client a task.
   auto status =
-      conn_->AtomicRequestReply(MessageType::GetTask, MessageType::ExecuteTask, reply);
+      conn_->AtomicRequestReply(MessageType::GetTasks, MessageType::ExecuteTask, reply);
   if (!status.ok()) return status;
   // Parse the flatbuffer object.
-  auto reply_message = flatbuffers::GetRoot<ray::protocol::GetTaskReply>(reply.get());
+  auto reply_message = flatbuffers::GetRoot<ray::protocol::GetTasksReply>(reply.get());
   // Set the resource IDs for this task.
   resource_ids_.clear();
   for (size_t i = 0; i < reply_message->fractional_resource_ids()->size(); ++i) {
@@ -269,16 +269,19 @@ ray::Status RayletClient::GetTask(
     }
   }
 
-  if (reply_message->reexecution()) {
-    *reexecution = true;
-    for (size_t i = 0; i < reply_message->nondeterministic_events()->size(); ++i) {
-      nondeterministic_events->push_back(reply_message->nondeterministic_events()->Get(i)->str());
+  for (size_t i = 0; i < reply_message->task_specs()->size(); ++i) {
+    // Return the copy of the task spec and pass ownership to the caller.
+    std::unique_ptr<ray::raylet::TaskSpecification> spec_ptr(new ray::raylet::TaskSpecification(
+        string_from_flatbuf(*reply_message->task_specs()->Get(i))));
+    task_specs->push_back(std::move(spec_ptr));
+    reexecutions->push_back(reply_message->reexecutions()->Get(i));
+    std::vector<std::string> log;
+    const auto &nondeterministic_events = reply_message->nondeterministic_logs()->Get(i)->nondeterministic_events();
+    for (size_t j = 0; j < nondeterministic_events->size(); ++j) {
+      log.push_back(nondeterministic_events->Get(j)->str());
     }
+    nondeterministic_logs->push_back(log);
   }
-
-  // Return the copy of the task spec and pass ownership to the caller.
-  task_spec->reset(new ray::raylet::TaskSpecification(
-      string_from_flatbuf(*reply_message->task_spec())));
   return ray::Status::OK();
 }
 
@@ -375,6 +378,7 @@ ray::Status RayletClient::FreeObjects(const std::vector<ray::ObjectID> &object_i
 }
 
 ray::Status RayletClient::PrepareActorCheckpoint(const ActorID &actor_id,
+                                                 const TaskID &task_id,
                                                  ActorCheckpointID &checkpoint_id,
                                                  std::vector<ActorID> &downstream_actor_ids,
                                                  std::vector<ActorHandleID> &upstream_actor_handle_ids) {
@@ -383,6 +387,7 @@ ray::Status RayletClient::PrepareActorCheckpoint(const ActorID &actor_id,
       ray::protocol::CreatePrepareActorCheckpointRequest(
           fbb,
           to_flatbuf(fbb, actor_id),
+          to_flatbuf(fbb, task_id),
           to_flatbuf(fbb, downstream_actor_ids),
           to_flatbuf(fbb, upstream_actor_handle_ids));
   fbb.Finish(message);
