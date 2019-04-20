@@ -131,8 +131,9 @@ class WordSource(object):
             checkpoint = {
                     attr: getattr(self, attr) for attr in self.checkpoint_attrs
                     }
+            checkpoint["put_index"] = ray.worker.global_worker.task_context.put_index
             checkpoint = pickle.dumps(checkpoint)
-            self.logger.debug("Checkpoint size is %d, state size is %d", len(checkpoint), len(pickle.dumps(getattr(self, 'state', None))))
+            self.logger.debug("Source checkpoint size is %d", len(checkpoint))
             # NOTE: The default behavior is to register a random actor handle
             # whenever a handle is pickled, so that the execution dependency is
             # never removed and anytime the handle is unpickled, we will be able to
@@ -165,6 +166,7 @@ class WordSource(object):
             checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
             with open(checkpoint_path, 'rb') as f:
                 checkpoint = pickle.loads(f.read())
+            ray.worker.global_worker.task_context.put_index = checkpoint.pop("put_index")
             for attr, value in checkpoint.items():
                 setattr(self, attr, value)
                 self.logger.info("Setting %s %s", attr, value)
@@ -172,10 +174,6 @@ class WordSource(object):
 
             self.checkpoint_epoch += 1
 
-            # Replay up to the saved index into the file.
-            self.logger.debug("Skipping %d lines", self.num_records_seen)
-            for _ in range(self.num_records_seen):
-                self.reader.readline()
             return True
 
 
@@ -355,7 +353,11 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 # records.
                 ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
             else:
-                while submit_log and len(records) > self.batch_size:
+                batch_size = self.batch_size
+                if self.batch_size is None:
+                    batch_size = len(records)
+
+                while submit_log or len(records) >= batch_size:
                     executed = True
                     for handle in self.handles:
                         next_task_id = ray._raylet.generate_actor_task_id(
@@ -371,8 +373,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     if not executed:
                         break
 
-                    num_skip_records = self.batch_size
-                    if submit_log and submit_log[0] - self.num_records_seen < self.batch_size:
+                    num_skip_records = batch_size
+                    if submit_log and submit_log[0] - self.num_records_seen < batch_size:
                         num_skip_records = submit_log[0] - self.num_records_seen
                     self.logger.debug("REPLAY: skipping: %d, seen: %d, num records: %d", num_skip_records, self.num_records_seen, len(records))
                     assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
@@ -385,7 +387,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
                     # If initially, we flushed mid-batch or flushed because of
                     # a checkpoint, do the same now.
-                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
+                    do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
                     was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
                     do_flush = do_flush or was_nondeterministic_flush
                     if do_flush:
@@ -397,25 +399,20 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                         if was_nondeterministic_flush:
                             submit_log.pop(0)
 
-                for record in records:
-                    records = self.process(record)
-                    # Process the record.
-                    for key, record in records:
-                        self.flush_buffers[key].append(record)
-                    self.num_records_seen += 1
+                assert len(submit_log) == 0, "TODO: fix nondeterministic replay"
+                for i in range(0, len(records), batch_size):
+                    batch = records[i * batch_size : (i+1) * batch_size]
+                    processed_batches = self.process_batch(batch)
+                    self.num_records_seen += len(batch)
 
-                    # If we are about to take a checkpoint, then force a flush.
-                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
-                    was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
-                    do_flush = do_flush or was_nondeterministic_flush
-                    if do_flush:
-                        for i in range(self.num_handles):
-                            future = self.backpressured_flush(i)
-                            self.logger.debug("REPLAY: Flushing after %d, object %s", self.num_records_seen, future)
-
-                        if was_nondeterministic_flush:
-                            # Replay the nondeterministic flush.
-                            submit_log.pop(0)
+                    #was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
+                    for key, processed_batch in processed_batches.items():
+                        self.flush_buffers[key] = list(processed_batch)
+                        future = self.backpressured_flush(key)
+                        self.logger.debug("REPLAY: Flushing after %d, object %s", self.num_records_seen, future)
+                        #if was_nondeterministic_flush:
+                        #    # Replay the nondeterministic flush.
+                        #    submit_log.pop(0)
 
         else:
             self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
@@ -443,7 +440,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 batch_size = self.batch_size
                 if self.batch_size is None:
                     batch_size = len(records)
-                self.logger.debug("Batch item %s", records[0])
                 for i in range(0, len(records), batch_size):
                     batch = records[i * batch_size : (i+1) * batch_size]
                     processed_batches = self.process_batch(batch)
@@ -513,6 +509,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
     def save_checkpoint(self, actor_id, checkpoint_id):
         with ray.profiling.profile("save_checkpoint"):
+            start = time.time()
             self.logger.info("Saving checkpoint %d %s", self.checkpoint_epoch, checkpoint_id)
             assert len(self.checkpoints_pending) == 0
 
@@ -535,9 +532,12 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             with open(checkpoint_path, 'wb+') as f:
                 f.write(checkpoint)
 
+            self.logger.debug("Checkpoint %d took %f", self.checkpoint_epoch, time.time() - start)
+
             self.checkpoint_epoch += 1
             self.flush_checkpoint_buffer = True
             self.self_handle.push_checkpoint_buffer.remote()
+
 
     def push_checkpoint_buffer(self, submit_log=None):
         if submit_log is None:
@@ -568,7 +568,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         # Get the latest checkpoint that completed.
         checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
         latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
-        assert latest_checkpoint_interval > 0, "Actor died before its first checkpoint was taken"
+        assert latest_checkpoint_interval >= 0, "Actor died before its first checkpoint was taken"
         # Read the latest checkpoint from disk.
         checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_path)
@@ -708,6 +708,10 @@ class CheckpointTracker(object):
         self.sinks_pending = set(self.sink_keys)
         self.checkpoint_epoch = -1
 
+        logging.basicConfig(level=LOG_LEVEL)
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("CHECKPOINT_TRACKER")
+
     def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
         assert checkpoint_epoch == self.checkpoint_epoch + 1
 
@@ -717,6 +721,7 @@ class CheckpointTracker(object):
         if len(self.sinks_pending) == 0:
             self.checkpoint_epoch += 1
             self.sinks_pending = set(self.sink_keys)
+            self.logger.info("Global checkpoint complete %d", self.checkpoint_epoch)
 
     def get_current_epoch(self):
         return self.checkpoint_epoch
@@ -947,7 +952,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    time.sleep(10)
+    time.sleep(15)
     # Kill and restart mappers and reducers.
     nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
     resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
