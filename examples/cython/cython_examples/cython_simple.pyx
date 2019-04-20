@@ -87,7 +87,7 @@ def cython_process_batch(batch, int num_reducers):
         c_string row
         c_string word
         int h
-        float timestamp
+        double timestamp
 
     keyed_counts = {key: [] for key in range(num_reducers)}
     for timestamp, row in batch:
