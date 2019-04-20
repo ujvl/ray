@@ -116,3 +116,21 @@ def cython_process_batch2(batch, int num_reducers):
             keyed_words[h].append(word)
 
     return keyed_timestamps, keyed_words
+
+def process_batch_reducer(self, timestamps, words):
+    new_counts = []
+    cdef:
+        int i
+        int count
+        double timestamp
+    for i in range(len(timestamps)):
+        word = words[i]
+        timestamp = timestamps[i]
+        if word not in self.state:
+            self.state[word] = 0
+        self.state[word] += 1
+        if timestamp > 0:
+            new_counts.append((timestamp, (word, self.state[word])))
+    return {
+            0: new_counts,
+            }
