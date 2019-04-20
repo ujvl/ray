@@ -1613,8 +1613,33 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
     // This is a non-actor task. Queue the task for a placement decision or for dispatch
     // if the task was forwarded.
     if (forwarded) {
-      // Check for local dependencies and enqueue as waiting or ready for dispatch.
-      EnqueuePlaceableTask(task, push);
+      if (task.GetTaskExecutionSpec().NumResubmissions() > 0) {
+        local_queues_.QueueTasks({task}, TaskState::SWAP);
+        RAY_CHECK_OK(gcs_client_->raylet_task_table().Lookup(
+            JobID::nil(), spec.TaskId(),
+            /*success_callback=*/
+            [this, push](ray::gcs::AsyncGcsClient *client, const TaskID &task_id,
+                   const ray::protocol::TaskT &task_data) {
+              const auto task = local_queues_.RemoveTask(task_id);
+              // The task was in the GCS task table. Use the stored task spec to
+              // re-execute the task.
+              const Task committed_method(task_data);
+              if (committed_method.GetTaskExecutionSpec().Version() > task.GetTaskExecutionSpec().Version()) {
+                RAY_LOG(INFO) << "XXX Queueing GCS copy of task " << task_id << " version=" << committed_method.GetTaskExecutionSpec().Version();
+                EnqueuePlaceableTask(committed_method, push);
+              } else {
+                EnqueuePlaceableTask(task, push);
+              }
+            },
+            /*failure_callback=*/
+            [this, task, push](ray::gcs::AsyncGcsClient *client, const TaskID &task_id) {
+                  const auto task = local_queues_.RemoveTask(task_id);
+                  EnqueuePlaceableTask(task, push);
+                }));
+      } else {
+        // Check for local dependencies and enqueue as waiting or ready for dispatch.
+        EnqueuePlaceableTask(task, push);
+      }
     } else {
       // (See design_docs/task_states.rst for the state transition diagram.)
       local_queues_.QueueTasks({task}, TaskState::PLACEABLE);

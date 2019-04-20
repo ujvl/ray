@@ -122,7 +122,7 @@ class WordSource(object):
         # Set the seed so that we can deterministically generate the sentences.
         np.random.seed(self.checkpoint_epoch)
 
-        self.logger.info("SOURCE: %s", self.operator_id)
+        self.logger.info("SOURCE: %s %s", self.operator_id, ray.worker.global_worker.task_context.nondeterministic_events)
 
     def save_checkpoint(self):
         with ray.profiling.profile("save_checkpoint"):
@@ -219,7 +219,7 @@ class WordSource(object):
                 backpressure = False
 
             args = [self.operator_id, batch_id, self.checkpoint_epoch]
-            self.logger.info("Pushing after %f, queue length: %s, task counter: %d, num flushes: %d, max queue length: %d", time.time() - self.record_timestamp, len(self.queue), handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
+            self.logger.debug("Pushing record timestamp %f", self.record_timestamp)
             if self.backpressure and backpressure:
                 backpressured_push(self.logger, handle, self.queue, self.num_flushes, self.max_queue_length, args)
             else:
@@ -632,13 +632,15 @@ class Mapper(NondeterministicOperator):
 class Reducer(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
-        self.state = defaultdict(int)
+        self.state = {}
         self.logger.info("REDUCER: %s", self.operator_id)
 
     def process_batch(self, batch):
         new_counts = []
         for timestamp, record in batch:
             word, count = record
+            if word not in self.state:
+                self.state[word] = 0
             self.state[word] += count
             if timestamp > 0:
                 new_counts.append((timestamp, (word, self.state[word])))
@@ -661,7 +663,7 @@ class Reducer(NondeterministicOperator):
         return msgpack.dumps(self.state)
 
     def load_state(self, state):
-        self.state = msgpack.loads(self.state)
+        self.state = msgpack.loads(state)
 
 @ray.remote(max_reconstructions=100)
 class Sink(NondeterministicOperator):
@@ -952,7 +954,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    time.sleep(15)
+    time.sleep(18)
     # Kill and restart mappers and reducers.
     nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
     resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
