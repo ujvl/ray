@@ -2,8 +2,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from .cython_simple import cython_process_batch
+from .cython_simple import cython_process_batch, cython_process_batch2
 
 __all__ = [
         "cython_process_batch",
+        "cython_process_batch2"
         ]

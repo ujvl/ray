@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 import numpy as np
 
-from cython_examples import cython_process_batch
+from cython_examples import cython_process_batch, cython_process_batch2
 import yep
 
 
@@ -59,17 +59,29 @@ def process_batch(batch, num_reducers):
     return keyed_counts
 
 start = time.time()
-process_batch(batch, num_reducers)
+D = process_batch(batch, num_reducers)
 end = time.time()
 print("Took", end - start)
 
 start = time.time()
 objects = []
-#yep.start('/tmp/test.prof')
-#for _ in range(50):
-#    d = cython_process_batch(batch, num_reducers)
-#    objects.append(d)
-#yep.stop()
+# yep.start('/tmp/test.prof')
+# for _ in range(50):
+#     d = cython_process_batch(batch, num_reducers)
+#     objects.append(d)
+# yep.stop()
 d = cython_process_batch(batch, num_reducers)
 end = time.time()
 print("CYTHON: Took", end - start, type(d))
+
+import gc
+gc.disable()
+start = time.time()
+d = cython_process_batch(batch, num_reducers)
+end = time.time()
+print("CYTHON (no gc): Took", end - start, type(d))
+
+start = time.time()
+a, b = cython_process_batch2(batch, num_reducers)
+end = time.time()
+print("CYTHON2: Took", end - start, type(b))

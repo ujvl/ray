@@ -37,7 +37,8 @@ setup(
             Extension(pkg_dir + ".cython_simple",
                 sources=modules,
                 language='c++',
-                extra_compile_args=['-std=c++11'])],
+                extra_compile_args=['-std=c++11','-O3', '-march=native'],
+                extra_link_args=['-O3', '-march=native'])],
         install_requires=install_requires,
         include_dirs=include_dirs,
         cmdclass = {'build_ext': build_ext}
