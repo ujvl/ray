@@ -104,7 +104,7 @@ def cython_process_batch2(batch, int num_reducers):
         c_string row
         c_string word
         int h
-        float timestamp
+        double timestamp
 
     keyed_timestamps = [[] for key in range(num_reducers)]
     keyed_words = [[] for key in range(num_reducers)]

@@ -15,6 +15,8 @@ import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
 from cython_examples import cython_process_batch
+from cython_examples import cython_process_batch2
+from cython_examples import process_batch_reducer as cython_process_batch_reducer
 
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -444,11 +446,11 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     batch_size = len(records)
                 for i in range(0, len(records), batch_size):
                     batch = records[i * batch_size : (i+1) * batch_size]
-                    processed_batches = self.process_batch(batch)
+                    timestamps, words = self.process_batch(batch)
                     self.num_records_seen += len(batch)
 
-                    for key, processed_batch in processed_batches.items():
-                        self.flush_buffers[key] = list(processed_batch)
+                    for key in range(len(timestamps)):
+                        self.flush_buffers[key] = [timestamps[key], words[key]]
                         future = self.backpressured_flush(key)
                         self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
 
@@ -620,7 +622,7 @@ class Mapper(NondeterministicOperator):
     #    return [(self.key(word), (timestamp, word, 1)) for word in words]
 
     def process_batch(self, batch):
-        return cython_process_batch(batch, self.num_handles)
+        return cython_process_batch2(batch, self.num_handles)
 
     #def process_batch(self, batch):
     #    keyed_counts = {
@@ -641,19 +643,75 @@ class Reducer(NondeterministicOperator):
         self.state = {}
         self.logger.info("REDUCER: %s", self.operator_id)
 
-    def process_batch(self, batch):
-        new_counts = []
-        for timestamp, record in batch:
-            word, count = record
-            if word not in self.state:
-                self.state[word] = 0
-            self.state[word] += count
-            if timestamp > 0:
-                new_counts.append((timestamp, (word, self.state[word])))
-        self.logger.debug("REDUCE, batch size: %d, new counts: %d", len(batch), len(new_counts))
-        return {
-                0: new_counts,
-                }
+    def log_push(self, upstream_id, records, checkpoint_epoch):
+        process_records = self.checkpoint(upstream_id, checkpoint_epoch)
+        self.logger.debug("PUSH: process records? %s", process_records)
+
+        if process_records:
+            if len(records) == 0:
+                # This is the last batch that we will receive from this
+                # upstream operator.
+                for i, flush_buffer in enumerate(self.flush_buffers):
+                    if len(flush_buffer) > 0:
+                        self.flush(i)
+                # Send an empty batch. Block on the result to notify the
+                # upstream operator when we are finished processing all of its
+                # records.
+                ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
+            else:
+                timestamps, records = records
+
+                #for i in range(0, len(records), self.batch_size):
+                #    batch = records[i * self.batch_size : (i+1) * self.batch_size]
+                #    self.process_batch(batch)
+                batch_size = self.batch_size
+                if self.batch_size is None:
+                    batch_size = len(records)
+                for i in range(0, len(records), batch_size):
+                    batch = records[i * batch_size : (i+1) * batch_size]
+                    timestamp_batch = timestamps[i * batch_size : (i+1) * batch_size]
+                    processed_records = self.process_batch(timestamp_batch, batch)
+                    self.num_records_seen += len(batch)
+
+                    for key, records in processed_records.items():
+                        self.flush_buffers[key] = records
+                        future = self.backpressured_flush(key)
+                        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+
+
+                    #for record in records:
+                    #    records = self.process(record)
+                    #    # Process the record.
+                    #    for key, record in records:
+                    #        self.flush_buffers[key].append(record)
+                    #    self.num_records_seen += 1
+
+                    ## If we are about to take a checkpoint, then force a flush.
+                    #do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
+                    #if do_flush:
+                    #    for i in range(self.num_handles):
+                    #        future = self.backpressured_flush(i)
+                    #        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+
+        else:
+            self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
+
+    def process_batch(self, timestamps, records):
+        return cython_process_batch_reducer(self, timestamps, records)
+
+    #def process_batch(self, timestamps, records):
+    #    new_counts = []
+    #    for timestamp, record in batch:
+    #        word, count = record
+    #        if word not in self.state:
+    #            self.state[word] = 0
+    #        self.state[word] += count
+    #        if timestamp > 0:
+    #            new_counts.append((timestamp, (word, self.state[word])))
+    #    self.logger.debug("REDUCE, batch size: %d, new counts: %d", len(batch), len(new_counts))
+    #    return {
+    #            0: new_counts,
+    #            }
 
     def process(self, record):
         timestamp, word, count = record
@@ -701,6 +759,56 @@ class Sink(NondeterministicOperator):
 
     def flush_latencies(self):
         self.output_file.close()
+
+    def log_push(self, upstream_id, records, checkpoint_epoch):
+        process_records = self.checkpoint(upstream_id, checkpoint_epoch)
+        self.logger.debug("PUSH: process records? %s", process_records)
+
+        if process_records:
+            if len(records) == 0:
+                # This is the last batch that we will receive from this
+                # upstream operator.
+                for i, flush_buffer in enumerate(self.flush_buffers):
+                    if len(flush_buffer) > 0:
+                        self.flush(i)
+                # Send an empty batch. Block on the result to notify the
+                # upstream operator when we are finished processing all of its
+                # records.
+                ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
+            else:
+                #for i in range(0, len(records), self.batch_size):
+                #    batch = records[i * self.batch_size : (i+1) * self.batch_size]
+                #    self.process_batch(batch)
+                batch_size = self.batch_size
+                if self.batch_size is None:
+                    batch_size = len(records)
+                for i in range(0, len(records), batch_size):
+                    batch = records[i * batch_size : (i+1) * batch_size]
+                    processed_records = self.process_batch(batch)
+                    self.num_records_seen += len(batch)
+
+                    for key, records in processed_records.items():
+                        self.flush_buffers[key] = records
+                        future = self.backpressured_flush(key)
+                        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+
+
+                    #for record in records:
+                    #    records = self.process(record)
+                    #    # Process the record.
+                    #    for key, record in records:
+                    #        self.flush_buffers[key].append(record)
+                    #    self.num_records_seen += 1
+
+                    ## If we are about to take a checkpoint, then force a flush.
+                    #do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
+                    #if do_flush:
+                    #    for i in range(self.num_handles):
+                    #        future = self.backpressured_flush(i)
+                    #        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+
+        else:
+            self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
 
 def create_local_node(cluster, i, node_kwargs):
     resource = "Node{}".format(i)
