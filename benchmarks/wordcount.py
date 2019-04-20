@@ -1,5 +1,6 @@
 import argparse
 import json
+import msgpack
 import time
 import os
 from collections import defaultdict
@@ -15,8 +16,12 @@ from ray.experimental import named_actors
 
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
+SENTENCE_LENGTH = 100
 
 LOG_LEVEL = logging.DEBUG
+
+WORDS = {
+        }
 
 
 def wait_queue(logger, queue, max_queue_length):
@@ -69,19 +74,23 @@ class WordSource(object):
             checkpoint_dir,
             checkpoint_interval,
             words_file,
-            timestamps_per_batch):
+            timestamps_per_batch,
+            backpressure):
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
 
-        # Titles in this file will be as queries
-        self.words_file = words_file
-        self.reader = open(self.words_file, 'r')
+        with open(words_file) as f:
+            self.words = []
+            for line in f.readlines():
+                self.words.append(line.strip())
+        self.words = np.array([word.encode('ascii') for word in self.words])
         self.timestamps_per_batch = timestamps_per_batch
 
         self.operator_id = operator_id
         self.handles = handles
         self.queue = []
         self.max_queue_length = max_queue_length
+        self.backpressure = backpressure
 
         # How many checkpoints have been taken so far.
         self.checkpoint_epoch = 0
@@ -100,7 +109,6 @@ class WordSource(object):
             pass
 
         self.checkpoint_attrs = [
-                "words_file",
                 "handles",
                 "checkpoint_epoch",
                 "records_since_checkpoint",
@@ -110,6 +118,10 @@ class WordSource(object):
                 ]
         if ray.worker.global_worker.task_context.nondeterministic_events is not None:
             self.load_checkpoint()
+
+        # Set the seed so that we can deterministically generate the sentences.
+        np.random.seed(self.checkpoint_epoch)
+
         self.logger.info("SOURCE: %s", self.operator_id)
 
     def save_checkpoint(self):
@@ -120,7 +132,7 @@ class WordSource(object):
                     attr: getattr(self, attr) for attr in self.checkpoint_attrs
                     }
             checkpoint = pickle.dumps(checkpoint)
-            self.logger.debug("Checkpoint size is %d", len(checkpoint))
+            self.logger.debug("Checkpoint size is %d, state size is %d", len(checkpoint), len(pickle.dumps(getattr(self, 'state', None))))
             # NOTE: The default behavior is to register a random actor handle
             # whenever a handle is pickled, so that the execution dependency is
             # never removed and anytime the handle is unpickled, we will be able to
@@ -136,6 +148,8 @@ class WordSource(object):
                 f.write(checkpoint)
 
             self.checkpoint_epoch += 1
+            # Set the seed so that we can deterministically generate the sentences.
+            np.random.seed(self.checkpoint_epoch)
 
     def load_checkpoint(self):
         with ray.profiling.profile("load_checkpoint"):
@@ -165,6 +179,10 @@ class WordSource(object):
             return True
 
 
+    def get_batch(self, batch_size):
+        #return np.apply_along_axis(lambda line: (b'0', np.string_.join(b' ', line)), 1, np.random.choice(self.words, (batch_size, SENTENCE_LENGTH)))
+        return [(0, np.string_.join(b' ', np.random.choice(self.words, SENTENCE_LENGTH))) for _ in range(batch_size)]
+
     def generate(self, num_records, batch_size, target_throughput=-1):
         handle = self.handles[self.num_flushes % len(self.handles)]
 
@@ -176,14 +194,10 @@ class WordSource(object):
             self.record_timestamp = start_time
         while self.num_records_seen < num_records:
             start = time.time()
-            batch = [(None, self.reader.readline()) for _ in range(batch_size)]
+            batch = self.get_batch(batch_size)
             assert(len(batch) > 0), len(batch)
-
-            # TODO: Set timestamps.
-            #for i in range(self.timestamps_per_batch):
-            #    timestamp_index = -i // self.timestamps_per_batch
-            #    batch[-timestamp_index] = (self.record_timestamp, batch[-timestamp_index][1])
             batch[0] = (self.record_timestamp, batch[0][1])
+            batch_id = ray.put(batch)
 
             if target_throughput > -1:
                 self.record_timestamp += time_slice
@@ -206,9 +220,9 @@ class WordSource(object):
                 # We're falling beihnd. This is because we are replaying the source.
                 backpressure = False
 
-            args = [self.operator_id, batch, self.checkpoint_epoch]
-            self.logger.info("Pushing after %f, queue length: %s, task counter: %d, num flushes: %d, max queue length: %d", time.time() - batch[0][0], len(self.queue), handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
-            if backpressure:
+            args = [self.operator_id, batch_id, self.checkpoint_epoch]
+            self.logger.info("Pushing after %f, queue length: %s, task counter: %d, num flushes: %d, max queue length: %d", time.time() - self.record_timestamp, len(self.queue), handle._ray_actor_counter, self.num_flushes, self.max_queue_length)
+            if self.backpressure and backpressure:
                 backpressured_push(self.logger, handle, self.queue, self.num_flushes, self.max_queue_length, args)
             else:
                 handle.push._remote(
@@ -273,7 +287,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self.num_flushes = 0
 
         self.checkpoint_attrs = [
-                "state",
                 "self_handle",
                 "handles",
                 "checkpoint_epoch",
@@ -424,19 +437,37 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 # records.
                 ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
             else:
-                for record in records:
-                    records = self.process(record)
-                    # Process the record.
-                    for key, record in records:
-                        self.flush_buffers[key].append(record)
-                    self.num_records_seen += 1
+                #for i in range(0, len(records), self.batch_size):
+                #    batch = records[i * self.batch_size : (i+1) * self.batch_size]
+                #    self.process_batch(batch)
+                batch_size = self.batch_size
+                if self.batch_size is None:
+                    batch_size = len(records)
+                self.logger.debug("Batch item %s", records[0])
+                for i in range(0, len(records), batch_size):
+                    batch = records[i * batch_size : (i+1) * batch_size]
+                    processed_batches = self.process_batch(batch)
+                    self.num_records_seen += len(batch)
 
-                    # If we are about to take a checkpoint, then force a flush.
-                    do_flush = (self.num_records_seen % self.batch_size == 0) or self._should_checkpoint
-                    if do_flush:
-                        for i in range(self.num_handles):
-                            future = self.backpressured_flush(i)
-                            self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+                    for key, processed_batch in processed_batches.items():
+                        self.flush_buffers[key] = list(processed_batch)
+                        future = self.backpressured_flush(key)
+                        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+
+
+                    #for record in records:
+                    #    records = self.process(record)
+                    #    # Process the record.
+                    #    for key, record in records:
+                    #        self.flush_buffers[key].append(record)
+                    #    self.num_records_seen += 1
+
+                    ## If we are about to take a checkpoint, then force a flush.
+                    #do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
+                    #if do_flush:
+                    #    for i in range(self.num_handles):
+                    #        future = self.backpressured_flush(i)
+                    #        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
 
         else:
             self.checkpoint_buffer.append((upstream_id, records, checkpoint_epoch))
@@ -474,6 +505,12 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self._should_checkpoint = False
         return should_checkpoint
 
+    def save_state(self):
+        return None
+
+    def load_state(self, state):
+        self.state = state
+
     def save_checkpoint(self, actor_id, checkpoint_id):
         with ray.profiling.profile("save_checkpoint"):
             self.logger.info("Saving checkpoint %d %s", self.checkpoint_epoch, checkpoint_id)
@@ -482,6 +519,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             checkpoint = {
                     attr: getattr(self, attr) for attr in self.checkpoint_attrs
                     }
+            checkpoint["state"] = self.save_state()
             checkpoint["checkpoint_id"] = checkpoint_id
             checkpoint = pickle.dumps(checkpoint)
             self.logger.debug("Checkpoint size is %d, num records %d, buffer size is %d", len(checkpoint), len(self.checkpoint_buffer), sum([len(records) for _, records, _ in self.checkpoint_buffer]))
@@ -537,6 +575,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.loads(f.read())
         checkpoint_id = checkpoint.pop('checkpoint_id')
+        self.load_state(checkpoint.pop('state'))
         for attr, value in checkpoint.items():
             setattr(self, attr, value)
         self.self_handle.reset_handle_id()
@@ -557,26 +596,56 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
 @ray.remote(max_reconstructions=100)
 class Mapper(NondeterministicOperator):
-    def __init__(self, *args):
+    def __init__(self, words_file, *args):
         super().__init__(*args)
         self.logger.info("MAPPER: %s", self.operator_id)
 
-    def key(self, word):
-        return int(hashlib.md5(word.encode('ascii')).hexdigest(), 16) % self.num_handles
+        #self.partition = {}
+        #with open(words_file, 'r') as f:
+        #    for line in f.readlines():
+        #        word = line.strip().encode('ascii')
+        #        self.partition[word] = hash(word) % self.num_handles
 
-    def process(self, record):
-        timestamp, line = record
-        words = line.strip().split(' ')
-        return [(self.key(word), (timestamp, word, 1)) for word in words]
+    def key(self, word):
+        return hash(word) % self.num_handles
+
+    #def process(self, record):
+    #    timestamp, line = record
+    #    words = line.split(b' ')
+    #    return [(self.key(word), (timestamp, word, 1)) for word in words]
+
+    def process_batch(self, batch):
+        keyed_counts = {
+                key: [] for key in range(self.num_handles)
+                }
+        timestamp = batch[0][0]
+        timestamped = set(batch[0][1].split(b' '))
+        with ray.profiling.profile("counts"):
+            for timestamp, row in batch:
+                for word in row.split(b' '):
+                    keyed_counts[hash(word) % self.num_handles].append((timestamp, (word, 1)))
+
+        return keyed_counts
 
 
 @ray.remote(max_reconstructions=100)
 class Reducer(NondeterministicOperator):
     def __init__(self, *args):
         super().__init__(*args)
-        self.state = {
-                }
+        self.state = defaultdict(int)
         self.logger.info("REDUCER: %s", self.operator_id)
+
+    def process_batch(self, batch):
+        new_counts = []
+        for timestamp, record in batch:
+            word, count = record
+            self.state[word] += count
+            if timestamp > 0:
+                new_counts.append((timestamp, (word, self.state[word])))
+        self.logger.debug("REDUCE, batch size: %d, new counts: %d", len(batch), len(new_counts))
+        return {
+                0: new_counts,
+                }
 
     def process(self, record):
         timestamp, word, count = record
@@ -588,6 +657,12 @@ class Reducer(NondeterministicOperator):
     def get_counts(self):
         return self.state
 
+    def save_state(self):
+        return msgpack.dumps(self.state)
+
+    def load_state(self, state):
+        self.state = msgpack.loads(self.state)
+
 @ray.remote(max_reconstructions=100)
 class Sink(NondeterministicOperator):
     def __init__(self, output_filename, *args):
@@ -597,11 +672,18 @@ class Sink(NondeterministicOperator):
         self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
         self.logger.info("SINK: %s", self.operator_id)
 
-    def process(self, record):
-        timestamp, _, _ = record
-        if timestamp is not None:
-            self.output_file.write('{}\n'.format(time.time() - timestamp))
-        return []
+    #def process(self, record):
+    #    timestamp, _, _ = record
+    #    timestamp = float(timestamp)
+    #    if timestamp > 0:
+    #        self.output_file.write('{}\n'.format(time.time() - timestamp))
+    #    return []
+
+    def process_batch(self, batch):
+        for timestamp, _ in batch:
+            if timestamp > 0:
+                self.output_file.write('{}\n'.format(time.time() - timestamp))
+        return {}
 
     def save_checkpoint(self, actor_id, checkpoint_id):
         super().save_checkpoint(actor_id, checkpoint_id)
@@ -784,8 +866,13 @@ if __name__ == '__main__':
     checkpoint_tracker = CheckpointTracker.remote([sink_key])
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
+    backpressure = True
+    if args.target_throughput > 0:
+        backpressure = False
+
     # Create the sink.
-    sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
+    #sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
+    sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, None]
     sink = Sink._remote(
             args=sink_args,
             kwargs={},
@@ -799,7 +886,8 @@ if __name__ == '__main__':
     for i, reducer_key in enumerate(reducer_keys):
         resource = reducer_resources[i]
         sink_handle = ray.put([sink])
-        reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, None]
         print("Starting reducer", reducer_key, "upstream:", upstream_keys, "resource:", resource)
         reducer = Reducer._remote(
                 args=reducer_args,
@@ -822,7 +910,7 @@ if __name__ == '__main__':
         mapper_key = mapper_keys[i]
 
         handles = ray.put(reducers)
-        mapper_args = [mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        mapper_args = [args.words_file, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
         print("Starting mapper", mapper_key, "upstream:", upstream_keys, "resource:", resource)
         mapper = Mapper._remote(
                 args=mapper_args,
@@ -842,7 +930,7 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i]
         handles = ray.put([mappers[i]])
-        source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamps_per_batch]
+        source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamps_per_batch, backpressure]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
@@ -872,6 +960,12 @@ if __name__ == '__main__':
     throughputs = ray.get(generators)
     end = time.time()
     print("Elapsed time:", end - start)
+
+    if args.dump is not None:
+        events = ray.global_state.chrome_tracing_dump()
+        with open(args.dump, "w") as outfile:
+            json.dump(events, outfile)
+
     print("Source throughputs:", throughputs)
     ray.get(sink.flush_latencies.remote())
     latencies = []
@@ -882,13 +976,8 @@ if __name__ == '__main__':
     print("Mean latency:", np.mean(latencies), "max latency:", np.max(latencies))
 
 
-    if args.dump is not None:
-        events = ray.global_state.chrome_tracing_dump()
-        with open(args.dump, "w") as outfile:
-            json.dump(events, outfile)
-
     all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
     counts = {}
     for count in all_counts:
         counts.update(count)
-    print("Final count is", counts)
+    #print("Final count is", counts)
