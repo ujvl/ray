@@ -89,9 +89,10 @@ class RayletClient {
   ///
   /// \param task_spec The assigned task.
   /// \return ray::Status.
-  ray::Status GetTask(std::unique_ptr<ray::raylet::TaskSpecification> *task_spec,
-    bool *reexecution,
-    std::vector<std::string> *nondeterministic_events);
+  ray::Status GetTasks(
+    std::vector<std::unique_ptr<ray::raylet::TaskSpecification>> *task_specs,
+    std::vector<bool> *reexecutions,
+    std::vector<std::vector<std::string>> *nondeterministic_logs);
 
   /// Tell the raylet that the client has finished executing a task.
   ///
@@ -159,6 +160,7 @@ class RayletClient {
   /// \param checkpoint_id ID of the new checkpoint (output parameter).
   /// \return ray::Status.
   ray::Status PrepareActorCheckpoint(const ActorID &actor_id,
+                                     const TaskID &task_id,
                                      ActorCheckpointID &checkpoint_id,
                                      std::vector<ActorID> &downstream_actor_ids,
                                      std::vector<ActorHandleID> &upstream_actor_handle_ids);

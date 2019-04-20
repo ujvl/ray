@@ -32,9 +32,24 @@ pid_t Worker::Pid() const { return pid_; }
 
 Language Worker::GetLanguage() const { return language_; }
 
-void Worker::AssignTaskId(const TaskID &task_id) { assigned_task_id_ = task_id; }
+void Worker::AssignTaskIds(const std::vector<TaskID> &task_ids) {
+  RAY_CHECK(assigned_task_ids_.empty());
+  assigned_task_ids_ = task_ids;
+}
 
-const TaskID &Worker::GetAssignedTaskId() const { return assigned_task_id_; }
+const std::vector<TaskID> &Worker::GetAssignedTaskIds() const { return assigned_task_ids_; }
+
+bool Worker::IsAssignedTaskId(const TaskID &cur_task_id) {
+  return std::find(assigned_task_ids_.begin(), assigned_task_ids_.end(), cur_task_id) != assigned_task_ids_.end();
+}
+
+
+const TaskID Worker::PopAssignedTaskID() {
+  RAY_CHECK(!assigned_task_ids_.empty());
+  const TaskID task_id = std::move(*assigned_task_ids_.begin());
+  assigned_task_ids_.erase(assigned_task_ids_.begin());
+  return task_id;
+}
 
 bool Worker::AddBlockedTaskId(const TaskID &task_id) {
   auto inserted = blocked_task_ids_.insert(task_id);

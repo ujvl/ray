@@ -188,13 +188,16 @@ class NodeManager {
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
   bool AssignTask(const Task &task);
-  void AssignTaskToWorker(const Task &task, std::shared_ptr<Worker> worker);
+  void AssignTasksToWorker(const std::vector<Task> &tasks, std::shared_ptr<Worker> worker);
+  bool AssignActorTaskBatch(const ActorID &actor_id,
+                            const ResourceSet &resource_set,
+                            const std::vector<Task> &tasks);
   void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback);
   /// Handle a worker finishing its assigned task.
   ///
   /// \param worker The worker that finished the task.
   /// \return Void.
-  void FinishAssignedTask(Worker &worker);
+  void FinishAssignedTasks(Worker &worker, const TaskID &task_id);
   /// Helper function to produce actor table data for a newly created actor.
   ///
   /// \param task The actor creation task that created the actor.

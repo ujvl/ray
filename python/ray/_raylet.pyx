@@ -282,16 +282,22 @@ cdef class RayletClient:
 
     def get_task(self):
         cdef:
-            unique_ptr[CTaskSpecification] task_spec
-            c_bool reexecution = False
-            c_vector[c_string] nondeterministic_events
+            c_vector[unique_ptr[CTaskSpecification]] task_specs
+            c_vector[c_bool] reexecutions
+            c_vector[c_vector[c_string]] nondeterministic_logs
+
 
         with nogil:
-            check_status(self.client.get().GetTask(&task_spec, &reexecution, &nondeterministic_events))
-        if reexecution:
-            return Task.make(task_spec), nondeterministic_events
-        else:
-            return Task.make(task_spec), None
+            check_status(self.client.get().GetTasks(&task_specs, &reexecutions, &nondeterministic_logs))
+
+        tasks = []
+        for i in range(task_specs.size()):
+            if reexecutions[i]:
+                log = nondeterministic_logs[i]
+            else:
+                log = None
+            tasks.append((Task.make(task_specs[i]), log))
+        return tasks
 
     def task_done(self):
         check_status(self.client.get().TaskDone())
@@ -406,17 +412,20 @@ cdef class RayletClient:
         cdef c_vector[CObjectID] free_ids = ObjectIDsToVector(object_ids)
         check_status(self.client.get().FreeObjects(free_ids, local_only))
 
-    def prepare_actor_checkpoint(self, ActorID actor_id, py_downstream_actor_ids,
+    def prepare_actor_checkpoint(self, ActorID actor_id,
+            TaskID task_id,
+            py_downstream_actor_ids,
             py_upstream_actor_handle_ids):
         cdef CActorCheckpointID checkpoint_id
         cdef c_vector[CActorID] downstream_actor_ids = ActorIDsToVector(py_downstream_actor_ids)
         cdef c_vector[CActorHandleID] upstream_actor_handle_ids = ActorHandleIDsToVector(py_upstream_actor_handle_ids)
         cdef CActorID c_actor_id = actor_id.data
+        cdef CTaskID c_task_id = task_id.data
         # PrepareActorCheckpoint will wait for raylet's reply, release
         # the GIL so other Python threads can run.
         with nogil:
             check_status(self.client.get().PrepareActorCheckpoint(
-                c_actor_id, checkpoint_id, downstream_actor_ids,
+                c_actor_id, c_task_id, checkpoint_id, downstream_actor_ids,
                 upstream_actor_handle_ids))
         return ActorCheckpointID(checkpoint_id.binary())
 

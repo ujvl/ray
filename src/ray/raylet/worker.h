@@ -29,8 +29,10 @@ class Worker {
   /// Return the worker's PID.
   pid_t Pid() const;
   Language GetLanguage() const;
-  void AssignTaskId(const TaskID &task_id);
-  const TaskID &GetAssignedTaskId() const;
+  void AssignTaskIds(const std::vector<TaskID> &task_ids);
+  bool IsAssignedTaskId(const TaskID &task_id);
+  const TaskID PopAssignedTaskID();
+  const std::vector<TaskID> &GetAssignedTaskIds() const;
   bool AddBlockedTaskId(const TaskID &task_id);
   bool RemoveBlockedTaskId(const TaskID &task_id);
   const std::unordered_set<TaskID> &GetBlockedTaskIds() const;
@@ -59,7 +61,7 @@ class Worker {
   /// Connection state of a worker.
   std::shared_ptr<LocalClientConnection> connection_;
   /// The worker's currently assigned task.
-  TaskID assigned_task_id_;
+  std::vector<TaskID> assigned_task_ids_;
   /// Driver ID for the worker's current assigned task.
   DriverID assigned_driver_id_;
   /// The worker's actor ID. If this is nil, then the worker is not an actor.

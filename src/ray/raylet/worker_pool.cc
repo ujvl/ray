@@ -170,7 +170,7 @@ void WorkerPool::RegisterWorker(const std::shared_ptr<Worker> &worker) {
 }
 
 void WorkerPool::RegisterDriver(const std::shared_ptr<Worker> &driver) {
-  RAY_CHECK(!driver->GetAssignedTaskId().is_nil());
+  RAY_CHECK(!driver->GetAssignedTaskIds().empty());
   auto &state = GetStateForLanguage(driver->GetLanguage());
   state.registered_drivers.insert(std::move(driver));
 }
@@ -199,7 +199,7 @@ std::shared_ptr<Worker> WorkerPool::GetRegisteredDriver(
 
 void WorkerPool::PushWorker(const std::shared_ptr<Worker> &worker) {
   // Since the worker is now idle, unset its assigned task ID.
-  RAY_CHECK(worker->GetAssignedTaskId().is_nil())
+  RAY_CHECK(worker->GetAssignedTaskIds().empty())
       << "Idle workers cannot have an assigned task ID";
   auto &state = GetStateForLanguage(worker->GetLanguage());
   // Add the worker to the idle pool.

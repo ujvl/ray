@@ -92,7 +92,7 @@ const std::unordered_map<ActorHandleID, ActorRegistration::FrontierLeaf>
 bool ActorRegistration::Release(const ObjectID &object_id) {
   bool release = false;
   auto it = dummy_objects_.find(object_id);
-  RAY_CHECK(it != dummy_objects_.end());
+  RAY_CHECK(it != dummy_objects_.end()) << object_id;
   it->second--;
   RAY_CHECK(it->second >= 0);
   if (it->second == 0) {

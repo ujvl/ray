@@ -950,89 +950,90 @@ class Worker(object):
         # Send signal with the error.
         ray_signal.send(ray_signal.ErrorSignal(str(failure_object)))
 
-    def _wait_for_and_process_task(self, task, nondeterministic_events):
+    def _wait_for_and_process_tasks(self, tasks):
         """Wait for a task to be ready and process the task.
 
         Args:
             task: The task to execute.
         """
-        function_descriptor = FunctionDescriptor.from_bytes_list(
-            task.function_descriptor_list())
-        driver_id = task.driver_id()
+        for task, nondeterministic_events in tasks:
+            function_descriptor = FunctionDescriptor.from_bytes_list(
+                task.function_descriptor_list())
+            driver_id = task.driver_id()
 
-        # TODO(rkn): It would be preferable for actor creation tasks to share
-        # more of the code path with regular task execution.
-        if not task.actor_creation_id().is_nil():
-            assert self.actor_id.is_nil()
-            self.actor_id = task.actor_creation_id()
-            self.actor_creation_task_id = task.task_id()
-            actor_class = self.function_actor_manager.load_actor_class(
+            # TODO(rkn): It would be preferable for actor creation tasks to share
+            # more of the code path with regular task execution.
+            if not task.actor_creation_id().is_nil():
+                assert self.actor_id.is_nil()
+                self.actor_id = task.actor_creation_id()
+                self.actor_creation_task_id = task.task_id()
+                actor_class = self.function_actor_manager.load_actor_class(
+                    driver_id, function_descriptor)
+                self.actors[self.actor_id] = actor_class.__new__(actor_class)
+                self.actor_checkpoint_info[self.actor_id] = ActorCheckpointInfo(
+                    num_tasks_since_last_checkpoint=0,
+                    last_checkpoint_timestamp=int(1000 * time.time()),
+                    checkpoint_ids=[],
+                )
+
+            execution_info = self.function_actor_manager.get_execution_info(
                 driver_id, function_descriptor)
-            self.actors[self.actor_id] = actor_class.__new__(actor_class)
-            self.actor_checkpoint_info[self.actor_id] = ActorCheckpointInfo(
-                num_tasks_since_last_checkpoint=0,
-                last_checkpoint_timestamp=int(1000 * time.time()),
-                checkpoint_ids=[],
-            )
 
-        execution_info = self.function_actor_manager.get_execution_info(
-            driver_id, function_descriptor)
-
-        # Execute the task.
-        # TODO(rkn): Consider acquiring this lock with a timeout and pushing a
-        # warning to the user if we are waiting too long to acquire the lock
-        # because that may indicate that the system is hanging, and it'd be
-        # good to know where the system is hanging.
-        with self.lock:
-            function_name = execution_info.function_name
-            extra_data = {
-                "name": function_name,
-                "task_id": task.task_id().hex()
-            }
-            if task.actor_id().is_nil():
-                if task.actor_creation_id().is_nil():
-                    title = "ray_worker:{}()".format(function_name)
-                    next_title = "ray_worker"
+            # Execute the task.
+            # TODO(rkn): Consider acquiring this lock with a timeout and pushing a
+            # warning to the user if we are waiting too long to acquire the lock
+            # because that may indicate that the system is hanging, and it'd be
+            # good to know where the system is hanging.
+            with self.lock:
+                function_name = execution_info.function_name
+                extra_data = {
+                    "name": function_name,
+                    "task_id": task.task_id().hex()
+                }
+                if task.actor_id().is_nil():
+                    if task.actor_creation_id().is_nil():
+                        title = "ray_worker:{}()".format(function_name)
+                        next_title = "ray_worker"
+                    else:
+                        self.task_context.creation_task_id = task.task_id()
+                        actor = self.actors[task.actor_creation_id()]
+                        title = "ray_{}:{}()".format(actor.__class__.__name__,
+                                                     function_name)
+                        next_title = "ray_{}".format(actor.__class__.__name__)
                 else:
-                    self.task_context.creation_task_id = task.task_id()
-                    actor = self.actors[task.actor_creation_id()]
+                    actor = self.actors[task.actor_id()]
                     title = "ray_{}:{}()".format(actor.__class__.__name__,
                                                  function_name)
                     next_title = "ray_{}".format(actor.__class__.__name__)
-            else:
-                actor = self.actors[task.actor_id()]
-                title = "ray_{}:{}()".format(actor.__class__.__name__,
-                                             function_name)
-                next_title = "ray_{}".format(actor.__class__.__name__)
 
-            self.task_context.nondeterministic_events = nondeterministic_events
-            with profiling.profile("task", extra_data=extra_data):
-                with _changeproctitle(title, next_title):
-                    self._process_task(task, execution_info)
-                # Reset the state fields so the next task can run.
-                self.task_context.current_task_id = TaskID.nil()
-                self.task_context.task_index = 0
-                self.task_context.arguments.clear()
-                self.task_context.returns.clear()
-                if self.actor_id.is_nil():
-                    # Don't need to reset task_driver_id if the worker is an
-                    # actor. Because the following tasks should all have the
-                    # same driver id.
-                    self.task_driver_id = DriverID.nil()
-                    self.task_context.put_index = 1
-                    # Reset signal counters so that the next task can get
-                    # all past signals.
-                    ray_signal.reset()
+                self.task_context.nondeterministic_events = nondeterministic_events
+                with profiling.profile("task", extra_data=extra_data):
+                    with _changeproctitle(title, next_title):
+                        self._process_task(task, execution_info)
+                    # Reset the state fields so the next task can run.
+                    self.task_context.current_task_id = TaskID.nil()
+                    self.task_context.task_index = 0
+                    self.task_context.arguments.clear()
+                    self.task_context.returns.clear()
+                    if self.actor_id.is_nil():
+                        # Don't need to reset task_driver_id if the worker is an
+                        # actor. Because the following tasks should all have the
+                        # same driver id.
+                        self.task_driver_id = DriverID.nil()
+                        self.task_context.put_index = 1
+                        # Reset signal counters so that the next task can get
+                        # all past signals.
+                        ray_signal.reset()
 
-        # Increase the task execution counter.
-        self.function_actor_manager.increase_task_counter(
-            driver_id, function_descriptor)
+            # Increase the task execution counter.
+            self.function_actor_manager.increase_task_counter(
+                driver_id, function_descriptor)
 
-        reached_max_executions = (self.function_actor_manager.get_task_counter(
-            driver_id, function_descriptor) == execution_info.max_calls)
-        if reached_max_executions:
-            self.raylet_client.disconnect()
-            sys.exit(0)
+            reached_max_executions = (self.function_actor_manager.get_task_counter(
+                driver_id, function_descriptor) == execution_info.max_calls)
+            if reached_max_executions:
+                self.raylet_client.disconnect()
+                sys.exit(0)
 
     def _get_next_task_from_local_scheduler(self):
         """Get the next task from the local scheduler.
@@ -1041,12 +1042,12 @@ class Worker(object):
             A task from the local scheduler.
         """
         with profiling.profile("worker_idle"):
-            task, nondeterministic_events = self.raylet_client.get_task()
+            tasks = self.raylet_client.get_task()
 
         # Automatically restrict the GPUs available to this task.
         ray.utils.set_cuda_visible_devices(ray.get_gpu_ids())
 
-        return task, nondeterministic_events
+        return tasks
 
     def main_loop(self):
         """The main loop a worker runs to receive and execute tasks."""
@@ -1058,8 +1059,8 @@ class Worker(object):
         signal.signal(signal.SIGTERM, exit)
 
         while True:
-            task, nondeterministic_events = self._get_next_task_from_local_scheduler()
-            self._wait_for_and_process_task(task, nondeterministic_events)
+            tasks = self._get_next_task_from_local_scheduler()
+            self._wait_for_and_process_tasks(tasks)
 
 
 def get_gpu_ids():
