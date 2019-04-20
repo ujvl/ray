@@ -11,11 +11,13 @@ from libcpp.pair cimport pair
 from libcpp.string cimport string as c_string
 from libcpp.unordered_set cimport unordered_set
 from libcpp.list cimport list
+from libcpp.vector cimport vector
 from collections import defaultdict
 
 from cython.operator import dereference, postincrement
 
 import yep
+import time
 
 def simple_blahfunc(x, y, z):
     return x + y + z
@@ -78,7 +80,7 @@ class simple_class(object):
 #        keyed_counts[hash(word) % num_reducers].append((timestamp if word in timestamped else 0, (word, count)))
 #    return keyed_counts
 
-def cython_process_batch(batch, int num_reducers):
+def cython_process_batch(list[pair[float, c_string]] batch, int num_reducers):
 
     cdef:
         unordered_map[c_string, int] counts
@@ -88,8 +90,8 @@ def cython_process_batch(batch, int num_reducers):
         size_t start = 0
         size_t end = 0
         c_string word
-    for w in batch[0][1].split(b' '):
-        timestamped.insert(w)
+    #for w in batch[0][1].split(b' '):
+    #    timestamped.insert(w)
 
     #for _, row in batch:
     #    end = row.find(b' ');
@@ -105,13 +107,12 @@ def cython_process_batch(batch, int num_reducers):
     #        key: [] for key in range(num_reducers)
     #        }
     cdef:
-        unordered_map[c_string, int].iterator it = counts.begin()
-        unordered_map[int, unordered_map[c_string, pair[float, int]]] keyed_counts
+        #unordered_map[c_string, int].iterator it = counts.begin()
+        unordered_map[int, list[pair[float, pair[c_string, int]]]] keyed_counts
         int count
         int h
         int i
-        float new_timestamp
-        float timestamp = batch[0][0]
+        float timestamp
 
     #while it != counts.end():
     #    word = dereference(it).first
@@ -121,23 +122,22 @@ def cython_process_batch(batch, int num_reducers):
     #    postincrement(it)
 
     #timestamp = batch[0][0]
-    row = batch[0][1]
-    for i in range(len(batch)):
+    start = time.time()
+    cdef:
+        list[pair[float, c_string]].iterator it = batch.begin()
+    while it != batch.end():
+        timestamp = dereference(it).first
+        row = dereference(it).second
         end = row.find(b' ');
-        while (end != row.size()):
+        while (end < row.size()):
             word = row.substr(start, end)
             #counts[word] += 1
             h = hash(word)
             h = h % num_reducers
-            count = keyed_counts[h][word].second
-            new_timestamp = 0
-            if timestamped.count(word) == 1:
-                new_timestamp = timestamp
-            keyed_counts[h][word].first = new_timestamp
-            keyed_counts[h][word].second = count + 1
+            keyed_counts[h].push_back((timestamp, (word, 1)))
 
             start = end + 1
             end = row.find(b' ', start)
+        postincrement(it)
 
-    return None
-
+    return time.time() - start

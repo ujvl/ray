@@ -23,6 +23,11 @@ partition = {
 batch = [(0, np.string_.join(b' ', np.random.choice(words, sentence_length))) for _ in range(batch_size)]
 batch[0] = (time.time(), batch[0][1])
 
+with open('out', 'wb+') as f:
+    for _, row in batch:
+        f.write(row)
+        f.write(b'\n')
+
 def process_batch(batch, num_reducers):
 
     #[
@@ -60,11 +65,11 @@ print("Took", end - start)
 
 start = time.time()
 objects = []
-yep.start('/tmp/test.prof')
-for _ in range(50):
-    d = cython_process_batch(batch, num_reducers)
-    objects.append(d)
-yep.stop()
-#d = cython_process_batch(batch, num_reducers)
+#yep.start('/tmp/test.prof')
+#for _ in range(50):
+#    d = cython_process_batch(batch, num_reducers)
+#    objects.append(d)
+#yep.stop()
+d = cython_process_batch(batch, num_reducers)
 end = time.time()
-print("CYTHON: Took", end - start)
+print("CYTHON: Took", end - start, type(d))
