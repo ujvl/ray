@@ -71,6 +71,7 @@ def backpressured_push(logger, handle, queue, num_tasks, max_queue_length, args,
 @ray.remote(max_reconstructions=100)
 class WordSource(object):
     def __init__(self,
+            operator_index,
             operator_id,
             handles,
             max_queue_length,
@@ -89,6 +90,7 @@ class WordSource(object):
         self.words = np.array([word.encode('ascii') for word in self.words])
         self.timestamp_interval = timestamp_interval
 
+        self.operator_index = operator_index
         self.operator_id = operator_id
         self.handles = handles
         self.queue = []
@@ -259,11 +261,12 @@ class WordSource(object):
 
 class NondeterministicOperator(ray.actor.Checkpointable):
 
-    def __init__(self, operator_id, handles, max_queue_length, upstream_ids, checkpoint_dir, batch_size):
+    def __init__(self, operator_index, operator_id, handles, max_queue_length, upstream_ids, checkpoint_dir, batch_size):
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
         print("Set logger to level", LOG_LEVEL)
 
+        self.operator_index = operator_index
         self.operator_id = operator_id
         self.handles = handles
         self._ray_downstream_actors = [handle._ray_actor_id for handle in handles]
@@ -454,10 +457,13 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     processed_batch = self.process_batch(timestamp, batch)
                     self.num_records_seen += len(batch)
 
-                    for key, flush_buffer in enumerate(processed_batch):
+                    #for key, flush_buffer in enumerate(processed_batch):
+                    for i in range(len(processed_batch)):
                         #self.flush_buffers[key] = flush_buffer
+                        key = (i + self.operator_index) % self.num_handles
+                        flush_buffer = processed_batch[key]
                         future = self.backpressured_flush(key, timestamp, flush_buffer)
-                        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+                        self.logger.debug("Flushing handle %d after %d, object %s", key, self.num_records_seen, future)
 
 
                     #for record in records:
@@ -933,7 +939,7 @@ if __name__ == '__main__':
     for i, sink_key in enumerate(sink_keys):
         resource = reducer_resources[i % len(reducer_resources)]
         upstream_keys = [reducer_keys[i]]
-        sink_args = [args.latency_file, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None]
+        sink_args = [args.latency_file, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
                 args=sink_args,
@@ -951,7 +957,7 @@ if __name__ == '__main__':
         sink = sinks[i]
         sink_handle = ray.put([sink])
         #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
-        reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, None]
+        reducer_args = [i, reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, None]
         print("Starting reducer", reducer_key, "upstream:", upstream_keys, "resource:", resource)
         reducer = Reducer._remote(
                 args=reducer_args,
@@ -974,7 +980,7 @@ if __name__ == '__main__':
         mapper_key = mapper_keys[i]
 
         handles = ray.put(reducers)
-        mapper_args = [args.words_file, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
+        mapper_args = [args.words_file, i, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
         print("Starting mapper", mapper_key, "upstream:", upstream_keys, "resource:", resource)
         mapper = Mapper._remote(
                 args=mapper_args,
@@ -994,7 +1000,7 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i % len(mapper_resources)]
         handles = ray.put([mappers[i]])
-        source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure]
+        source_args = [i, source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
