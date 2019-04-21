@@ -20,11 +20,10 @@ ulimit -a
 echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
+export RAY_BACKEND_LOG_LEVEL=debug
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
-    --plasma-directory=/mnt/hugepages \
-    --huge-pages \
-    --object-store-memory 800000000 \
+    --num-cpus 4 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
@@ -48,10 +47,10 @@ sleep 5
 
 taskset -pc 0 `pgrep raylet`
 sudo renice -n -19 -p `pgrep raylet`
-if [[ $# -ne 3 ]]; then
-    yes > /dev/null &
-    taskset -pc 0 $!
-fi
+#if [[ $# -ne 3 ]]; then
+#    yes > /dev/null &
+#    taskset -pc 0 $!
+#fi
 
 #for i in `seq 0 7`; do
 #    yes > /dev/null &
@@ -63,5 +62,11 @@ fi
 #    taskset -pc 1-3 $pid
 #    #sudo renice -n -5 -p $pid
 #done
+i=0
+for pid in `pgrep python`; do
+    echo $pid $i
+    taskset -pc $i $pid
+    i=$(($i + 1 ))
+done
 
 sleep 1

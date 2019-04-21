@@ -19,3 +19,5 @@ for worker in `tail -n $num_workers ~/workers.txt`; do
     rsync -e "ssh -o StrictHostKeyChecking=no -i ~/ray_bootstrap_key.pem" -az "/home/ubuntu/ray" $worker:/home/ubuntu & sleep 0.5
 done
 wait
+
+parallel-ssh -t 0 -i -P -h ~/workers.txt -x "-o StrictHostKeyChecking=no -i ~/ray_bootstrap_key.pem" "pip install -e ~/ray/examples/cython/"

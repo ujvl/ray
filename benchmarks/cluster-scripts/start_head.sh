@@ -12,11 +12,9 @@ ulimit -n 65536
 ulimit -a
 ray start --head \
   --redis-port=6379 \
+  --num-cpus 4 \
   --num-redis-shards $NUM_REDIS_SHARDS \
   --resources='{"Node_0": 100}' \
-  --plasma-directory=/mnt/hugepages \
-  --object-store-memory 800000000 \
-  --huge-pages \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
