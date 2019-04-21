@@ -290,11 +290,13 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self.flush_buffers = [list() for _ in range(len(handles))]
         self.num_handles = len(handles)
 
-        self.queue = []
+        self.queues = [list() for _ in range(len(handles))]
         self.max_queue_length = max_queue_length
 
         self.state = None
-        self.num_flushes = 0
+        self.num_flushes = list(range(len(handles)))
+        self.num_flushes = self.num_flushes[self.operator_index:] + self.num_flushes[:self.operator_index]
+        self.logger.debug("Operator %s starts with queue offsets %s", self.operator_id, self.num_flushes)
 
         self.checkpoint_attrs = [
                 "self_handle",
@@ -498,13 +500,13 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         future = backpressured_push(
                 self.logger,
                 self.handles[buffer_index],
-                self.queue,
-                self.num_flushes,
+                self.queues[buffer_index],
+                self.num_flushes[buffer_index],
                 self.max_queue_length,
                 args,
                 nondeterministic_event=event)
-        wait_queue(self.logger, self.queue, 1)
-        self.num_flushes += 1
+        wait_queue(self.logger, self.queues[buffer_index], 1)
+        self.num_flushes[buffer_index] += 1
         #flush_buffer.clear()
         return future
 
