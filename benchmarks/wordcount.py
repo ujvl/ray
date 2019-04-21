@@ -932,7 +932,8 @@ if __name__ == '__main__':
     sinks = []
     for i, sink_key in enumerate(sink_keys):
         resource = reducer_resources[i % len(reducer_resources)]
-        sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, None]
+        upstream_keys = [reducer_keys[i]]
+        sink_args = [args.latency_file, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
                 args=sink_args,
