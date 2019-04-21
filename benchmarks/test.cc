@@ -2,6 +2,7 @@
 #include <fstream>
 #include <chrono>
 #include <list>
+#include <vector>
 #include <unordered_map>
 
 int main() {
@@ -45,6 +46,22 @@ int main() {
     time_point = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
     auto end = std::chrono::duration_cast<std::chrono::milliseconds>(time_point.time_since_epoch());
     std::cout << "lines: " << i << " took " << (end - start).count() << std::endl;
+
+    std::unordered_map<std::string, int> state;
+    state.reserve(100000);
+    std::vector<std::string> words;
+    for (const auto &entry : keyed_counts[0]) {
+      words.push_back(entry.second.first);
+    }
+
+    time_point = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+    start = std::chrono::duration_cast<std::chrono::milliseconds>(time_point.time_since_epoch());
+    for (const auto &word : words) {
+        state[word] += 1;
+    }
+    time_point = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+    end = std::chrono::duration_cast<std::chrono::milliseconds>(time_point.time_since_epoch());
+    std::cout << "counts: " << state.size() << " took " << (end - start).count() << std::endl;
 
     return 0;
 }

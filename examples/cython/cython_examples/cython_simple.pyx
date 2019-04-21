@@ -11,7 +11,7 @@ from libcpp.pair cimport pair
 from libcpp.string cimport string as c_string
 from libcpp.unordered_set cimport unordered_set
 from libcpp.map cimport map
-from libcpp.list cimport list
+from libcpp.list cimport list as c_list
 from libcpp.vector cimport vector
 from collections import defaultdict
 
@@ -93,7 +93,7 @@ def cython_process_batch(batch, int num_reducers):
         for word in row.split(b' '):
             h = hash(word)
             h = h % num_reducers
-            keyed_counts[h].append((timestamp, (word, 1)))
+            keyed_counts[h].append((timestamp, word))
 
     return keyed_counts
 
@@ -119,8 +119,6 @@ def cython_process_batch2(batch, int num_reducers):
 def cython_process_batch3(batch, int num_reducers):
 
     cdef:
-        c_string row
-        c_string word
         int h
 
     keyed_words = [[] for key in range(num_reducers)]
@@ -132,12 +130,21 @@ def cython_process_batch3(batch, int num_reducers):
 
     return keyed_words
 
-def process_batch_reducer(self, words):
-    new_counts = []
-    cdef:
-        int i
-        int count
+def process_batch_reducer(state, words):
     for word in words:
-        if word not in self.state:
-            self.state[word] = 0
-        self.state[word] += 1
+        if word not in state:
+            state[word] = 0
+        state[word] += 1
+
+cdef class ReducerState(object):
+    cdef unordered_map[c_string, int] state
+
+    def __init__(self):
+        pass
+
+    def count(self, words):
+        cdef:
+            c_string word
+
+        for word in words:
+            self.state[word] += 1
