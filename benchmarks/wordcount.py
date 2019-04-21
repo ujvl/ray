@@ -733,6 +733,7 @@ class Reducer(NondeterministicOperator):
 class Sink(NondeterministicOperator):
     def __init__(self, output_filename, *args):
         super().__init__(*args)
+        self.latencies = []
         self.output_file = open(output_filename, 'w+')
 
         self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
@@ -748,7 +749,9 @@ class Sink(NondeterministicOperator):
     def process_batch(self, batch):
         for timestamp, _ in batch:
             if timestamp > 0:
-                self.output_file.write('{}\n'.format(time.time() - timestamp))
+                latency = time.time() - timestamp
+                self.output_file.write('{}\n'.format(latency))
+                self.latencies.append(latency)
         return {}
 
     def save_checkpoint(self, actor_id, checkpoint_id):
@@ -759,6 +762,7 @@ class Sink(NondeterministicOperator):
 
     def flush_latencies(self):
         self.output_file.close()
+        return self.latencies
 
     def log_push(self, upstream_id, records, checkpoint_epoch):
         process_records = self.checkpoint(upstream_id, checkpoint_epoch)
@@ -817,7 +821,7 @@ def create_local_node(cluster, i, node_kwargs):
     return node, resource
 
 # Always on the head node.
-@ray.remote(resources={"Node0": 1})
+@ray.remote(resources={"Node_0": 1})
 class CheckpointTracker(object):
     def __init__(self, sink_keys):
         self.sink_keys = sink_keys
@@ -866,6 +870,16 @@ if __name__ == '__main__':
         type=int,
         help='The number of reducers to use.')
     parser.add_argument(
+        '--num-mappers-per-node',
+        default=2,
+        type=int,
+        help='')
+    parser.add_argument(
+        '--num-reducers-per-node',
+        default=2,
+        type=int,
+        help='')
+    parser.add_argument(
         '--num-mapper-failures',
         default=0,
         type=int,
@@ -898,7 +912,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max-queue-length',
         type=int,
-        default=10,
+        default=8,
         help='Queue length')
     parser.add_argument(
         '--flush-probability',
@@ -932,6 +946,12 @@ if __name__ == '__main__':
 
 
     # Initialize Ray.
+    if args.redis_address is None:
+        redis_address = cluster.redis_address
+    else:
+        redis_address = args.redis_address
+    ray.init(redis_address=redis_address)
+
     if args.redis_address is None:
         internal_config = json.dumps({
             "initial_reconstruction_timeout_milliseconds": 200,
@@ -971,20 +991,31 @@ if __name__ == '__main__':
             reducer_resources.append(resource)
             i += 1
         sink_node, sink_resource = create_local_node(cluster, i, node_kwargs)
-        redis_address = cluster.redis_address
     else:
-        redis_address = args.redis_address
-    ray.init(redis_address=redis_address)
+        node_resources = []
+        nodes = ray.global_state.client_table()
+        for node in nodes:
+            for resource in node['Resources']:
+                if 'Node' in resource and resource != 'Node_0':
+                    node_resources.append(resource)
+        num_mapper_nodes = args.num_mappers // args.num_mappers_per_node
+        num_reducer_nodes = args.num_reducers // args.num_reducers_per_node
 
-    operator_ids = list(string.ascii_uppercase)
+        mapper_resources = node_resources[:num_mapper_nodes]
+        reducer_resources = node_resources[-num_reducer_nodes:]
+        print("Starting mappers on", num_mapper_nodes, "nodes")
+        print("Starting reducers on", num_reducer_nodes, "nodes")
+
+
+    operator_ids = [a + b for a in list(string.ascii_uppercase) for b in list(string.ascii_uppercase)]
     # One source per mapper.
     source_keys = [operator_ids.pop(0) for _ in range(args.num_mappers)]
     mapper_keys = [operator_ids.pop(0) for _ in range(args.num_mappers)]
     reducer_keys = [operator_ids.pop(0) for _ in range(args.num_reducers)]
     # One sink.
-    sink_key = operator_ids.pop(0)
+    sink_keys = [operator_ids.pop(0) for _ in range(args.num_reducers)]
 
-    checkpoint_tracker = CheckpointTracker.remote([sink_key])
+    checkpoint_tracker = CheckpointTracker.remote(sink_keys)
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
     backpressure = True
@@ -993,19 +1024,25 @@ if __name__ == '__main__':
 
     # Create the sink.
     #sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
-    sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, None]
-    sink = Sink._remote(
-            args=sink_args,
-            kwargs={},
-            resources={sink_resource: 1})
-    ray.get(sink.register_self_handle.remote(sink))
+    sinks = []
+    for i, sink_key in enumerate(sink_keys):
+        resource = reducer_resources[i % len(reducer_resources)]
+        sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, None]
+        print("Starting sink", sink_key, "resource:", resource)
+        sink = Sink._remote(
+                args=sink_args,
+                kwargs={},
+                resources={resource: 1})
+        sinks.append(sink)
+    ray.get([sink.register_self_handle.remote(sink) for sink in sinks])
     sink_handles = []
 
     # Create the reducers.
     upstream_keys = mapper_keys
     reducers = []
     for i, reducer_key in enumerate(reducer_keys):
-        resource = reducer_resources[i]
+        resource = reducer_resources[i % len(reducer_resources)]
+        sink = sinks[i]
         sink_handle = ray.put([sink])
         #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
         reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, None]
@@ -1019,14 +1056,14 @@ if __name__ == '__main__':
         sink_handle = ray.get(sink_handle)[0]
         sink_handles.append(sink_handle._ray_actor_handle_id)
 
-    ray.get(sink.register_upstream_actor_handle_ids.remote(sink_handles))
+    ray.get([sink.register_upstream_actor_handle_ids.remote(sink_handles) for sink in sinks])
     ray.get([reducer.register_self_handle.remote(reducer) for reducer in reducers])
     reducer_handles = [list() for _ in reducers]
 
     # Create the intermediate operators.
     mappers = []
     for i, mapper_key in enumerate(mapper_keys):
-        resource = mapper_resources[i]
+        resource = mapper_resources[i % len(mapper_resources)]
         upstream_keys = [source_keys[i]]
         mapper_key = mapper_keys[i]
 
@@ -1049,7 +1086,7 @@ if __name__ == '__main__':
     # Create the sources.
     sources = []
     for i, source_key in enumerate(source_keys):
-        resource = mapper_resources[i]
+        resource = mapper_resources[i % len(mapper_resources)]
         handles = ray.put([mappers[i]])
         source_args = [source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamps_per_batch, backpressure]
         print("Starting source", source_key, "resource:", resource)
@@ -1069,14 +1106,18 @@ if __name__ == '__main__':
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
     time.sleep(18)
-    # Kill and restart mappers and reducers.
-    nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
-    resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
-    for node in nodes_to_kill:
-        cluster.remove_node(node)
-    for resource in resources_to_restart:
-        node_kwargs["resources"] = {resource: 100}
-        cluster.add_node(**node_kwargs)
+    if args.redis_address is None:
+        # Kill and restart mappers and reducers.
+        nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
+        resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
+        for node in nodes_to_kill:
+            cluster.remove_node(node)
+        for resource in resources_to_restart:
+            node_kwargs["resources"] = {resource: 100}
+            cluster.add_node(**node_kwargs)
+    else:
+        # TODO
+        pass
 
     throughputs = ray.get(generators)
     end = time.time()
@@ -1088,13 +1129,22 @@ if __name__ == '__main__':
             json.dump(events, outfile)
 
     print("Source throughputs:", throughputs)
-    ray.get(sink.flush_latencies.remote())
-    latencies = []
-    with open(args.latency_file, 'r') as f:
-        for line in f.readlines():
-            latency = float(line.strip())
-            latencies.append(latency)
-    print("Mean latency:", np.mean(latencies), "max latency:", np.max(latencies))
+    print("Total throughput:", sum(throughputs))
+    if args.redis_address is None:
+        latencies = []
+        with open(args.latency_file, 'r') as f:
+            for line in f.readlines():
+                latency = float(line.strip())
+                latencies.append(latency)
+    else:
+        all_latencies = ray.get([sink.flush_latencies.remote() for sink in sinks])
+        for i, latencies in enumerate(all_latencies):
+            print("Sink", i, "mean latency:", np.mean(latencies), "max latency:", np.max(latencies))
+        all_latencies = [latency for latencies in all_latencies for latency in latencies]
+        print("FINAL Mean latency:", np.mean(all_latencies), "max latency:", np.max(all_latencies))
+        with open(args.latency_file, 'w+') as f:
+            for latency in all_latencies:
+                f.write('{}\n'.format(latency))
 
 
     all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
