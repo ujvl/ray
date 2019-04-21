@@ -133,6 +133,23 @@ def cython_process_batch3(batch, int num_reducers):
 
     return keyed_words
 
+def cython_process_batch4(batch, int num_reducers):
+
+    cdef:
+        int h
+
+    keyed_words = [[] for key in range(num_reducers)]
+    for row in batch:
+        for word in row.split(b' '):
+            h = hash(word)
+            h = h % num_reducers
+            keyed_words[h].append(word)
+
+    for reducer in range(num_reducers):
+        keyed_words[reducer] = b" ".join(keyed_words[reducer])
+
+    return keyed_words
+
 def process_batch_reducer(state, words):
     for word in words:
         if word not in state:
@@ -143,6 +160,17 @@ cpdef process_batch_reducer2(dict state, list words):
     cdef PyObject *obj
     cdef Py_ssize_t val
     for word in words:
+        obj = PyDict_GetItem(state, word)
+        if obj is NULL:
+            state[word] = 1
+        else:
+            val = <object>obj
+            state[word] = val + 1
+
+cpdef process_batch_reducer3(dict state, bytes words):
+    cdef PyObject *obj
+    cdef Py_ssize_t val
+    for word in words.split(b' '):
         obj = PyDict_GetItem(state, word)
         if obj is NULL:
             state[word] = 1

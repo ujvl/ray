@@ -5,8 +5,10 @@ import numpy as np
 
 from cython_examples import cython_process_batch, cython_process_batch2
 from cython_examples import cython_process_batch3
+from cython_examples import cython_process_batch4
 from cython_examples import process_batch_reducer
 from cython_examples import process_batch_reducer2
+from cython_examples import process_batch_reducer3
 from cython_examples import ReducerState
 import yep
 
@@ -120,3 +122,24 @@ reducer.count(words)
 #yep.stop()
 end = time.time()
 print("Reduce in python took:", end - start)
+
+
+import ray
+print("END-TO-END-TESTS")
+ray.init()
+
+start = time.time()
+d = cython_process_batch3(batch, num_reducers)
+x = ray.put(d)
+d2 = ray.get(x)
+process_batch_reducer2(state, d2[0])
+end = time.time()
+print("E2E test 1 took ", end - start)
+
+start = time.time()
+d = cython_process_batch4(batch, num_reducers)
+x = ray.put(d)
+d2 = ray.get(x)
+process_batch_reducer3(state, d2[0])
+end = time.time()
+print("E2E test 2 took ", end - start)
