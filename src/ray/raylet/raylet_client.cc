@@ -234,6 +234,24 @@ ray::Status RayletClient::SubmitTask(const std::vector<ObjectID> &execution_depe
   return conn_->WriteMessage(MessageType::SubmitTask, &fbb);
 }
 
+ray::Status RayletClient::SubmitBatch(const std::vector<std::vector<ObjectID>> &execution_dependency_list,
+                        const std::vector<ray::raylet::TaskSpecification> &task_specs,
+                        const std::vector<std::string> &nondeterministic_events) {
+  std::vector<flatbuffers::Offset<ray::protocol::SubmitTaskRequest>> requests;
+  flatbuffers::FlatBufferBuilder fbb;
+  for (size_t i = 0; i < execution_dependency_list.size(); i++) {
+    const auto execution_dependencies_message = to_flatbuf(fbb, execution_dependency_list[i]);
+    auto message = ray::protocol::CreateSubmitTaskRequest(
+        fbb, execution_dependencies_message, task_specs[i].ToFlatbuffer(fbb),
+        fbb.CreateString(nondeterministic_events[i]));
+    requests.push_back(message);
+  }
+  auto message = ray::protocol::CreateSubmitTaskRequestBatch(
+      fbb, fbb.CreateVector(requests));
+  fbb.Finish(message);
+  return conn_->WriteMessage(MessageType::SubmitTaskBatch, &fbb);
+}
+
 ray::Status RayletClient::GetTasks(
     std::vector<std::unique_ptr<ray::raylet::TaskSpecification>> *task_specs,
     std::vector<bool> *reexecutions,

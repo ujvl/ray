@@ -280,6 +280,22 @@ cdef class RayletClient:
             task_spec.task_spec.get()[0],
             nondeterministic_event))
 
+    def submit_batch(self, list task_specs, const c_vector[c_string] &nondeterministic_logs):
+        cdef:
+            c_vector[c_vector[CObjectID]] execution_dependency_list
+            c_vector[CTaskSpecification] c_task_specs
+            c_vector[CObjectID] execution_dependencies
+            Task task_spec
+
+        for task_spec in task_specs:
+            execution_dependencies = task_spec.execution_dependencies.get()[0]
+            execution_dependency_list.push_back(execution_dependencies)
+            c_task_specs.push_back(task_spec.task_spec.get()[0])
+        check_status(self.client.get().SubmitBatch(
+            execution_dependency_list,
+            c_task_specs,
+            nondeterministic_logs))
+
     def get_task(self):
         cdef:
             c_vector[unique_ptr[CTaskSpecification]] task_specs

@@ -573,6 +573,108 @@ class Worker(object):
         assert len(final_results) == len(object_ids)
         return final_results
 
+    def create_task(self,
+                    function_descriptor,
+                    args,
+                    actor_id=None,
+                    actor_handle_id=None,
+                    actor_counter=0,
+                    actor_creation_id=None,
+                    actor_creation_dummy_object_id=None,
+                    max_actor_reconstructions=0,
+                    execution_dependencies=None,
+                    new_actor_handles=None,
+                    num_return_vals=None,
+                    resources=None,
+                    placement_resources=None,
+                    driver_id=None):
+        """Create a task but do not submit it.
+
+        Returns:
+            A Task.
+        """
+        if actor_id is None:
+            assert actor_handle_id is None
+            actor_id = ActorID.nil()
+            actor_handle_id = ActorHandleID.nil()
+        else:
+            assert actor_handle_id is not None
+
+        if actor_creation_id is None:
+            actor_creation_id = ActorID.nil()
+
+        if actor_creation_dummy_object_id is None:
+            actor_creation_dummy_object_id = ObjectID.nil()
+
+        # Put large or complex arguments that are passed by value in the
+        # object store first.
+        args_for_local_scheduler = []
+        for arg in args:
+            if isinstance(arg, ObjectID):
+                args_for_local_scheduler.append(arg)
+            elif ray._raylet.check_simple_value(arg):
+                args_for_local_scheduler.append(arg)
+            else:
+                with profiling.profile("store_argument"):
+                    args_for_local_scheduler.append(put(arg))
+
+        # By default, there are no execution dependencies.
+        if execution_dependencies is None:
+            execution_dependencies = []
+
+        if new_actor_handles is None:
+            new_actor_handles = []
+
+        if driver_id is None:
+            driver_id = self.task_driver_id
+
+        if resources is None:
+            raise ValueError("The resources dictionary is required.")
+        for value in resources.values():
+            assert (isinstance(value, int) or isinstance(value, float))
+            if value < 0:
+                raise ValueError(
+                    "Resource quantities must be nonnegative.")
+            if (value >= 1 and isinstance(value, float)
+                    and not value.is_integer()):
+                raise ValueError(
+                    "Resource quantities must all be whole numbers.")
+
+        if placement_resources is None:
+            placement_resources = {}
+
+        # Increment the worker's task index to track how many tasks
+        # have been submitted by the current task so far.
+        self.task_context.task_index += 1
+        # The parent task must be set for the submitted task.
+        assert not self.current_task_id.is_nil()
+        # Current driver id must not be nil when submitting a task.
+        # Because every task must belong to a driver.
+        assert not self.task_driver_id.is_nil()
+        # Submit the task to local scheduler.
+        function_descriptor_list = (
+            function_descriptor.get_function_descriptor_list())
+        assert isinstance(driver_id, DriverID)
+        task = ray._raylet.Task(
+            driver_id,
+            function_descriptor_list,
+            args_for_local_scheduler,
+            num_return_vals,
+            self.current_task_id,
+            self.task_context.task_index,
+            actor_creation_id,
+            actor_creation_dummy_object_id,
+            max_actor_reconstructions,
+            actor_id,
+            actor_handle_id,
+            actor_counter,
+            new_actor_handles,
+            execution_dependencies,
+            resources,
+            placement_resources,
+        )
+        return task
+
     def submit_task(self,
                     function_descriptor,
                     args,
@@ -624,92 +726,44 @@ class Worker(object):
             The return object IDs for this task.
         """
         with profiling.profile("submit_task"):
-            if actor_id is None:
-                assert actor_handle_id is None
-                actor_id = ActorID.nil()
-                actor_handle_id = ActorHandleID.nil()
-            else:
-                assert actor_handle_id is not None
+            task = self.create_task(
+                    function_descriptor,
+                    args,
+                    actor_id=actor_id,
+                    actor_handle_id=actor_handle_id,
+                    actor_counter=actor_counter,
+                    actor_creation_id=actor_creation_id,
+                    actor_creation_dummy_object_id=actor_creation_dummy_object_id,
+                    max_actor_reconstructions=max_actor_reconstructions,
+                    execution_dependencies=execution_dependencies,
+                    new_actor_handles=new_actor_handles,
+                    num_return_vals=num_return_vals,
+                    resources=resources,
+                    placement_resources=placement_resources,
+                    driver_id=driver_id)
 
-            if actor_creation_id is None:
-                actor_creation_id = ActorID.nil()
-
-            if actor_creation_dummy_object_id is None:
-                actor_creation_dummy_object_id = ObjectID.nil()
-
-            # Put large or complex arguments that are passed by value in the
-            # object store first.
-            args_for_local_scheduler = []
-            for arg in args:
-                if isinstance(arg, ObjectID):
-                    args_for_local_scheduler.append(arg)
-                elif ray._raylet.check_simple_value(arg):
-                    args_for_local_scheduler.append(arg)
-                else:
-                    with profiling.profile("store_argument"):
-                        args_for_local_scheduler.append(put(arg))
-
-            # By default, there are no execution dependencies.
-            if execution_dependencies is None:
-                execution_dependencies = []
-
-            if new_actor_handles is None:
-                new_actor_handles = []
-
-            if driver_id is None:
-                driver_id = self.task_driver_id
-
-            if resources is None:
-                raise ValueError("The resources dictionary is required.")
-            for value in resources.values():
-                assert (isinstance(value, int) or isinstance(value, float))
-                if value < 0:
-                    raise ValueError(
-                        "Resource quantities must be nonnegative.")
-                if (value >= 1 and isinstance(value, float)
-                        and not value.is_integer()):
-                    raise ValueError(
-                        "Resource quantities must all be whole numbers.")
-
-            if placement_resources is None:
-                placement_resources = {}
-
-            # Increment the worker's task index to track how many tasks
-            # have been submitted by the current task so far.
-            self.task_context.task_index += 1
-            # The parent task must be set for the submitted task.
-            assert not self.current_task_id.is_nil()
-            # Current driver id must not be nil when submitting a task.
-            # Because every task must belong to a driver.
-            assert not self.task_driver_id.is_nil()
-            # Submit the task to local scheduler.
-            function_descriptor_list = (
-                function_descriptor.get_function_descriptor_list())
-            assert isinstance(driver_id, DriverID)
-            task = ray._raylet.Task(
-                driver_id,
-                function_descriptor_list,
-                args_for_local_scheduler,
-                num_return_vals,
-                self.current_task_id,
-                self.task_context.task_index,
-                actor_creation_id,
-                actor_creation_dummy_object_id,
-                max_actor_reconstructions,
-                actor_id,
-                actor_handle_id,
-                actor_counter,
-                new_actor_handles,
-                execution_dependencies,
-                resources,
-                placement_resources,
-            )
             if nondeterministic_event is None:
                 nondeterministic_event = b''
             self.raylet_client.submit_task(task,
                     nondeterministic_event=nondeterministic_event)
-
             return task.returns()
+
+    def submit_batch(self, tasks, nondeterministic_events=None):
+        returns = []
+        if nondeterministic_events is None:
+            nondeterministic_events = [b'' for _ in range(len(tasks))]
+        assert len(nondeterministic_events) == len(tasks)
+        with profiling.profile("submit_batch"):
+            self.raylet_client.submit_batch(tasks, nondeterministic_events)
+            for task in tasks:
+                object_ids = task.returns()
+                if not task.actor_id().is_nil():
+                    object_ids.pop(-1)
+                if len(object_ids) == 1:
+                    returns += object_ids
+                else:
+                    returns.append(object_ids)
+        return returns
 
     def run_function_on_all_workers(self, function,
                                     run_on_other_drivers=False):

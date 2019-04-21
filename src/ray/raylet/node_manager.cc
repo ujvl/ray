@@ -735,7 +735,14 @@ void NodeManager::ProcessClientMessage(
     return;
   } break;
   case protocol::MessageType::SubmitTask: {
-    ProcessSubmitTaskMessage(message_data);
+    auto message = flatbuffers::GetRoot<protocol::SubmitTaskRequest>(message_data);
+    ProcessSubmitTaskMessage(message);
+  } break;
+  case protocol::MessageType::SubmitTaskBatch: {
+    auto message = flatbuffers::GetRoot<protocol::SubmitTaskRequestBatch>(message_data);
+    for (size_t i = 0; i < message->requests()->size(); ++i) {
+      ProcessSubmitTaskMessage(message->requests()->Get(i));
+    }
   } break;
   case protocol::MessageType::FetchOrReconstruct: {
     ProcessFetchOrReconstructMessage(client, message_data);
@@ -981,9 +988,8 @@ void NodeManager::ProcessDisconnectClientMessage(
   // these can be leaked.
 }
 
-void NodeManager::ProcessSubmitTaskMessage(const uint8_t *message_data) {
+void NodeManager::ProcessSubmitTaskMessage(const ray::protocol::SubmitTaskRequest *message) {
   // Read the task submitted by the client.
-  auto message = flatbuffers::GetRoot<protocol::SubmitTaskRequest>(message_data);
   TaskExecutionSpecification task_execution_spec(
       from_flatbuf(*message->execution_dependencies()));
   TaskSpecification task_spec(*message->task_spec());

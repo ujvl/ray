@@ -400,7 +400,7 @@ class NodeManager {
   ///
   /// \param message_data A pointer to the message data.
   /// \return Void.
-  void ProcessSubmitTaskMessage(const uint8_t *message_data);
+  void ProcessSubmitTaskMessage(const ray::protocol::SubmitTaskRequest *message);
 
   /// Process client message of FetchOrReconstruct
   ///

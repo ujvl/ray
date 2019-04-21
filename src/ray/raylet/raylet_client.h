@@ -83,6 +83,10 @@ class RayletClient {
                          const ray::raylet::TaskSpecification &task_spec,
                          const std::string &nondeterministic_event);
 
+  ray::Status SubmitBatch(const std::vector<std::vector<ObjectID>> &execution_dependency_list,
+                          const std::vector<ray::raylet::TaskSpecification> &task_specs,
+                          const std::vector<std::string> &nondeterministic_logs);
+
   /// Get next task for this client. This will block until the scheduler assigns
   /// a task to this worker. The caller takes ownership of the returned task
   /// specification and must free it.

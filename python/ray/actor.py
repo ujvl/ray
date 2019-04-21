@@ -125,7 +125,12 @@ class ActorMethod(object):
     def remote(self, *args, **kwargs):
         return self._remote(args, kwargs)
 
-    def _remote(self, args, kwargs, num_return_vals=None, nondeterministic_event=None):
+    def _remote(self,
+            args,
+            kwargs,
+            num_return_vals=None,
+            nondeterministic_event=None,
+            batch=False):
         if num_return_vals is None:
             num_return_vals = self._num_return_vals
 
@@ -134,7 +139,8 @@ class ActorMethod(object):
             args=args,
             kwargs=kwargs,
             num_return_vals=num_return_vals,
-            nondeterministic_event=nondeterministic_event)
+            nondeterministic_event=nondeterministic_event,
+            batch=batch)
 
 
 class ActorClass(object):
@@ -434,7 +440,8 @@ class ActorHandle(object):
                            args=None,
                            kwargs=None,
                            num_return_vals=None,
-                           nondeterministic_event=None):
+                           nondeterministic_event=None,
+                           batch=False):
         """Method execution stub for an actor handle.
 
         This is the function that executes when
@@ -472,23 +479,42 @@ class ActorHandle(object):
         function_descriptor = FunctionDescriptor(
             self._ray_module_name, method_name, self._ray_class_name)
         with self._ray_actor_lock:
-            object_ids = worker.submit_task(
-                function_descriptor,
-                args,
-                actor_id=self._ray_actor_id,
-                actor_handle_id=self._ray_actor_handle_id,
-                actor_counter=self._ray_actor_counter,
-                actor_creation_dummy_object_id=(
-                    self._ray_actor_creation_dummy_object_id),
-                execution_dependencies=[self._ray_actor_cursor],
-                new_actor_handles=self._ray_new_actor_handles,
-                # We add one for the dummy return ID.
-                num_return_vals=num_return_vals + 1,
-                resources={"CPU": self._ray_actor_method_cpus},
-                placement_resources={},
-                driver_id=self._ray_actor_driver_id,
-                nondeterministic_event=nondeterministic_event
-            )
+            if batch:
+                task = worker.create_task(
+                    function_descriptor,
+                    args,
+                    actor_id=self._ray_actor_id,
+                    actor_handle_id=self._ray_actor_handle_id,
+                    actor_counter=self._ray_actor_counter,
+                    actor_creation_dummy_object_id=(
+                        self._ray_actor_creation_dummy_object_id),
+                    execution_dependencies=[self._ray_actor_cursor],
+                    new_actor_handles=self._ray_new_actor_handles,
+                    # We add one for the dummy return ID.
+                    num_return_vals=num_return_vals + 1,
+                    resources={"CPU": self._ray_actor_method_cpus},
+                    placement_resources={},
+                    driver_id=self._ray_actor_driver_id
+                )
+                object_ids = task.returns()
+            else:
+                object_ids = worker.submit_task(
+                    function_descriptor,
+                    args,
+                    actor_id=self._ray_actor_id,
+                    actor_handle_id=self._ray_actor_handle_id,
+                    actor_counter=self._ray_actor_counter,
+                    actor_creation_dummy_object_id=(
+                        self._ray_actor_creation_dummy_object_id),
+                    execution_dependencies=[self._ray_actor_cursor],
+                    new_actor_handles=self._ray_new_actor_handles,
+                    # We add one for the dummy return ID.
+                    num_return_vals=num_return_vals + 1,
+                    resources={"CPU": self._ray_actor_method_cpus},
+                    placement_resources={},
+                    driver_id=self._ray_actor_driver_id,
+                    nondeterministic_event=nondeterministic_event
+                )
             # Update the actor counter and cursor to reflect the most recent
             # invocation.
             self._ray_actor_counter += 1
@@ -504,7 +530,10 @@ class ActorHandle(object):
         elif len(object_ids) == 0:
             object_ids = None
 
-        return object_ids
+        if batch:
+            return task
+        else:
+            return object_ids
 
     # Make tab completion work.
     def __dir__(self):
