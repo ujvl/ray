@@ -6,6 +6,7 @@ import numpy as np
 from cython_examples import cython_process_batch, cython_process_batch2
 from cython_examples import cython_process_batch3
 from cython_examples import process_batch_reducer
+from cython_examples import process_batch_reducer2
 from cython_examples import ReducerState
 import yep
 
@@ -101,6 +102,12 @@ state = {}
 process_batch_reducer(state, words)
 end = time.time()
 print("Reduce in python took:", end - start)
+
+start = time.time()
+state = {}
+process_batch_reducer2(state, words)
+end = time.time()
+print("Reduce 2 in python took:", end - start)
 
 
 reducer = ReducerState()

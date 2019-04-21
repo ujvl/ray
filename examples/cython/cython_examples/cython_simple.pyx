@@ -15,6 +15,9 @@ from libcpp.list cimport list as c_list
 from libcpp.vector cimport vector
 from collections import defaultdict
 
+from cpython.ref cimport PyObject
+from cpython.dict cimport PyDict_GetItem, PyDict_SetItem
+
 from cython.operator import dereference, postincrement
 
 import time
@@ -135,6 +138,17 @@ def process_batch_reducer(state, words):
         if word not in state:
             state[word] = 0
         state[word] += 1
+
+cpdef process_batch_reducer2(dict state, list words):
+    cdef PyObject *obj
+    cdef Py_ssize_t val
+    for word in words:
+        obj = PyDict_GetItem(state, word)
+        if obj is NULL:
+            state[word] = 1
+        else:
+            val = <object>obj
+            state[word] = val + 1
 
 cdef class ReducerState(object):
     cdef unordered_map[c_string, int] state
