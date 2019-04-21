@@ -288,12 +288,10 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self._ray_downstream_actors = [handle._ray_actor_id for handle in handles]
         self.num_records_seen = 0
 
-        self.checkpoint_buffer = []
         self.upstream_ids = upstream_ids
         self.checkpoints_pending = set()
         self.checkpoint_epoch = 0
         self._should_checkpoint = False
-        self.flush_checkpoint_buffer = False
 
         # Create the checkpoint directory.
         self.checkpoint_dir = checkpoint_dir
@@ -322,7 +320,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 "self_handle",
                 "handles",
                 "checkpoint_epoch",
-                "checkpoint_buffer",
                 "num_records_seen",
                 "flush_buffers",
                 "num_flushes",
@@ -343,9 +340,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             self.logger.debug("REPLAY: Submit log %s", submit_log)
         else:
             submit_log = None
-
-        if self.flush_checkpoint_buffer:
-            self.push_checkpoint_buffer(submit_log)
 
         if submit_log is not None:
             self.replay_push(upstream_id, timestamp, records, checkpoint_epoch, submit_log)
@@ -429,9 +423,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                         #    # Replay the nondeterministic flush.
                         #    submit_log.pop(0)
 
-        else:
-            self.checkpoint_buffer.append((upstream_id, timestamp, records, checkpoint_epoch))
-
     def handle_checkpoint_marker(self, upstream_id, checkpoint_epoch):
         assert not self._should_checkpoint
         if checkpoint_epoch > self.checkpoint_epoch:
@@ -461,55 +452,50 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 ray.worker.global_worker.notify_task_unfinished()
             return
 
-        process_records = (checkpoint_epoch == self.checkpoint_epoch)
-        assert process_records
-        if process_records:
-            if len(records) == 0:
-                # This is the last batch that we will receive from this
-                # upstream operator.
-                for i, flush_buffer in enumerate(self.flush_buffers):
-                    if len(flush_buffer) > 0:
-                        self.flush(i, 0)
-                # Send an empty batch. Block on the result to notify the
-                # upstream operator when we are finished processing all of its
-                # records.
-                ray.get([self.flush(i, 0) for i in range(len(self.flush_buffers))])
-            else:
-                #for i in range(0, len(records), self.batch_size):
-                #    batch = records[i * self.batch_size : (i+1) * self.batch_size]
-                #    self.process_batch(batch)
-                batch_size = self.batch_size
-                if self.batch_size is None:
-                    batch_size = len(records)
-                for i in range(0, len(records), batch_size):
-                    batch = records[i * batch_size : (i+1) * batch_size]
-                    processed_batch = self.process_batch(timestamp, batch)
-                    self.num_records_seen += len(batch)
-
-                    #for key, flush_buffer in enumerate(processed_batch):
-                    for i in range(len(processed_batch)):
-                        #self.flush_buffers[key] = flush_buffer
-                        key = (i + self.operator_index) % self.num_handles
-                        flush_buffer = processed_batch[key]
-                        self.backpressured_flush(key, timestamp, flush_buffer)
-
-
-                    #for record in records:
-                    #    records = self.process(record)
-                    #    # Process the record.
-                    #    for key, record in records:
-                    #        self.flush_buffers[key].append(record)
-                    #    self.num_records_seen += 1
-
-                    ## If we are about to take a checkpoint, then force a flush.
-                    #do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
-                    #if do_flush:
-                    #    for i in range(self.num_handles):
-                    #        future = self.backpressured_flush(i)
-                    #        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
+        assert (checkpoint_epoch == self.checkpoint_epoch), "Received checkpoint {} but we are on checkpoint {}".format(checkpoint_epoch, self.checkpoint_epoch)
+        if len(records) == 0:
+            # This is the last batch that we will receive from this
+            # upstream operator.
+            for i, flush_buffer in enumerate(self.flush_buffers):
+                if len(flush_buffer) > 0:
+                    self.flush(i, 0)
+            # Send an empty batch. Block on the result to notify the
+            # upstream operator when we are finished processing all of its
+            # records.
+            ray.get([self.flush(i, 0) for i in range(len(self.flush_buffers))])
         else:
-            assert checkpoint_epoch == self.checkpoint_epoch + 1, "Checkpoint {} is too far ahead of our checkpoint {}".format(checkpoint_epoch, self.checkpoint_epoch)
-            self.checkpoint_buffer.append((upstream_id, timestamp, records, checkpoint_epoch))
+            #for i in range(0, len(records), self.batch_size):
+            #    batch = records[i * self.batch_size : (i+1) * self.batch_size]
+            #    self.process_batch(batch)
+            batch_size = self.batch_size
+            if self.batch_size is None:
+                batch_size = len(records)
+            for i in range(0, len(records), batch_size):
+                batch = records[i * batch_size : (i+1) * batch_size]
+                processed_batch = self.process_batch(timestamp, batch)
+                self.num_records_seen += len(batch)
+
+                #for key, flush_buffer in enumerate(processed_batch):
+                for i in range(len(processed_batch)):
+                    #self.flush_buffers[key] = flush_buffer
+                    key = (i + self.operator_index) % self.num_handles
+                    flush_buffer = processed_batch[key]
+                    self.backpressured_flush(key, timestamp, flush_buffer)
+
+
+                #for record in records:
+                #    records = self.process(record)
+                #    # Process the record.
+                #    for key, record in records:
+                #        self.flush_buffers[key].append(record)
+                #    self.num_records_seen += 1
+
+                ## If we are about to take a checkpoint, then force a flush.
+                #do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
+                #if do_flush:
+                #    for i in range(self.num_handles):
+                #        future = self.backpressured_flush(i)
+                #        self.logger.debug("Flushing after %d, object %s", self.num_records_seen, future)
 
 
     def flush(self, buffer_index, timestamp, event=None):
@@ -595,7 +581,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             checkpoint["state"] = self.save_state()
             checkpoint["checkpoint_id"] = checkpoint_id
             checkpoint = pickle.dumps(checkpoint)
-            self.logger.debug("Checkpoint size is %d, num records %d, buffer size is %d", len(checkpoint), len(self.checkpoint_buffer), sum([len(records) for _, _, records, _ in self.checkpoint_buffer]))
+            self.logger.debug("Checkpoint size is %d", len(checkpoint))
             # NOTE: The default behavior is to register a random actor handle
             # whenever a handle is pickled, so that the execution dependency is
             # never removed and anytime the handle is unpickled, we will be able to
@@ -612,8 +598,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
             self.checkpoint_epoch += 1
             self.push_checkpoint_marker()
-            self.flush_checkpoint_buffer = True
-            self.self_handle.push_checkpoint_buffer.remote()
 
     def push_checkpoint_marker(self):
         checkpoint_marker_args = [self.operator_id, 0, [None], self.checkpoint_epoch]
@@ -623,29 +607,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                     args=checkpoint_marker_args,
                     kwargs={},
                     num_return_vals=0)
-
-    def push_checkpoint_buffer(self, submit_log=None):
-        if submit_log is None:
-            if ray.worker.global_worker.task_context.nondeterministic_events is not None:
-                submit_log = [int(event.decode('ascii')) for event in ray.worker.global_worker.task_context.nondeterministic_events]
-                self.logger.debug("REPLAY: Submit log %s", submit_log)
-
-        if not self.flush_checkpoint_buffer:
-            return
-        self.flush_checkpoint_buffer = False
-        with ray.profiling.profile("flush_checkpoint_buffer"):
-            self.logger.debug("Pushing checkpoint buffer %d, length %d", self.checkpoint_epoch, len(self.checkpoint_buffer))
-
-            # Make a copy of the checkpoint buffer and try to process them again.
-            checkpoint_buffer = self.checkpoint_buffer[:]
-            self.checkpoint_buffer.clear()
-            if submit_log is not None:
-                for upstream_id, timestamp, records, checkpoint_epoch in checkpoint_buffer:
-                    self.replay_push(upstream_id, timestamp, records, checkpoint_epoch, submit_log)
-            else:
-                for upstream_id, timestamp, records, checkpoint_epoch in checkpoint_buffer:
-                    self.log_push(upstream_id, timestamp, records, checkpoint_epoch)
-            self.logger.debug("Done pushing checkpoint buffer %d", self.checkpoint_epoch)
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         self.logger.debug("Available checkpoints %s", available_checkpoints)
@@ -670,7 +631,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         self.checkpoint_epoch += 1
         self.push_checkpoint_marker()
         # Try to process the records that were in the buffer.
-        self.flush_checkpoint_buffer = True
         #for upstream_id, record, checkpoint_epoch in checkpoint["buffer"]:
         #    self.replay_push(upstream_id, record, checkpoint_epoch)
 
