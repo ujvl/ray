@@ -296,6 +296,10 @@ cdef class RayletClient:
             c_task_specs,
             nondeterministic_logs))
 
+    def notify_task_unfinished(self,
+                               TaskID current_task_id):
+        self.client.get().NotifyTaskUnfinished(current_task_id.data)
+
     def get_task(self):
         cdef:
             c_vector[unique_ptr[CTaskSpecification]] task_specs

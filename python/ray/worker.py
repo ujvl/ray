@@ -675,6 +675,10 @@ class Worker(object):
         )
         return task
 
+    def notify_task_unfinished(self):
+        assert self.current_task_id.is_nil()
+        self.raylet_client.notify_task_unfinished(self.current_task_id)
+
     def submit_task(self,
                     function_descriptor,
                     args,

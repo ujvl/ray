@@ -224,6 +224,16 @@ const std::unordered_set<ActorID> &ActorRegistration::GetDownstreamActorIds() {
   return downstream_actor_ids_;
 }
 
+void ActorRegistration::AddUnfinishedActorObject(const ObjectID &object_id) {
+  unfinished_dummy_objects_.insert(object_id);
+}
+
+const std::unordered_set<ObjectID> ActorRegistration::GetUnfinishedActorObjects() {
+  const auto unfinished_dummy_objects = std::move(unfinished_dummy_objects_);
+  unfinished_dummy_objects_.clear();
+  return unfinished_dummy_objects;
+}
+
 }  // namespace raylet
 
 }  // namespace ray

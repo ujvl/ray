@@ -252,6 +252,14 @@ ray::Status RayletClient::SubmitBatch(const std::vector<std::vector<ObjectID>> &
   return conn_->WriteMessage(MessageType::SubmitTaskBatch, &fbb);
 }
 
+ray::Status RayletClient::NotifyTaskUnfinished(const TaskID &task_id) {
+  flatbuffers::FlatBufferBuilder fbb;
+  auto message = ray::protocol::CreateUnfinishedActorTaskRequest(
+      fbb, to_flatbuf(fbb, task_id));
+  fbb.Finish(message);
+  return conn_->WriteMessage(MessageType::UnfinishedActorTask, &fbb);
+}
+
 ray::Status RayletClient::GetTasks(
     std::vector<std::unique_ptr<ray::raylet::TaskSpecification>> *task_specs,
     std::vector<bool> *reexecutions,

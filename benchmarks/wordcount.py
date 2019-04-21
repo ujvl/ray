@@ -455,9 +455,12 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         if len(records) == 1 and records[0] is None:
             self.logger.debug("PUSH: received checkpoint marker %s %d", upstream_id, checkpoint_epoch)
             self.handle_checkpoint_marker(upstream_id, checkpoint_epoch)
+            #if not self._should_checkpoint:
+            #    ray.worker.global_worker.notify_task_unfinished()
             return
 
         process_records = (checkpoint_epoch == self.checkpoint_epoch)
+        assert process_records
         if process_records:
             if len(records) == 0:
                 # This is the last batch that we will receive from this

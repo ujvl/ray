@@ -384,6 +384,10 @@ class NodeManager {
   /// \return Void.
   void ProcessGetTaskMessage(const std::shared_ptr<LocalClientConnection> &client);
 
+  void ProcessUnfinishedActorTask(
+      const std::shared_ptr<LocalClientConnection> &client,
+      const TaskID &task_id);
+
   /// Handle a client that has disconnected. This can be called multiple times
   /// on the same client because this is triggered both when a client
   /// disconnects and when the node manager fails to write a message to the

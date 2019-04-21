@@ -744,6 +744,11 @@ void NodeManager::ProcessClientMessage(
       ProcessSubmitTaskMessage(message->requests()->Get(i));
     }
   } break;
+  case protocol::MessageType::UnfinishedActorTask: {
+    auto message = flatbuffers::GetRoot<protocol::UnfinishedActorTaskRequest>(message_data);
+    const TaskID task_id = from_flatbuf(*message->task_id());
+    ProcessUnfinishedActorTask(client, task_id);
+  } break;
   case protocol::MessageType::FetchOrReconstruct: {
     ProcessFetchOrReconstructMessage(client, message_data);
   } break;
@@ -846,6 +851,19 @@ void NodeManager::HandleDisconnectedActor(const ActorID &actor_id, bool was_loca
     };
   }
   PublishActorStateTransition(actor_id, new_actor_data, failure_callback);
+}
+
+void NodeManager::ProcessUnfinishedActorTask(const std::shared_ptr<LocalClientConnection> &client, const TaskID &task_id) {
+  std::shared_ptr<Worker> worker = worker_pool_.GetRegisteredWorker(client);
+  RAY_CHECK(worker);
+
+  const ActorID &actor_id = worker->GetActorId();
+  RAY_CHECK(!actor_id.is_nil());
+
+  auto actor_entry = actor_registry_.find(actor_id);
+  RAY_CHECK(actor_entry != actor_registry_.end());
+  const auto &task = local_queues_.GetTaskOfState(task_id, TaskState::RUNNING);
+  actor_entry->second.AddUnfinishedActorObject(task.GetTaskSpecification().ActorDummyObject());
 }
 
 void NodeManager::ProcessGetTaskMessage(

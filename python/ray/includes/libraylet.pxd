@@ -58,6 +58,7 @@ cdef extern from "ray/raylet/raylet_client.h" nogil:
             const c_vector[const c_vector[CObjectID]] &execution_dependency_list,
             const c_vector[CTaskSpecification] &task_specs,
             const c_vector[c_string] &nondeterministic_logs)
+        CRayStatus NotifyTaskUnfinished(const CTaskID &current_task_id)
         CRayStatus GetTasks(
             c_vector[unique_ptr[CTaskSpecification]] *task_specs,
             c_vector[c_bool] *reexecutions,

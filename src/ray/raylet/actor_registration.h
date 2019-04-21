@@ -146,6 +146,9 @@ class ActorRegistration {
   void SetRecoveryFrontier(const ActorHandleID &handle_id, int64_t counter);
   bool IsRecovered() const;
 
+  void AddUnfinishedActorObject(const ObjectID &object_id);
+  const std::unordered_set<ObjectID> GetUnfinishedActorObjects();
+
  private:
   void AddDownstreamActorId(const ActorID &downstream_actor_id);
 
@@ -178,6 +181,7 @@ class ActorRegistration {
   /// next task finishes. Such handles depend on D until their first tasks
   /// finish since D will be their first tasks' execution dependencies.
   std::unordered_map<ObjectID, int64_t> dummy_objects_;
+  std::unordered_set<ObjectID> unfinished_dummy_objects_;
   // For nondeterministic actors that are currently recovering. The set of
   // actors that we have not gotten a FlushLineageReply from yet.
   std::unordered_set<ActorID> downstream_actor_ids_;
