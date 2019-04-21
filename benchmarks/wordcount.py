@@ -15,7 +15,7 @@ import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
 from cython_examples import cython_process_batch3 as cython_process_batch_map
-from cython_examples import process_batch_reducer as cython_process_batch_reducer
+from cython_examples import process_batch_reducer2 as cython_process_batch_reducer
 
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -650,7 +650,7 @@ class Reducer(NondeterministicOperator):
 
     def process_batch(self, timestamp, records):
         sink_output = []
-        cython_process_batch_reducer(self, records)
+        cython_process_batch_reducer(self.state, records)
         if timestamp > 0:
             sink_output.append([records[0]])
         return sink_output
@@ -1010,7 +1010,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    time.sleep(18)
+    #time.sleep(18)
     if args.redis_address is None:
         # Kill and restart mappers and reducers.
         nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
