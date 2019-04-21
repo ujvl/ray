@@ -17,7 +17,6 @@ from collections import defaultdict
 
 from cython.operator import dereference, postincrement
 
-import yep
 import time
 
 def simple_blahfunc(x, y, z):
@@ -117,20 +116,28 @@ def cython_process_batch2(batch, int num_reducers):
 
     return keyed_timestamps, keyed_words
 
-def process_batch_reducer(self, timestamps, words):
+def cython_process_batch3(batch, int num_reducers):
+
+    cdef:
+        c_string row
+        c_string word
+        int h
+
+    keyed_words = [[] for key in range(num_reducers)]
+    for row in batch:
+        for word in row.split(b' '):
+            h = hash(word)
+            h = h % num_reducers
+            keyed_words[h].append(word)
+
+    return keyed_words
+
+def process_batch_reducer(self, words):
     new_counts = []
     cdef:
         int i
         int count
-        double timestamp
-    for i in range(len(timestamps)):
-        word = words[i]
-        timestamp = timestamps[i]
+    for word in words:
         if word not in self.state:
             self.state[word] = 0
         self.state[word] += 1
-        if timestamp > 0:
-            new_counts.append((timestamp, (word, self.state[word])))
-    return {
-            0: new_counts,
-            }
