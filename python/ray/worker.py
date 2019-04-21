@@ -761,6 +761,8 @@ class Worker(object):
                     object_ids.pop(-1)
                 if len(object_ids) == 1:
                     returns += object_ids
+                elif len(object_ids) == 0:
+                    returns.append(None)
                 else:
                     returns.append(object_ids)
         return returns

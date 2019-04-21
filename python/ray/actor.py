@@ -20,6 +20,7 @@ import ray.worker
 from ray.utils import _random_string
 from ray import (ObjectID, ActorID, ActorHandleID, ActorClassID, TaskID,
                  DriverID)
+from ray import profiling
 
 DEFAULT_ACTOR_METHOD_NUM_RETURN_VALS = 1
 
@@ -480,22 +481,23 @@ class ActorHandle(object):
             self._ray_module_name, method_name, self._ray_class_name)
         with self._ray_actor_lock:
             if batch:
-                task = worker.create_task(
-                    function_descriptor,
-                    args,
-                    actor_id=self._ray_actor_id,
-                    actor_handle_id=self._ray_actor_handle_id,
-                    actor_counter=self._ray_actor_counter,
-                    actor_creation_dummy_object_id=(
-                        self._ray_actor_creation_dummy_object_id),
-                    execution_dependencies=[self._ray_actor_cursor],
-                    new_actor_handles=self._ray_new_actor_handles,
-                    # We add one for the dummy return ID.
-                    num_return_vals=num_return_vals + 1,
-                    resources={"CPU": self._ray_actor_method_cpus},
-                    placement_resources={},
-                    driver_id=self._ray_actor_driver_id
-                )
+                with profiling.profile("create_task"):
+                    task = worker.create_task(
+                        function_descriptor,
+                        args,
+                        actor_id=self._ray_actor_id,
+                        actor_handle_id=self._ray_actor_handle_id,
+                        actor_counter=self._ray_actor_counter,
+                        actor_creation_dummy_object_id=(
+                            self._ray_actor_creation_dummy_object_id),
+                        execution_dependencies=[self._ray_actor_cursor],
+                        new_actor_handles=self._ray_new_actor_handles,
+                        # We add one for the dummy return ID.
+                        num_return_vals=num_return_vals + 1,
+                        resources={"CPU": self._ray_actor_method_cpus},
+                        placement_resources={},
+                        driver_id=self._ray_actor_driver_id
+                    )
                 object_ids = task.returns()
             else:
                 object_ids = worker.submit_task(
