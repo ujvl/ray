@@ -234,6 +234,10 @@ const std::unordered_set<ObjectID> ActorRegistration::GetUnfinishedActorObjects(
   return unfinished_dummy_objects;
 }
 
+bool ActorRegistration::TaskUnfinished(const ObjectID &dummy_object) {
+  return unfinished_dummy_objects_.find(dummy_object) != unfinished_dummy_objects_.end();
+}
+
 }  // namespace raylet
 
 }  // namespace ray

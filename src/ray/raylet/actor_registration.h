@@ -148,6 +148,7 @@ class ActorRegistration {
 
   void AddUnfinishedActorObject(const ObjectID &object_id);
   const std::unordered_set<ObjectID> GetUnfinishedActorObjects();
+  bool TaskUnfinished(const ObjectID &object_id);
 
  private:
   void AddDownstreamActorId(const ActorID &downstream_actor_id);

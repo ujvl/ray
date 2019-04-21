@@ -1184,6 +1184,11 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
               }
             });
       }));
+
+  const auto dummy_objects = actor_entry->second.GetUnfinishedActorObjects();
+  for (const auto &object : dummy_objects) {
+    HandleObjectLocal(object);
+  }
 }
 
 void NodeManager::ProcessNotifyActorResumedFromCheckpoint(const uint8_t *message_data) {
@@ -2404,7 +2409,9 @@ void NodeManager::FinishAssignedActorTask(Worker &worker, const Task &task) {
     // ExtendFrontier is called, and vice versa, so that we can clean up the
     // dummy objects properly in case the actor fails and needs to be
     // reconstructed.
-    HandleObjectLocal(dummy_object);
+    if (!actor_entry->second.TaskUnfinished(dummy_object)) {
+      HandleObjectLocal(dummy_object);
+    }
   }
 }
 
