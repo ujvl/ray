@@ -146,7 +146,7 @@ def cython_process_batch4(batch, int num_reducers):
             keyed_words[h].append(word)
 
     for reducer in range(num_reducers):
-        keyed_words[reducer] = b" ".join(keyed_words[reducer])
+        keyed_words[reducer] = [b" ".join(keyed_words[reducer])]
 
     return keyed_words
 
@@ -177,6 +177,7 @@ cpdef process_batch_reducer3(dict state, bytes words):
         else:
             val = <object>obj
             state[word] = val + 1
+    return word
 
 cdef class ReducerState(object):
     cdef unordered_map[c_string, int] state

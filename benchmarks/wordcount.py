@@ -15,8 +15,8 @@ from ray.tests.cluster_utils import Cluster
 import ray.cloudpickle as pickle
 from ray.experimental import named_actors
 
-from cython_examples import cython_process_batch3 as cython_process_batch_map
-from cython_examples import process_batch_reducer2 as cython_process_batch_reducer
+from cython_examples import cython_process_batch4 as cython_process_batch_map
+from cython_examples import process_batch_reducer3 as cython_process_batch_reducer
 
 
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -686,10 +686,11 @@ class Reducer(NondeterministicOperator):
         self.logger.info("REDUCER: %s", self.operator_id)
 
     def process_batch(self, timestamp, records):
+        assert len(records) == 1
         sink_output = []
-        cython_process_batch_reducer(self.state, records)
+        word = cython_process_batch_reducer(self.state, records[0])
         if timestamp > 0:
-            sink_output.append([records[0]])
+            sink_output.append([word])
         return sink_output
 
     #def process_batch(self, timestamps, records):
