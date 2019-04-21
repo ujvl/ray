@@ -8,6 +8,7 @@ import string
 import numpy as np
 import hashlib
 import logging
+import psutil
 
 import ray
 from ray.tests.cluster_utils import Cluster
@@ -79,7 +80,11 @@ class WordSource(object):
             checkpoint_interval,
             words_file,
             timestamp_interval,
-            backpressure):
+            backpressure,
+            cpu_indices):
+        p = psutil.Process()
+        p.cpu_affinity(cpu_indices)
+
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
 
@@ -261,10 +266,12 @@ class WordSource(object):
 
 class NondeterministicOperator(ray.actor.Checkpointable):
 
-    def __init__(self, operator_index, operator_id, handles, max_queue_length, upstream_ids, checkpoint_dir, batch_size, submit_batch_size):
+    def __init__(self, operator_index, operator_id, handles, max_queue_length, upstream_ids, checkpoint_dir, batch_size, submit_batch_size, cpu_indices):
+        p = psutil.Process()
+        p.cpu_affinity(cpu_indices)
+
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
-        print("Set logger to level", LOG_LEVEL)
 
         self.operator_index = operator_index
         self.operator_id = operator_id
@@ -491,6 +498,12 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             self.checkpoint_buffer.append((upstream_id, timestamp, records, checkpoint_epoch))
 
     def flush(self, buffer_index, timestamp, event=None):
+        if len(self.task_buffer) > 0:
+            tasks = [task for _, task, _ in self.task_buffer]
+            nondeterministic_events = [event if event is not None else b'' for _, _, event in self.task_buffer]
+            ray.worker.global_worker.submit_batch(tasks, nondeterministic_events)
+            self.task_buffer.clear()
+
         flush_buffer = self.flush_buffers[buffer_index]
         future = self.handles[buffer_index].push._remote(
                 args=[self.operator_id, timestamp, flush_buffer, self.checkpoint_epoch],
@@ -505,7 +518,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         batch = self.submit_batch_size > 1
         num_return_vals = 0
-        if self.num_flushes[buffer_index] % self.max_queue_length  == 0:
+        if self.max_queue_length > 0 and self.num_flushes[buffer_index] % self.max_queue_length  == 0:
             num_return_vals = 1
 
         handle = self.handles[buffer_index]
@@ -525,7 +538,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 tasks = [task for _, task, _ in self.task_buffer]
                 nondeterministic_events = [event if event is not None else b'' for _, _, event in self.task_buffer]
                 returns = ray.worker.global_worker.submit_batch(tasks, nondeterministic_events)
-                self.logger.debug("Submitted task batch %s", tasks)
+                self.logger.debug("Submitted task batch %s", len(tasks))
                 for i, submit in enumerate(self.task_buffer):
                     buffer_index = submit[0]
                     if returns[i] is not None:
@@ -538,7 +551,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 self.queues[buffer_index].append(obj_id)
                 wait_queue(self.logger, self.queues[buffer_index], 1)
 
-        self.logger.debug("Flushed handle %d after %d, object %s", buffer_index, self.num_records_seen)
+        self.logger.debug("Flushed handle %d after %d", buffer_index, self.num_records_seen)
 
     def get_pid(self):
         return os.getpid()
@@ -815,12 +828,12 @@ if __name__ == '__main__':
         help='The number of reducers to use.')
     parser.add_argument(
         '--num-mappers-per-node',
-        default=2,
+        default=1,
         type=int,
         help='')
     parser.add_argument(
         '--num-reducers-per-node',
-        default=2,
+        default=1,
         type=int,
         help='')
     parser.add_argument(
@@ -849,7 +862,15 @@ if __name__ == '__main__':
         default=1000,
         help='Batch size')
     parser.add_argument(
-        '--submit-batch-size',
+        '--mapper-submit-batch-size',
+        type=int,
+        default=1)
+    parser.add_argument(
+        '--reducer-submit-batch-size',
+        type=int,
+        default=1)
+    parser.add_argument(
+        '--reducer-num-batches',
         type=int,
         default=1)
     parser.add_argument(
@@ -976,7 +997,7 @@ if __name__ == '__main__':
     for i, sink_key in enumerate(sink_keys):
         resource = reducer_resources[i % len(reducer_resources)]
         upstream_keys = [reducer_keys[i]]
-        sink_args = [args.latency_file, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1]
+        sink_args = [args.latency_file, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
                 args=sink_args,
@@ -994,7 +1015,8 @@ if __name__ == '__main__':
         sink = sinks[i]
         sink_handle = ray.put([sink])
         #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
-        reducer_args = [i, reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, None, 1]
+        reducer_max_queue_length = 0
+        reducer_args = [i, reducer_key, sink_handle, reducer_max_queue_length, upstream_keys, checkpoint_dir, None, args.reducer_submit_batch_size, [3]]
         print("Starting reducer", reducer_key, "upstream:", upstream_keys, "resource:", resource)
         reducer = Reducer._remote(
                 args=reducer_args,
@@ -1017,7 +1039,7 @@ if __name__ == '__main__':
         mapper_key = mapper_keys[i]
 
         handles = ray.put(reducers)
-        mapper_args = [args.words_file, i, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size, args.submit_batch_size]
+        mapper_args = [args.words_file, i, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size, args.mapper_submit_batch_size, [2]]
         print("Starting mapper", mapper_key, "upstream:", upstream_keys, "resource:", resource)
         mapper = Mapper._remote(
                 args=mapper_args,
@@ -1037,7 +1059,7 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i % len(mapper_resources)]
         handles = ray.put([mappers[i]])
-        source_args = [i, source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure]
+        source_args = [i, source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
@@ -1091,6 +1113,7 @@ if __name__ == '__main__':
 
     all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
     counts = {}
-    for count in all_counts:
+    for i, count in enumerate(all_counts):
+        print("Reducer", i, "had", len(count), "words", sum(value for value in count.values()), "records")
         counts.update(count)
     #print("Final count is", counts)
