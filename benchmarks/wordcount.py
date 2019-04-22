@@ -260,8 +260,8 @@ class WordSource(object):
             # Save a checkpoint if we have passed the checkpoint interval.
             self.records_since_checkpoint += len(batch)
             if self.records_since_checkpoint >= self.checkpoint_interval:
-                self.save_checkpoint()
                 self.records_since_checkpoint -= self.checkpoint_interval
+                self.save_checkpoint()
 
         done = [handle.push.remote(self.operator_id, 0, [], self.checkpoint_epoch) for handle in self.handles]
         self.logger.debug("Waiting for done objects %s", done)
@@ -347,81 +347,92 @@ class NondeterministicOperator(ray.actor.Checkpointable):
             self.log_push(upstream_id, timestamp, records, checkpoint_epoch)
 
     def replay_push(self, upstream_id, timestamp, records, checkpoint_epoch, submit_log):
-        process_records = self.checkpoint(upstream_id, checkpoint_epoch)
-        self.logger.debug("REPLAY: process records? %s", process_records)
+        self.logger.debug("REPLAY: %s records %d", upstream_id, len(records))
+        if len(records) == 1 and records[0] is None:
+            self.logger.debug("PUSH: received checkpoint marker %s %d", upstream_id, checkpoint_epoch)
+            self.handle_checkpoint_marker(upstream_id, checkpoint_epoch)
+            if not self._should_checkpoint:
+                # Tell raylet that we haven't finished this task, so that tasks
+                # from the same handle are blocked.
+                ray.worker.global_worker.notify_task_unfinished()
+            return
 
-        if process_records:
-            if len(records) == 0:
-                # This is the last batch that we will receive from this
-                # upstream operator.
-                for i, flush_buffer in enumerate(self.flush_buffers):
-                    if len(flush_buffer) > 0:
-                        self.flush(i)
-                # Send an empty batch. Block on the result to notify the
-                # upstream operator when we are finished processing all of its
-                # records.
-                ray.get([self.flush(i) for i in range(len(self.flush_buffers))])
-            else:
-                batch_size = self.batch_size
-                if self.batch_size is None:
-                    batch_size = len(records)
+        if len(records) == 0:
+            # This is the last batch that we will receive from this
+            # upstream operator.
+            for i, flush_buffer in enumerate(self.flush_buffers):
+                if len(flush_buffer) > 0:
+                    self.flush(i, 0)
+            # Send an empty batch. Block on the result to notify the
+            # upstream operator when we are finished processing all of its
+            # records.
+            ray.get([self.flush(i, 0) for i in range(len(self.flush_buffers))])
+        else:
+            batch_size = self.batch_size
+            if self.batch_size is None:
+                batch_size = len(records)
 
-                while submit_log or len(records) >= batch_size:
-                    executed = True
-                    for handle in self.handles:
-                        next_task_id = ray._raylet.generate_actor_task_id(
-                                ray.worker.global_worker.task_driver_id,
-                                handle._ray_actor_id,
-                                handle._ray_actor_handle_id,
-                                handle._ray_actor_counter)
-                        task = ray.global_state.task_table(task_id=next_task_id)
-                        if not task or task["ExecutionSpec"]["NumExecutions"] < 1:
-                            self.logger.debug("REPLAY: never executed task %s", next_task_id)
-                            executed = False
-                            break
-                    if not executed:
+            has_state = self.state is not None
+            # If the operator doesn't have state and we previously flushed
+            # records from this batch, then try to skip those records.
+            while not has_state and (submit_log or len(records) >= batch_size):
+                executed = True
+                for handle in self.handles:
+                    next_task_id = ray._raylet.generate_actor_task_id(
+                            ray.worker.global_worker.task_driver_id,
+                            handle._ray_actor_id,
+                            handle._ray_actor_handle_id,
+                            handle._ray_actor_counter)
+                    task = ray.global_state.task_table(task_id=next_task_id)
+                    if not task or task["ExecutionSpec"]["NumExecutions"] < 1:
+                        self.logger.debug("REPLAY: never executed task %s", next_task_id)
+                        executed = False
                         break
+                if not executed:
+                    break
 
-                    num_skip_records = batch_size
-                    if submit_log and submit_log[0] - self.num_records_seen < batch_size:
-                        num_skip_records = submit_log[0] - self.num_records_seen
-                    self.logger.debug("REPLAY: skipping: %d, seen: %d, num records: %d", num_skip_records, self.num_records_seen, len(records))
-                    assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
+                num_skip_records = batch_size
+                if submit_log and submit_log[0] - self.num_records_seen < batch_size:
+                    num_skip_records = submit_log[0] - self.num_records_seen
+                self.logger.debug("REPLAY: skipping: %d, seen: %d, num records: %d", num_skip_records, self.num_records_seen, len(records))
+                assert num_skip_records > 0, (num_skip_records, submit_log, self.num_records_seen)
 
 
-                    num_records = len(records)
-                    records = records[num_skip_records:]
-                    num_skipped = num_records - len(records)
-                    self.num_records_seen += num_skipped
+                num_records = len(records)
+                records = records[num_skip_records:]
+                num_skipped = num_records - len(records)
+                self.num_records_seen += num_skipped
 
-                    # If initially, we flushed mid-batch or flushed because of
-                    # a checkpoint, do the same now.
-                    do_flush = (self.num_records_seen % batch_size == 0) or self._should_checkpoint
-                    was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
-                    do_flush = do_flush or was_nondeterministic_flush
-                    if do_flush:
-                        # Replay an empty flush.
-                        for i in range(self.num_handles):
-                            future = self.backpressured_flush(i)
-                            self.logger.debug("REPLAY: skipping flush after %d, object %s", self.num_records_seen, future)
-                        # We replayed a nondeterministic flush. Pop it from the log.
-                        if was_nondeterministic_flush:
-                            submit_log.pop(0)
+                # If initially, we flushed mid-batch or flushed because of
+                # a checkpoint, do the same now.
+                do_flush = (self.num_records_seen % batch_size == 0)
+                was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
+                do_flush = do_flush or was_nondeterministic_flush
+                if do_flush:
+                    # Replay an empty flush.
+                    for i in range(self.num_handles):
+                        #self.flush_buffers[key] = flush_buffer
+                        key = (i + self.operator_index) % self.num_handles
+                        self.backpressured_flush(key, timestamp, [])
+                        self.logger.debug("REPLAY: skipping flush after %d", self.num_records_seen)
+                    # We replayed a nondeterministic flush. Pop it from the log.
+                    if was_nondeterministic_flush:
+                        submit_log.pop(0)
 
-                assert len(submit_log) == 0, "TODO: fix nondeterministic replay"
-                for i in range(0, len(records), batch_size):
-                    batch = records[i * batch_size : (i+1) * batch_size]
-                    processed_batches = self.process_batch(batch)
-                    self.num_records_seen += len(batch)
+            assert len(submit_log) == 0, "TODO: fix nondeterministic replay"
+            for i in range(0, len(records), batch_size):
+                batch = records[i * batch_size : (i+1) * batch_size]
+                processed_batch = self.process_batch(timestamp, batch)
+                self.num_records_seen += len(batch)
 
-                    #was_nondeterministic_flush = len(submit_log) > 0 and submit_log[0] == self.num_records_seen
-                    for key, processed_batch in processed_batches:
-                        self.flush_buffers[key] = list(processed_batch)
-                        future = self.backpressured_flush(key)
-                        self.logger.debug("REPLAY: Flushing after %d, object %s", self.num_records_seen, future)
-                        #if was_nondeterministic_flush:
-                        #    # Replay the nondeterministic flush.
-                        #    submit_log.pop(0)
+                #for key, flush_buffer in enumerate(processed_batch):
+                for i in range(len(processed_batch)):
+                    #self.flush_buffers[key] = flush_buffer
+                    key = (i + self.operator_index) % self.num_handles
+                    flush_buffer = processed_batch[key]
+                    self.backpressured_flush(key, timestamp, flush_buffer)
+                #if was_nondeterministic_flush:
+                #    submit_log.pop(0)
 
     def handle_checkpoint_marker(self, upstream_id, checkpoint_epoch):
         assert not self._should_checkpoint
@@ -452,6 +463,8 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 ray.worker.global_worker.notify_task_unfinished()
             return
 
+        if checkpoint_epoch != self.checkpoint_epoch:
+            self.logger.info("Received checkpoint %d but we are on checkpoint %d", checkpoint_epoch, self.checkpoint_epoch)
         assert (checkpoint_epoch == self.checkpoint_epoch), "Received checkpoint {} but we are on checkpoint {}".format(checkpoint_epoch, self.checkpoint_epoch)
         if len(records) == 0:
             # This is the last batch that we will receive from this
@@ -613,7 +626,9 @@ class NondeterministicOperator(ray.actor.Checkpointable):
 
         # Get the latest checkpoint that completed.
         checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        self.logger.debug("XXX CHECKPOINT counter is %d %s", checkpoint_tracker._ray_actor_counter, checkpoint_tracker._ray_actor_handle_id.hex())
         latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
+        self.logger.debug("Latest checkpoint is %d", latest_checkpoint_interval)
         assert latest_checkpoint_interval >= 0, "Actor died before its first checkpoint was taken"
         # Read the latest checkpoint from disk.
         checkpoint_path = 'checkpoint-{}-{}'.format(actor_id.hex(), latest_checkpoint_interval)
@@ -725,13 +740,15 @@ class Reducer(NondeterministicOperator):
 
 @ray.remote(max_reconstructions=100)
 class Sink(NondeterministicOperator):
-    def __init__(self, output_filename, *args):
+    def __init__(self, output_filename, checkpoint_tracker, *args):
         super().__init__(*args)
         self.latencies = []
         self.output_file = open(output_filename, 'w+')
 
-        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        self.checkpoint_tracker = checkpoint_tracker
         self.logger.info("SINK: %s", self.operator_id)
+
+        self.checkpoint_attrs.append('checkpoint_tracker')
 
     #def process(self, record):
     #    timestamp, _, _ = record
@@ -747,11 +764,20 @@ class Sink(NondeterministicOperator):
             self.latencies.append(latency)
         return {}
 
-    def save_checkpoint(self, actor_id, checkpoint_id):
-        super().save_checkpoint(actor_id, checkpoint_id)
-        # Notify the checkpoint tracker that we have completed this
-        # checkpoint.
+    def push_checkpoint_marker(self):
+        self.logger.debug("Sink %s notifying checkpoint tracker checkpoint %d, actor task counter: %d",
+                self.operator_id,
+                self.checkpoint_epoch - 1,
+                self.checkpoint_tracker._ray_actor_counter)
         self.checkpoint_tracker.notify_checkpoint_complete.remote(self.operator_id, self.checkpoint_epoch - 1)
+
+    def save_state(self):
+        return self.checkpoint_tracker
+
+    def load_state(self, state):
+        self.checkpoint_tracker = state
+        self.checkpoint_tracker.reset_handle_id()
+        self.logger.debug("LOAD CHECKPOINT counter is %d %s", self.checkpoint_tracker._ray_actor_counter, self.checkpoint_tracker._ray_actor_handle_id.hex())
 
     def flush_latencies(self):
         self.output_file.close()
@@ -776,6 +802,7 @@ class CheckpointTracker(object):
         self.logger.info("CHECKPOINT_TRACKER")
 
     def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
+        self.logger.info("Received checkpoint %d from %s, on %d", checkpoint_epoch, sink_key, self.checkpoint_epoch)
         assert checkpoint_epoch == self.checkpoint_epoch + 1
 
         self.sinks_pending.remove(sink_key)
@@ -787,6 +814,7 @@ class CheckpointTracker(object):
             self.logger.info("Global checkpoint complete %d", self.checkpoint_epoch)
 
     def get_current_epoch(self):
+        self.logger.info("get current epoch returns %d", self.checkpoint_epoch)
         return self.checkpoint_epoch
 
 
@@ -904,7 +932,7 @@ if __name__ == '__main__':
     if args.redis_address is None:
         internal_config = json.dumps({
             "initial_reconstruction_timeout_milliseconds": 200,
-            "num_heartbeats_timeout": 20,
+            "num_heartbeats_timeout": 10,
             "object_manager_repeated_push_delay_ms": 1000,
             "object_manager_pull_timeout_ms": 1000,
             "gcs_delay_ms": 0,
@@ -983,7 +1011,7 @@ if __name__ == '__main__':
     for i, sink_key in enumerate(sink_keys):
         resource = reducer_resources[i % len(reducer_resources)]
         upstream_keys = [reducer_keys[i]]
-        sink_args = [args.latency_file, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
+        sink_args = [args.latency_file, checkpoint_tracker, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
                 args=sink_args,
@@ -1062,7 +1090,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    #time.sleep(18)
+    time.sleep(5)
     if args.redis_address is None:
         # Kill and restart mappers and reducers.
         nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]

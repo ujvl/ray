@@ -863,6 +863,7 @@ void NodeManager::ProcessUnfinishedActorTask(const std::shared_ptr<LocalClientCo
   auto actor_entry = actor_registry_.find(actor_id);
   RAY_CHECK(actor_entry != actor_registry_.end());
   const auto &task = local_queues_.GetTaskOfState(task_id, TaskState::RUNNING);
+  RAY_LOG(DEBUG) << "Worker reported unfinished object " << task.GetTaskSpecification().ActorDummyObject();
   actor_entry->second.AddUnfinishedActorObject(task.GetTaskSpecification().ActorDummyObject());
 }
 
@@ -1187,6 +1188,7 @@ void NodeManager::ProcessPrepareActorCheckpointRequest(
 
   const auto dummy_objects = actor_entry->second.GetUnfinishedActorObjects();
   for (const auto &object : dummy_objects) {
+    RAY_LOG(DEBUG) << "Finishing unfinished object " << object;
     HandleObjectLocal(object);
   }
 }
