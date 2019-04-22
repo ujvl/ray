@@ -1038,8 +1038,11 @@ if __name__ == '__main__':
         sink = sinks[i]
         sink_handle = ray.put([sink])
         #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
-        reducer_max_queue_length = 0
-        reducer_args = [i, reducer_key, sink_handle, reducer_max_queue_length, upstream_keys, checkpoint_dir, None, args.reducer_submit_batch_size, [3]]
+        if backpressure:
+            max_queue_length = args.max_queue_length
+        else:
+            max_queue_length = 0
+        reducer_args = [i, reducer_key, sink_handle, max_queue_length, upstream_keys, checkpoint_dir, None, args.reducer_submit_batch_size, [3]]
         print("Starting reducer", reducer_key, "upstream:", upstream_keys, "resource:", resource)
         reducer = Reducer._remote(
                 args=reducer_args,
@@ -1062,7 +1065,11 @@ if __name__ == '__main__':
         mapper_key = mapper_keys[i]
 
         handles = ray.put(reducers)
-        mapper_args = [args.words_file, i, mapper_key, handles, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size, args.mapper_submit_batch_size, [2]]
+        if backpressure:
+            mapper_max_queue_length = args.max_queue_length
+        else:
+            mapper_max_queue_length = 0
+        mapper_args = [args.words_file, i, mapper_key, handles, mapper_max_queue_length, upstream_keys, checkpoint_dir, args.batch_size, args.mapper_submit_batch_size, [2]]
         print("Starting mapper", mapper_key, "upstream:", upstream_keys, "resource:", resource)
         mapper = Mapper._remote(
                 args=mapper_args,
@@ -1082,7 +1089,11 @@ if __name__ == '__main__':
     for i, source_key in enumerate(source_keys):
         resource = mapper_resources[i % len(mapper_resources)]
         handles = ray.put([mappers[i]])
-        source_args = [i, source_key, handles, args.max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
+        if backpressure:
+            max_queue_length = args.max_queue_length
+        else:
+            max_queue_length = 0
+        source_args = [i, source_key, handles, max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,

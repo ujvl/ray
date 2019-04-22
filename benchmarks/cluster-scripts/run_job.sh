@@ -7,11 +7,12 @@ NUM_RAYLETS=$2
 BATCH_SIZE=${3:-1000}
 THROUGHPUT=${4:--1}
 TEST_FAILURE=${5:-0}
+NUM_STRAGGLERS=${6:-0}
 NUM_SHARDS=8
 
-if [[ $# -ne 3 && $# -ne 4  && $# -ne 5 ]]
+if [[ $# -gt 6 || $# -lt 2 ]]
 then
-    echo "Usage: ./run_job.sh <head ip> <num raylets> <batch size> <target tput> <failure?>"
+    echo "Usage: ./run_job.sh <head ip> <num raylets> <batch size> <target tput> <failure?> <num stragglers?>"
     exit
 fi
 
@@ -34,6 +35,11 @@ then
     NUM_RECORDS=$(( $THROUGHPUT * $DURATION ))
 fi
 
+if [[ $NUM_STRAGGLERS -ne 0 ]]
+then
+    latency_prefix=$latency_prefix$NUM_STRAGGLERS-stragglers-
+fi
+
 #if ls $latency_prefix* 1> /dev/null 2>&1
 #then
 #    echo "Latency file with prefix $latency_prefix already found, skipping..."
@@ -44,6 +50,11 @@ echo "Logging to file $latency_file..."
 
 
 bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS
+
+if [[ $NUM_STRAGGLERS -ne 0 ]]
+then
+    bash -x $DIR/add_stragglers.sh $NUM_STRAGGLERS
+fi
 
 python $DIR/../wordcount.py \
     --redis-address $HEAD_IP:6379 \
