@@ -740,10 +740,9 @@ class Reducer(NondeterministicOperator):
 
 @ray.remote(max_reconstructions=100)
 class Sink(NondeterministicOperator):
-    def __init__(self, output_filename, checkpoint_tracker, *args):
+    def __init__(self, checkpoint_tracker, *args):
         super().__init__(*args)
         self.latencies = []
-        self.output_file = open(output_filename, 'w+')
 
         self.checkpoint_tracker = checkpoint_tracker
         self.logger.info("SINK: %s", self.operator_id)
@@ -760,7 +759,7 @@ class Sink(NondeterministicOperator):
     def process_batch(self, timestamp, batch):
         if timestamp > 0:
             latency = time.time() - timestamp
-            self.output_file.write('{}\n'.format(latency))
+            self.logger.info("LATENCY sink %s;timestamp:%f,cur_time:%f,latency:%f", self.operator_id, timestamp, time.time(), latency)
             self.latencies.append(latency)
         return {}
 
@@ -780,7 +779,6 @@ class Sink(NondeterministicOperator):
         self.logger.debug("LOAD CHECKPOINT counter is %d %s", self.checkpoint_tracker._ray_actor_counter, self.checkpoint_tracker._ray_actor_handle_id.hex())
 
     def flush_latencies(self):
-        self.output_file.close()
         return self.latencies
 
 def create_local_node(cluster, i, node_kwargs):
@@ -1011,7 +1009,7 @@ if __name__ == '__main__':
     for i, sink_key in enumerate(sink_keys):
         resource = reducer_resources[i % len(reducer_resources)]
         upstream_keys = [reducer_keys[i]]
-        sink_args = [args.latency_file, checkpoint_tracker, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
+        sink_args = [checkpoint_tracker, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
                 args=sink_args,
