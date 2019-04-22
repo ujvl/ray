@@ -455,6 +455,7 @@ void NodeManager::HandleFlushAllCompleted() {
   for (const auto &flush_request : pending_flush_requests_) {
     SendFlushLineageReply(flush_request.upstream_actor_id, flush_request.downstream_actor_id, flush_request.upstream_node_id);
   }
+  pending_flush_requests_.clear();
 }
 
 void NodeManager::HeartbeatAdded(const ClientID &client_id,
