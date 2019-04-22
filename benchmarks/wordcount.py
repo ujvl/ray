@@ -4,11 +4,13 @@ import msgpack
 import time
 import os
 from collections import defaultdict
+from collections import Counter
 import string
 import numpy as np
 import hashlib
 import logging
 import psutil
+import subprocess
 
 import ray
 from ray.tests.cluster_utils import Cluster
@@ -22,7 +24,7 @@ from cython_examples import process_batch_reducer3 as cython_process_batch_reduc
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 SENTENCE_LENGTH = 100
 
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 
 WORDS = {
         }
@@ -736,7 +738,7 @@ class Reducer(NondeterministicOperator):
         return msgpack.dumps(self.state)
 
     def load_state(self, state):
-        self.state = msgpack.loads(state)
+        self.state = msgpack.loads(state, max_map_len=300000)
 
 @ray.remote(max_reconstructions=100)
 class Sink(NondeterministicOperator):
@@ -915,6 +917,15 @@ if __name__ == '__main__':
         type=int,
         default=-1,
         help='')
+    parser.add_argument(
+        '--gcs-delay-ms',
+        default=0,
+        help='Delay when writing back to GCS.')
+    parser.add_argument(
+        '--fail-at',
+        type=int,
+        default=10,
+        help='')
     args = parser.parse_args()
 
     # Create the checkpoint directory.
@@ -1088,19 +1099,39 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
-    time.sleep(5)
-    if args.redis_address is None:
-        # Kill and restart mappers and reducers.
-        nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
-        resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
-        for node in nodes_to_kill:
-            cluster.remove_node(node)
-        for resource in resources_to_restart:
-            node_kwargs["resources"] = {resource: 100}
-            cluster.add_node(**node_kwargs)
-    else:
-        # TODO
-        pass
+    def kill_node():
+        if args.redis_address is None:
+            # Kill and restart mappers and reducers.
+            nodes_to_kill = mapper_nodes[:args.num_mapper_failures] + reducer_nodes[:args.num_reducer_failures]
+            resources_to_restart = mapper_resources[:args.num_mapper_failures] + reducer_resources[:args.num_reducer_failures]
+            for node in nodes_to_kill:
+                cluster.remove_node(node)
+            for resource in resources_to_restart:
+                node_kwargs["resources"] = {resource: 100}
+                cluster.add_node(**node_kwargs)
+        else:
+            nodes = ray.global_state.client_table()
+            node_resource = mapper_resources[0]
+            nodes = [node for node in nodes if node_resource in node['Resources']]
+            assert len(nodes) == 1
+            node = nodes[0]
+            worker_ip = node['NodeManagerAddress']
+            head_ip, _ = redis_address.split(':')
+            print("Killing node with resource", node_resource, "on ip", worker_ip)
+            command = [
+                    "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
+                    head_ip,
+                    worker_ip,
+                    str(args.gcs_delay_ms),
+                    node_resource,
+                    ]
+            subprocess.Popen(command)
+
+
+    if args.num_mapper_failures > 0 or args.num_reducer_failures > 0:
+        print("Sleeping for {}s".format(args.fail_at))
+        time.sleep(args.fail_at)
+        kill_node()
 
     throughputs = ray.get(generators)
     end = time.time()
@@ -1124,8 +1155,9 @@ if __name__ == '__main__':
 
 
     all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
-    counts = {}
+    counts = Counter()
     for i, count in enumerate(all_counts):
         print("Reducer", i, "had", len(count), "words", sum(value for value in count.values()), "records")
         counts.update(count)
+    print("Total counts had", len(counts), "words", sum(value for value in counts.values()), "records")
     #print("Final count is", counts)

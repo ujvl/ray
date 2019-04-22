@@ -12,6 +12,7 @@ ulimit -n 65536
 ulimit -a
 ray start --head \
   --redis-port=6379 \
+  --redis-max-memory 10000000000 \
   --num-cpus 4 \
   --num-redis-shards $NUM_REDIS_SHARDS \
   --resources='{"Node_0": 100}' \
