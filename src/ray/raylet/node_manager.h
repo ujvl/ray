@@ -555,6 +555,7 @@ class NodeManager {
   // will send a FlushLineageReply message to the corresponding upstream actors
   // in this map.
   std::unordered_map<ActorID, std::vector<std::pair<ActorID, ClientID>>> recovering_upstream_actors_;
+  std::unordered_map<TaskID, int64_t> num_times_resubmitted_;
 };
 
 }  // namespace raylet

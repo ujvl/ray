@@ -1018,8 +1018,8 @@ if __name__ == '__main__':
     #sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
     sinks = []
     for i, sink_key in enumerate(sink_keys):
-        resource = reducer_resources[i % len(reducer_resources)]
-        upstream_keys = [reducer_keys[i]]
+        resource = reducer_resources[(i+1) % len(reducer_resources)]
+        upstream_keys = [reducer_keys[(i+1) % len(reducer_keys)]]
         sink_args = [checkpoint_tracker, i, sink_key, [], args.max_queue_length, upstream_keys, checkpoint_dir, None, 1, [1]]
         print("Starting sink", sink_key, "resource:", resource)
         sink = Sink._remote(
@@ -1028,14 +1028,14 @@ if __name__ == '__main__':
                 resources={resource: 1})
         sinks.append(sink)
     ray.get([sink.register_self_handle.remote(sink) for sink in sinks])
-    sink_handles = []
+    sink_handle_tasks = []
 
     # Create the reducers.
     upstream_keys = mapper_keys
     reducers = []
     for i, reducer_key in enumerate(reducer_keys):
         resource = reducer_resources[i % len(reducer_resources)]
-        sink = sinks[i]
+        sink = sinks[(i - 1) % len(sinks)]
         sink_handle = ray.put([sink])
         #reducer_args = [reducer_key, sink_handle, args.max_queue_length, upstream_keys, checkpoint_dir, args.batch_size]
         if backpressure:
@@ -1051,9 +1051,9 @@ if __name__ == '__main__':
         reducers.append(reducer)
 
         sink_handle = ray.get(sink_handle)[0]
-        sink_handles.append(sink_handle._ray_actor_handle_id)
+        sink_handle_tasks.append(sink.register_upstream_actor_handle_ids.remote([sink_handle._ray_actor_handle_id]))
 
-    ray.get([sink.register_upstream_actor_handle_ids.remote(sink_handles) for sink in sinks])
+    ray.get(sink_handle_tasks)
     ray.get([reducer.register_self_handle.remote(reducer) for reducer in reducers])
     reducer_handles = [list() for _ in reducers]
 
