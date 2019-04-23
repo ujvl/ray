@@ -862,7 +862,7 @@ if __name__ == '__main__':
         help='')
     parser.add_argument(
         '--checkpoint-interval',
-        default=100000,
+        default=0,
         type=int,
         help='The number of records to process per source in one checkpoint epoch.')
     parser.add_argument(
@@ -1011,8 +1011,15 @@ if __name__ == '__main__':
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
     backpressure = True
+    checkpoint_interval = args.checkpoint_interval
     if args.target_throughput > 0:
         backpressure = False
+        # No checkpoint set. Checkpoint every 30s.
+        if checkpoint_interval == 0:
+            checkpoint_interval = args.target_throughput // 30
+    if checkpoint_interval == 0:
+        checkpoint_interval = 100000  # Default checkpoint interval is 100k records/source.
+    print("Using a checkpoint interval of", checkpoint_interval, "records")
 
     # Create the sink.
     #sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
@@ -1093,7 +1100,7 @@ if __name__ == '__main__':
             max_queue_length = args.max_queue_length
         else:
             max_queue_length = 0
-        source_args = [i, source_key, handles, max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
+        source_args = [i, source_key, handles, max_queue_length, checkpoint_dir, checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
