@@ -1,9 +1,10 @@
 #!/bin/bash
 
 HEAD_IP=$1
-GCS_DELAY_MS=$2
-NODE_RESOURCE=${3:-'Node'$RANDOM}
-SLEEP_TIME=${4:-$(( $RANDOM % 5 ))}
+USE_GCS_ONLY=$2
+GCS_DELAY_MS=$3
+NODE_RESOURCE=${4:-'Node'$RANDOM}
+SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 
 SEND_THREADS=1
 RECEIVE_THREADS=1
@@ -24,10 +25,14 @@ sleep $SLEEP_TIME
 
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
+    --plasma-directory=/mnt/hugepages \
+    --plasma-eviction-fraction 100 \
+    --huge-pages \
     --object-store-memory 1000000000 \
     --num-cpus 4 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
+    "use_gcs_only": '$USE_GCS_ONLY',
     "gcs_delay_ms": '$GCS_DELAY_MS',
     "lineage_stash_max_failures": -1,
     "num_heartbeats_timeout": 20,

@@ -2208,7 +2208,7 @@ void NodeManager::SendFlushLineageRequest(const ActorID &actor_id, int64_t actor
     it->second->WriteMessageAsync(
         static_cast<int64_t>(protocol::MessageType::FlushLineageRequest), fbb.GetSize(),
         fbb.GetBufferPointer(),
-        [this](ray::Status status) {
+        [](ray::Status status) {
           RAY_CHECK_OK(status);
         });
   }
@@ -2256,7 +2256,7 @@ void NodeManager::SendFlushLineageReply(
     it->second->WriteMessageAsync(
         static_cast<int64_t>(protocol::MessageType::FlushLineageReply), fbb.GetSize(),
         fbb.GetBufferPointer(),
-        [this](ray::Status status) {
+        [](ray::Status status) {
           RAY_CHECK_OK(status);
         });
   }
