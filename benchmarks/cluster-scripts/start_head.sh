@@ -3,6 +3,8 @@ set -x -e
 NUM_REDIS_SHARDS=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
+NONDETERMINISM=$4
+MAX_FAILURES=${5:-1}
 
 #source activate tensorflow_p36
 #export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
@@ -19,6 +21,11 @@ SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 #export PERFTOOLS_PATH="/usr/lib/libprofiler.so"
 #export PERFTOOLS_LOGFILE="/tmp/pprof.out"
 
+if [[ $NONDETERMINISM -eq 1 && $MAX_FAILURES -eq 1 ]]
+then
+  MAX_FAILURES=-1
+fi
+
 ulimit -c unlimited
 ulimit -n 65536
 ulimit -a
@@ -33,6 +40,8 @@ ray start --head \
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
     "use_gcs_only": '$USE_GCS_ONLY',
+    "lineage_stash_max_failures": '$MAX_FAILURES',
+    "log_nondeterminism": '$NONDETERMINISM',
     "lineage_stash_max_failures": -1,
     "num_heartbeats_timeout": 20,
     "object_manager_repeated_push_delay_ms": 1000,

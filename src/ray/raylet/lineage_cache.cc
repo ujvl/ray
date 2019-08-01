@@ -453,38 +453,38 @@ void LineageCache::FlushTask(const TaskID &task_id) {
 
   auto task = lineage_.GetEntry(task_id);
   // TODO(swang): Make this better...
+  gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+      ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+    int version = data.task_execution_spec->version;
+    HandleEntryCommitted(id, version);
+  };
+  FlushTask(task->TaskData(), task_callback, gcs_delay_ms_);
+
+  // We successfully wrote the task, so mark it as committing.
+  // TODO(swang): Use a batched interface and write with all object entries.
+  RAY_CHECK(entry->SetStatus(GcsStatus::COMMITTING));
+}
+
+void LineageCache::FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback, int64_t gcs_delay_ms) {
+  const TaskID task_id = task.GetTaskSpecification().TaskId();
   flatbuffers::FlatBufferBuilder fbb;
-  auto message = task->TaskData().ToFlatbuffer(fbb);
+  auto message = task.ToFlatbuffer(fbb);
   fbb.Finish(message);
   auto task_data = std::make_shared<protocol::TaskT>();
   auto root = flatbuffers::GetRoot<protocol::Task>(fbb.GetBufferPointer());
   root->UnPackTo(task_data.get());
 
-  if (io_service_ == nullptr) {
-    gcs::raylet::TaskTable::WriteCallback task_callback = [this](
-        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-      int version = data.task_execution_spec->version;
-      HandleEntryCommitted(id, version);
-    };
-    RAY_CHECK_OK(task_storage_.Add(task->TaskData().GetTaskSpecification().DriverId(),
+  if (gcs_delay_ms == 0) {
+    RAY_CHECK_OK(task_storage_.Add(task.GetTaskSpecification().DriverId(),
                                    task_id, task_data, task_callback));
   } else {
     auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
     auto timer = std::make_shared<boost::asio::deadline_timer>(*io_service_, gcs_delay);
-    const auto driver_id = task->TaskData().GetTaskSpecification().DriverId();
-    timer->async_wait([this, timer, driver_id, task_id, task_data](const boost::system::error_code &error) mutable {
-        gcs::raylet::TaskTable::WriteCallback task_callback = [this](
-            ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-          int version = data.task_execution_spec->version;
-          HandleEntryCommitted(id, version);
-      };
+    const auto driver_id = task.GetTaskSpecification().DriverId();
+    timer->async_wait([this, timer, driver_id, task_id, task_data, task_callback](const boost::system::error_code &error) mutable {
       RAY_CHECK_OK(task_storage_.Add(driver_id, task_id, task_data, task_callback));
     });
   }
-
-  // We successfully wrote the task, so mark it as committing.
-  // TODO(swang): Use a batched interface and write with all object entries.
-  RAY_CHECK(entry->SetStatus(GcsStatus::COMMITTING));
 }
 
 bool LineageCache::SubscribeTask(const TaskID &task_id) {

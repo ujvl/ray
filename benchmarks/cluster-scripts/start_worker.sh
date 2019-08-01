@@ -3,10 +3,11 @@
 HEAD_IP=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
-NODE_RESOURCE=${4:-'Node'$RANDOM}
-SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
+NONDETERMINISM=$4
+MAX_FAILURES=${5:-1}
+NODE_RESOURCE=${6:-'Node'$RANDOM}
+SLEEP_TIME=${7:-$(( $RANDOM % 5 ))}
 
-<<<<<<< HEAD
 SEND_THREADS=1
 RECEIVE_THREADS=1
 
@@ -26,6 +27,12 @@ ulimit -a
 echo "Sleeping for $SLEEP_TIME..."
 sleep $SLEEP_TIME
 
+if [[ $NONDETERMINISM -eq 1 && $MAX_FAILURES -eq 1 ]]
+then
+  MAX_FAILURES=-1
+fi
+
+
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
     --plasma-directory=/mnt/hugepages \
@@ -37,7 +44,8 @@ ray start --redis-address=$HEAD_IP:6379 \
     "initial_reconstruction_timeout_milliseconds": 200,
     "use_gcs_only": '$USE_GCS_ONLY',
     "gcs_delay_ms": '$GCS_DELAY_MS',
-    "lineage_stash_max_failures": -1,
+    "lineage_stash_max_failures": '$MAX_FAILURES',
+    "log_nondeterminism": '$NONDETERMINISM',
     "num_heartbeats_timeout": 20,
     "async_message_max_buffer_size": 100,
     "object_manager_repeated_push_delay_ms": 1000,

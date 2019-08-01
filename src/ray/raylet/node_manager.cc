@@ -1506,21 +1506,59 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
     return;
   }
 
-  if (!forwarded) {
-    // We started running the task, so the task is ready to write to GCS.
-    if (!lineage_cache_.AddReadyTask(task)) {
-      RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
-                       << " This is most likely due to reconstruction.";
+  if (use_gcs_only_) {
+    if (!forwarded) {
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+        gcs_submit_tasks_committed_[id] = true;
+        // Loop through the tasks that we have flushed so far. Pop the longest
+        // prefix of tasks in the queue that have been committed, and submit
+        // them.
+        while (!gcs_submit_task_queue_.empty()) {
+          const TaskID &task_id = gcs_submit_task_queue_.front().first;
+          if (gcs_submit_tasks_committed_[task_id]) {
+            const auto task = local_queues_.RemoveTask(task_id);
+            bool push = gcs_submit_task_queue_.front().second;
+            _SubmitTask(task, Lineage(), /*forwarded=*/false, push);
+            gcs_submit_task_queue_.pop_front();
+            gcs_submit_tasks_committed_.erase(task_id);
+          } else {
+            break;
+          }
+        }
+      };
+      local_queues_.QueueTasks({task}, TaskState::SWAP);
+      gcs_submit_tasks_committed_[task_id] = false;
+      gcs_submit_task_queue_.push_back({task_id, push});
+
+      lineage_cache_.FlushTask(task, task_callback, gcs_delay_ms_);
+    } else {
+      _SubmitTask(task, uncommitted_lineage, forwarded, push);
     }
   } else {
-    // Add the task and its uncommitted lineage to the lineage cache.
-    if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
-      RAY_LOG(WARNING)
-          << "Task " << task_id
-          << " already in lineage cache. This is most likely due to reconstruction.";
+    if (!forwarded) {
+      // We started running the task, so the task is ready to write to GCS.
+      if (!lineage_cache_.AddReadyTask(task)) {
+        RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."
+                         << " This is most likely due to reconstruction.";
+      }
+    } else {
+      // Add the task and its uncommitted lineage to the lineage cache.
+      if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
+        RAY_LOG(WARNING)
+            << "Task " << task_id
+            << " already in lineage cache. This is most likely due to reconstruction.";
+      }
+      lineage_cache_.RemoveWaitingTask(task_id);
     }
-    lineage_cache_.RemoveWaitingTask(task_id);
+
+    _SubmitTask(task, uncommitted_lineage, forwarded, push);
   }
+}
+
+void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
+                             bool forwarded, bool push) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
 
   if (spec.IsActorTask()) {
     // Check whether we know the location of the actor.
@@ -1963,7 +2001,7 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
 
 }
 
-bool NodeManager::AssignTask(const Task &task) {
+bool NodeManager::AssignTask(Task &task) {
   const TaskSpecification &spec = task.GetTaskSpecification();
 
   // If this is an actor task, check that the new task has the correct counter.
@@ -2022,6 +2060,71 @@ bool NodeManager::AssignTask(const Task &task) {
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
+
+  // Make a copy of the task so that we can update it.
+  Task assigned_task(task);
+  if (spec.IsActorTask()) {
+    // Must log the order of execution for actor tasks that are running for
+    // the first time.
+    const auto actor_entry = actor_registry_.find(spec.ActorId());
+    RAY_CHECK(actor_entry != actor_registry_.end());
+    // If the task was an actor task, then record this execution to
+    // guarantee consistency in the case of reconstruction.
+    auto execution_dependency = actor_entry->second.GetExecutionDependency();
+    // The execution dependency is initialized to the actor creation task's
+    // return value, and is subsequently updated to the assigned tasks'
+    // return values, so it should never be nil.
+    RAY_CHECK(!execution_dependency.is_nil());
+    // Update the task's execution dependencies to reflect the actual
+    // execution order, to support deterministic reconstruction.
+    // NOTE(swang): The update of an actor task's execution dependencies is
+    // performed asynchronously. This means that if this node manager dies,
+    // we may lose updates that are in flight to the task table. We only
+    // guarantee deterministic reconstruction ordering for tasks whose
+    // updates are reflected in the task table.
+    // (SetExecutionDependencies takes a non-const so copy task in a
+    //  on-const variable.)
+    assigned_task.SetExecutionDependencies({execution_dependency});
+    if (task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
+      assigned_task.IncrementNumExecutions();
+    }
+  }
+
+  if (use_gcs_only_) {
+    if (RayConfig::instance().log_nondeterminism()) {
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) mutable {
+        gcs_assign_tasks_committed_[id] = true;
+        // Loop through the tasks that we have flushed so far. Pop the longest
+        // prefix of tasks in the queue that have been committed, and assign
+        // them.
+        while (!gcs_assign_task_queue_.empty()) {
+          const Task &task = gcs_assign_task_queue_.front().first;
+          const TaskID &task_id = task.GetTaskSpecification().TaskId();
+          if (gcs_assign_tasks_committed_[task_id]) {
+            std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
+            AssignTaskToWorker(task, worker);
+            gcs_assign_task_queue_.pop_front();
+            gcs_assign_tasks_committed_.erase(task_id);
+          } else {
+            break;
+          }
+        }
+      };
+      gcs_assign_tasks_committed_[spec.TaskId()] = false;
+      gcs_assign_task_queue_.push_back({assigned_task, worker});
+
+      lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
+    } else {
+      AssignTaskToWorker(assigned_task, worker);
+    }
+  } else {
+    if (RayConfig::instance().log_nondeterminism()) {
+      // We started running the task, so the task is ready to write to GCS.
+      RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+    }
+    AssignTaskToWorker(assigned_task, worker);
+  }
   return true;
 }
 
@@ -2115,6 +2218,12 @@ void NodeManager::FinishAssignedTasks(Worker &worker, const TaskID &last_exec_ta
       worker.AssignDriverId(DriverID::nil());
     }
   }
+
+  // The task has finished, so we can now commit it.
+  // NOTE: We do not wait to add the task so that downstream nodes can evict as
+  // quickly as possible. But another option for tasks that exit quickly is to
+  // only add the task to the GCS once, when the task finishes.
+  //lineage_cache_.AddReadyTask(task);
 }
 
 ActorTableDataT NodeManager::CreateActorTableDataFromCreationTask(const Task &task) {
@@ -2654,6 +2763,10 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
     RAY_DCHECK(false) << "No lineage cache entry found for task " << task_id;
     uncommitted_lineage.SetEntry(task, GcsStatus::NONE);
   }
+
+  auto uncommitted_lineage_size = uncommitted_lineage.GetEntries().size() - 1;
+  RAY_LOG(INFO) << "UNCOMMITTED_LINEAGE:" << uncommitted_lineage_size;
+
   auto entry = uncommitted_lineage.GetEntryMutable(task_id);
   Task &lineage_cache_entry_task = entry->TaskDataMutable();
 
