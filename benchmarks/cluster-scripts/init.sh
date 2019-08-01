@@ -1,4 +1,4 @@
-#!/bin/bash
+#cd ~/ray/python && pip install -e . --verbose!/bin/bash
 
 
 echo "export LC_ALL=C.UTF-8" >> ~/.bashrc
@@ -28,3 +28,7 @@ for worker in `tail -n $num_workers ~/workers.txt`; do
     rsync -e "ssh -o StrictHostKeyChecking=no" -az "/home/ubuntu/mpi-bench" $worker:/home/ubuntu & sleep 0.5
 done
 wait
+
+# Run upgrade so that all workers have the same branch checked out.
+bash ./upgrade_ray.sh
+parallel-ssh -t 0 -i -P -h ~/workers.txt -O "StrictHostKeyChecking=no" -I < init_sgd_worker.sh

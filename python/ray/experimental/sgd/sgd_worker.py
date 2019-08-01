@@ -34,6 +34,13 @@ class SGDWorker(object):
                  plasma_op=False,
                  checkpoint_dir=None,
                  checkpoint_interval=-1):
+        print("XXX START", time.time())
+        start = time.time()
+        logger.info("__init__ start at %f", start)
+        # The second entry in model_creator is just a dummy numpy array.
+        model_creator, _ = model_creator
+        print("XXX 1", time.time() - start)
+
         self.worker_index = worker_index
         self.num_iterations = 0
         self.checkpoint_dir = checkpoint_dir
@@ -61,10 +68,13 @@ class SGDWorker(object):
             "gpu_options": tf.GPUOptions(force_gpu_compatible=True),
             "inter_op_parallelism_threads": 128,
         }
+        print("XXX 2", time.time() - start)
+
         config_proto = tf.ConfigProto(**tf_session_args)
         self.sess = tf.Session(config=config_proto)
         self.models = []
         grad_ops = []
+        print("XXX 3", time.time() - start)
 
         if gpu:
             device_tmpl = "/gpu:%d"
@@ -84,6 +94,7 @@ class SGDWorker(object):
                             if t[0] is not None
                         ]
                         grad_ops.append(grads)
+        print("XXX 4", time.time() - start)
 
         if num_devices == 1:
             if max_bytes:
@@ -111,6 +122,7 @@ class SGDWorker(object):
                     1,
                     list(range(num_devices)),
                     agg_small_grads_max_bytes=0))
+        print("XXX 5", time.time() - start)
         self.per_device_grads = [
             list(zip(*dev_gv))[0] for dev_gv in self.packed_grads_and_vars
         ]
@@ -127,14 +139,17 @@ class SGDWorker(object):
             ]
             with tf.control_dependencies(deps):
                 nccl_noops = [tf.no_op()]
+        print("XXX 6", time.time() - start)
 
         # You must fetch this otherwise the NCCL allreduce will hang
         self.nccl_control_out = tf.group(*nccl_noops)
+        print("XXX 7", time.time() - start)
 
         if plasma_op:
             store_socket = (
                 ray.worker.global_worker.plasma_client.store_socket_name)
             ensure_plasma_tensorflow_op()
+            print("XXX 8", time.time() - start)
 
             # For fetching grads -> plasma
             self.plasma_in_grads = []
@@ -150,6 +165,7 @@ class SGDWorker(object):
                         self.plasma_in_grads_oids[j],
                         plasma_store_socket_name=store_socket)
                 self.plasma_in_grads.append(plasma_grad)
+            print("XXX 9", time.time() - start)
 
             # For applying grads <- plasma
             unpacked_gv = []
@@ -171,6 +187,7 @@ class SGDWorker(object):
                                      self.packed_grads_and_vars[0][j][0].shape)
                 logger.debug("Packed tensor {}".format(grad_ph))
                 packed_plasma_grads.append(grad_ph)
+            print("XXX 10", time.time() - start)
             for i in range(num_devices):
                 per_device = []
                 for j, (g, v) in enumerate(self.packed_grads_and_vars[i]):
@@ -180,6 +197,7 @@ class SGDWorker(object):
 
             if max_bytes:
                 unpacked_gv = unpack_small_tensors(unpacked_gv, packing_vals)
+            print("XXX 11", time.time() - start)
 
         elif max_bytes:
             unpacked_gv = unpack_small_tensors(self.packed_grads_and_vars,
@@ -200,8 +218,11 @@ class SGDWorker(object):
         self.apply_op = tf.group(*apply_ops)
         init_op = tf.group(tf.global_variables_initializer(),
                            tf.local_variables_initializer())
+        print("XXX 12", time.time() - start)
         self.sess.run(init_op)
+        print("XXX 13", time.time() - start)
         self.saver = tf.train.Saver(tf.trainable_variables())
+        logger.info("__init__ finish at %f", time.time())
 
     def save_checkpoint(self, actor_id, checkpoint_id):
         logger.info("Saving checkpoint %d actor:%s checkpoint:%s", self.num_iterations, actor_id.hex(), checkpoint_id.hex())
@@ -235,7 +256,7 @@ class SGDWorker(object):
 
     def load_checkpoint(self, actor_id, available_checkpoints):
         with ray.profiling.profile("restore_checkpoint"):
-            checkpoint_id = available_checkpoints[-1].checkpoint_id
+            checkpoint_id = available_checkpoints[0].checkpoint_id
             logger.info("Restoring checkpoint actor:%s checkpoint:%s", actor_id.hex(), checkpoint_id.hex())
             checkpoint_path = os.path.join(self.checkpoint_dir,
                                            checkpoint_id.hex())
@@ -320,16 +341,13 @@ class SGDWorker(object):
                          tl_name="ps_compute_apply",
                          write_timeline=False,
                          fetch_shards=False):
+        logger.info("Starting iteration %d", self.num_iterations)
         out_grad_shard_oids = [
                 object_id.binary() for object_id in
                 ray.worker.global_worker.skip_returns(1)
                 ]
         [loss_id] = ray.worker.global_worker.skip_returns(0)
         agg_grad_shard_ids = [ray.ObjectID(oid) for oid in agg_grad_shard_oids]
-        print("ps_compute_apply",
-              self.num_iterations,
-              [ray.ObjectID(oid) for oid in out_grad_shard_oids],
-              agg_grad_shard_ids)
 
         feed_dict = self._grad_feed_dict()
         feed_dict.update(
@@ -341,6 +359,10 @@ class SGDWorker(object):
         _, lost = ray.wait(agg_grad_shard_ids, num_returns=len(agg_grad_shard_oids), timeout=0,
                            request_once=True)
         if lost:
+            print("ps_compute_apply",
+                  self.num_iterations,
+                  [ray.ObjectID(oid) for oid in out_grad_shard_oids],
+                  agg_grad_shard_ids)
             if fetch_shards:
                 fetch(agg_grad_shard_oids)
             fetches = run_timeline(
@@ -353,6 +375,10 @@ class SGDWorker(object):
             loss = fetches[0]
 
         else:
+            print("ps_compute",
+                  self.num_iterations,
+                  [ray.ObjectID(oid) for oid in out_grad_shard_oids],
+                  agg_grad_shard_ids)
             for oid in out_grad_shard_oids:
                 oid = ray.ObjectID(oid)
                 ray.worker.global_worker.put_object(oid, None)

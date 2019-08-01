@@ -6,10 +6,13 @@ GCS_DELAY_MS=$3
 NODE_RESOURCE=${4:-'Node'$RANDOM}
 SLEEP_TIME=${5:-$(( $RANDOM % 5 ))}
 
+<<<<<<< HEAD
 SEND_THREADS=1
 RECEIVE_THREADS=1
 
 
+#source activate tensorflow_p36
+#export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8

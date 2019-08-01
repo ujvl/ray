@@ -1,15 +1,48 @@
 #!/bin/bash
 
 NUM_WORKERS=$1
-WORKER_IPS=$(tail -n $NUM_WORKERS ~/workers.txt | tac)
+NUM_GPUS_PER_WORKER=${2:-4}
+BATCH_SIZE=${3:-64}
+FAILURE=${4:-0}
+
+WORKER_IPS=$(head -n $NUM_WORKERS ~/workers.txt | tac)
+WORKER_TO_KILL=$(head -n 1 ~/workers.txt)
 
 
-hosts=""
-for worker in $WORKER_IPS;
+servers=""
+for worker in $WORKER_IPS
 do
-    hosts=$hosts"$worker:1,"
+    servers=$servers$worker":$NUM_GPUS_PER_WORKER,"
 done
-hosts=${hosts:0:-1}
-echo $hosts
 
-HOROVOD_TIMELINE=/home/ubuntu/benchmarks/horovod.json horovodrun -np $NUM_WORKERS -H $hosts python ~/benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --model resnet101 --batch_size 1 --variable_update horovod
+
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" "rm /tmp/horovod-checkpoints/*"
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" "pkill -9 python"
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" "pkill -9 python"
+
+LOG_FILE="horovod-"$NUM_WORKERS"-workers-"$BATCH_SIZE"-batch-failure-`date +%y-%m-%d-%H-%M-%S`.out"
+NUM_ITERATIONS=100
+CHECKPOINT_INTERVAL=100
+if [[ $FAILURE -eq 1 ]]; then
+    LOG_FILE=failure-$LOG_FILE
+    NUM_ITERATIONS=1500
+    FAIL_AT=1200
+    CHECKPOINT_INTERVAL=640
+fi
+echo "Logging to file $LOG_FILE"
+
+echo "Logging to log file $LOG_FILE"
+echo "Killing worker $WORKER_TO_KILL"
+
+cmd="horovodrun -np $(( $NUM_WORKERS * $NUM_GPUS_PER_WORKER )) -H ${servers:0:-1} /home/ubuntu/anaconda3/envs/tensorflow_p36/bin/python /home/ubuntu/tf-benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --model resnet101 --batch_size $BATCH_SIZE --variable_update horovod --display_every 1 --num_warmup_batches 0 --train_dir /tmp/horovod-checkpoints --save_model_steps $CHECKPOINT_INTERVAL --num_batches $NUM_ITERATIONS"
+#cmd="mpirun -np $(( $NUM_WORKERS * $NUM_GPUS_PER_WORKER )) -H ${servers:0:-1}  -bind-to none -map-by slot -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -mca pml ob1 -mca btl self,tcp -mca btl_tcp_if_include ens3 -mca plm_rsh_no_tree_spawn 1  /home/ubuntu/anaconda3/envs/tensorflow_p36/bin/python /home/ubuntu/tf-benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py --model resnet101 --batch_size $BATCH_SIZE --variable_update horovod --display_every 1 --num_warmup_batches 0 --train_dir /tmp/horovod-checkpoints --save_model_steps $CHECKPOINT_INTERVAL --num_batches $NUM_ITERATIONS"
+
+if [[ $FAILURE -eq 1 ]]
+then
+    failure_cmd=$cmd" --node_to_kill $WORKER_TO_KILL --fail_at $FAIL_AT"
+    echo "Running $failure_cmd" | tee -a $LOG_FILE
+    $failure_cmd 2>&1 | tee -a $LOG_FILE
+fi
+
+echo "Running $cmd" | tee -a $LOG_FILE
+$cmd 2>&1 | tee -a $LOG_FILE

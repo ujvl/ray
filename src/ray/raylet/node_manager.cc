@@ -2481,6 +2481,7 @@ void NodeManager::ResubmitTask(const Task &task) {
         RAY_LOG(DEBUG) << "Actor task " << task.GetTaskSpecification().TaskId() << " resubmitted "
             << num_times_resubmitted
             << " times, but its actor has only been reconstructed " << it->second.GetActorVersion() << " times";
+        task_dependency_manager_.HandleTaskResubmitted(task.GetTaskSpecification().TaskId());
         return;
       }
     }

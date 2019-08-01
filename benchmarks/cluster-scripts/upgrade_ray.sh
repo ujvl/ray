@@ -7,7 +7,7 @@ if [[ $CHECKOUT -ne 0 ]]
 then
     cd ~/ray
     git fetch
-    git checkout origin/lineage-stash-allreduce
+    git checkout origin/lineage-stash-sgd
 fi
 
 (cd ~/ray/build && make -j8) || (find /home/ubuntu/ray/src/ray -name *_generated.h -exec rm {} \; && cd ~/ray/build  && make -j8) || (cd ~/ray/python && python setup.py develop)

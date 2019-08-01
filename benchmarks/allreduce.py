@@ -20,7 +20,7 @@ import ray.cloudpickle as pickle
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-DEBUG = False
+DEBUG = True
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 
@@ -113,6 +113,7 @@ class WeightPartition(object):
 
 class RingAllReduceWorker(object):
     def __init__(self, worker_index, num_workers, buffer_size, in_place):
+        buffer_size, _ = buffer_size
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.workers = {}
@@ -122,6 +123,8 @@ class RingAllReduceWorker(object):
         self.log = []
         self.cache = []
         self.pinned = []
+        self._restored_checkpoint = False
+        self.receives = []
 
     def ip(self):
         return ray.services.get_node_ip_address()
@@ -148,7 +151,6 @@ class RingAllReduceWorker(object):
         self.broadcast_received = []
 
         self.execute_received = False
-        self.receives = []
 
     def get_receiver(self):
         return self.workers[(self.worker_index + 1) % self.num_workers]
@@ -164,6 +166,11 @@ class RingAllReduceWorker(object):
         These object IDs can be retrieved and concatenated to produce the final
         output.
         """
+        if self._restored_checkpoint:
+            debug("Clearing pinned objects", len(self.pinned))
+            self.pinned.clear()
+        self._restored_checkpoint = False
+
         debug("EXECUTE", self.num_iterations, ": worker", self.worker_index, ray.ObjectID(final_oid))
         assert not self.execute_received
 
@@ -409,8 +416,8 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
 
         batch_size = 10
         for j in range(0, len(self.log), batch_size):
-            debug("RESTORE batch", j)
-            batch = self.log[j * batch_size : (j+1) * batch_size]
+            batch = self.log[j:j+batch_size]
+            debug("RESTORE batch", j, len(batch))
             all_out_oids = [out_oid for out_oids, _, _ in batch for out_oid in out_oids]
             all_outputs = ray.get(all_out_oids)
 
@@ -427,9 +434,15 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
                     # Restore the final object IDs indicating that this all-reduce has
                     # finished.
                     self.finish(out_oids, final_oid, done_oid)
+                    if final_oid is not None:
+                        final_id = ray.ObjectID(final_oid)
+                        debug("Pinning", final_id)
+                        self.pinned.append(ray.get(final_id))
+
         self.reset()
         self.num_iterations += 1
         self._should_checkpoint = False
+        self._restored_checkpoint = True
 
         debug("Restored", checkpoint_id)
         return True
@@ -599,7 +612,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
             resources=actor_resources,
             max_reconstructions=100)(CheckpointableRingAllReduceWorker)
         workers.append(
-            cls.remote(worker_index, num_workers, data_size, in_place,
+            cls.remote(worker_index, num_workers, (data_size, 0), in_place,
                        checkpoint_dir, checkpoint_interval))
 
     # Exchange actor handles.

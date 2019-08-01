@@ -2,7 +2,7 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-NUM_RAYLETS=$1
+NUM_RAYLETS=$(( $1 - 1 ))
 NUM_REDIS_SHARDS=${2:-1}
 USE_GCS_ONLY=${3:-0}
 GCS_DELAY_MS=${3:-0}
