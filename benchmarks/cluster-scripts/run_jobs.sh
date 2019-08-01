@@ -1,8 +1,9 @@
 #!/bin/bash
 
-HEAD_IP=$1
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-NUM_RAYLETS=64
+HEAD_IP=$1
+NUM_RAYLETS=${2:-64}
 NUM_SHARDS=1
 
 TASK_DURATION=0

@@ -37,9 +37,11 @@ exit_code=1
 i=0
 while [[ $exit_code -ne 0 ]]
 do
+    echo "Attempt #$i"
     if [[ $i -eq 3 ]]
     then
         echo "Failed 3 attempts " >> $latency_file
+        exit
     fi
 
     bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES

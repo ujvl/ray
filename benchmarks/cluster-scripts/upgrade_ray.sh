@@ -1,13 +1,13 @@
 #!/bin/bash
 
 
-CHECKOUT=${1:-0}
+BRANCH=${1:-""}
 
-if [[ $CHECKOUT -ne 0 ]]
+if [[ "$BRANCH" != "" ]]
 then
     cd ~/ray
     git fetch
-    git checkout origin/lineage-stash-sgd
+    git checkout origin/$BRANCH
 fi
 
 (cd ~/ray/build && make -j8) || (find /home/ubuntu/ray/src/ray -name *_generated.h -exec rm {} \; && cd ~/ray/build  && make -j8) || (cd ~/ray/python && python setup.py develop)

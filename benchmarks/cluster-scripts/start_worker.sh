@@ -35,9 +35,7 @@ fi
 
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
-    --plasma-directory=/mnt/hugepages \
     --plasma-eviction-fraction 100 \
-    --huge-pages \
     --object-store-memory 1000000000 \
     --num-cpus 4 \
     --internal-config='{

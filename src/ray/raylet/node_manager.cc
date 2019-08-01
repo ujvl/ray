@@ -1945,11 +1945,6 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
           }
 
 
-          for (auto &assigned_task : assigned_tasks) {
-            assigned_task.IncrementNumExecutions();
-            // We started running the task, so the task is ready to write to GCS.
-            RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
-          }
           // We successfully assigned the task to the worker.
           worker->AssignTaskIds(task_ids);
           worker->AssignDriverId(first_spec.DriverId());
@@ -2033,8 +2028,6 @@ bool NodeManager::AssignTask(Task &task) {
     worker->SetTaskResourceIds(acquired_resources);
   }
 
-  AssignTasksToWorker({task}, worker);
-
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
@@ -2099,7 +2092,7 @@ bool NodeManager::AssignTask(Task &task) {
   } else {
     if (RayConfig::instance().log_nondeterminism()) {
       // We started running the task, so the task is ready to write to GCS.
-      RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
+      lineage_cache_.AddReadyTask(assigned_task);
     }
     AssignTasksToWorker({assigned_task}, worker);
   }
