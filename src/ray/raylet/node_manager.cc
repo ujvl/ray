@@ -666,7 +666,7 @@ void NodeManager::DispatchTasks(
     const auto &task_resources = it.first;
     std::unordered_map<ActorID, std::vector<Task>> task_batches;
     for (const auto &task_id : it.second) {
-      const auto &task = local_queues_.GetTaskOfState(task_id, TaskState::READY);
+      auto &task = local_queues_.GetTaskOfState(task_id, TaskState::READY);
       const auto &spec = task.GetTaskSpecification();
       if (!local_available_resources_.Contains(task_resources)) {
         // All the tasks in it.second have the same resource shape, so
@@ -1448,42 +1448,6 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
                              bool forwarded, bool push) {
-  if (!forwarded && use_gcs_only_) {
-    gcs::raylet::TaskTable::WriteCallback task_callback = [this, task, forwarded, push](
-        ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-      _SubmitTask(task, Lineage(), forwarded, push);
-    };
-    if (gcs_delay_ms_ == 0) {
-      FlushTask(task, task_callback);
-    } else {
-      auto gcs_delay = boost::posix_time::milliseconds(gcs_delay_ms_);
-      auto gcs_timer = std::make_shared<boost::asio::deadline_timer>(io_service_, gcs_delay);
-      gcs_timer->async_wait([this, gcs_timer, task, task_callback](const boost::system::error_code &error) {
-        FlushTask(task, task_callback);
-      });
-    }
-  } else {
-    _SubmitTask(task, uncommitted_lineage, forwarded, push);
-  }
-}
-
-void NodeManager::EnqueuePlaceableActorTask(const Task &task, bool push) {
-  const TaskSpecification &spec = task.GetTaskSpecification();
-  const auto actor_entry = actor_registry_.find(spec.ActorId());
-  RAY_CHECK(actor_entry != actor_registry_.end());
-  // The task has not yet been executed. Queue the task for local
-  // execution, bypassing placement.
-  RAY_CHECK(actor_entry->second.GetDownstreamActorIds().empty());
-  if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
-    actor_entry->second.SetRecoveryFrontier(
-        spec.ActorHandleId(),
-        spec.ActorCounter());
-  }
-  EnqueuePlaceableTask(task, push);
-}
-
-void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
-                             bool forwarded, bool push) {
   const TaskSpecification &spec = task.GetTaskSpecification();
   const TaskExecutionSpecification &exec_spec = task.GetTaskExecutionSpec();
   const TaskID &task_id = spec.TaskId();
@@ -1554,6 +1518,21 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
 
     _SubmitTask(task, uncommitted_lineage, forwarded, push);
   }
+}
+
+void NodeManager::EnqueuePlaceableActorTask(const Task &task, bool push) {
+  const TaskSpecification &spec = task.GetTaskSpecification();
+  const auto actor_entry = actor_registry_.find(spec.ActorId());
+  RAY_CHECK(actor_entry != actor_registry_.end());
+  // The task has not yet been executed. Queue the task for local
+  // execution, bypassing placement.
+  RAY_CHECK(actor_entry->second.GetDownstreamActorIds().empty());
+  if (!actor_entry->second.IsRecovered() && task.GetTaskExecutionSpec().NumExecutions() == 0) {
+    actor_entry->second.SetRecoveryFrontier(
+        spec.ActorHandleId(),
+        spec.ActorCounter());
+  }
+  EnqueuePlaceableTask(task, push);
 }
 
 void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
@@ -1998,7 +1977,6 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
           DispatchTasks(MakeTasksWithResources(assigned_tasks));
         }
       });
-
 }
 
 bool NodeManager::AssignTask(Task &task) {
@@ -2103,7 +2081,7 @@ bool NodeManager::AssignTask(Task &task) {
           const TaskID &task_id = task.GetTaskSpecification().TaskId();
           if (gcs_assign_tasks_committed_[task_id]) {
             std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
-            AssignTaskToWorker(task, worker);
+            AssignTasksToWorker({task}, worker);
             gcs_assign_task_queue_.pop_front();
             gcs_assign_tasks_committed_.erase(task_id);
           } else {
@@ -2116,14 +2094,14 @@ bool NodeManager::AssignTask(Task &task) {
 
       lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
     } else {
-      AssignTaskToWorker(assigned_task, worker);
+      AssignTasksToWorker({assigned_task}, worker);
     }
   } else {
     if (RayConfig::instance().log_nondeterminism()) {
       // We started running the task, so the task is ready to write to GCS.
       RAY_CHECK(lineage_cache_.AddReadyTask(assigned_task));
     }
-    AssignTaskToWorker(assigned_task, worker);
+    AssignTasksToWorker({assigned_task}, worker);
   }
   return true;
 }

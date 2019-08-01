@@ -187,7 +187,7 @@ class NodeManager {
   ///
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
-  bool AssignTask(const Task &task);
+  bool AssignTask(Task &task);
   void AssignTasksToWorker(const std::vector<Task> &tasks, std::shared_ptr<Worker> worker);
   bool AssignActorTaskBatch(const ActorID &actor_id,
                             const ResourceSet &resource_set,
