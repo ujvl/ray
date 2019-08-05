@@ -191,7 +191,7 @@ class NodeManager {
   void AssignTasksToWorker(const std::vector<Task> &tasks, std::shared_ptr<Worker> worker);
   bool AssignActorTaskBatch(const ActorID &actor_id,
                             const ResourceSet &resource_set,
-                            const std::vector<Task> &tasks);
+                            std::vector<Task> &tasks);
   void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback);
   /// Handle a worker finishing its assigned task.
   ///
