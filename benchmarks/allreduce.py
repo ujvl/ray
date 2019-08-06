@@ -536,7 +536,6 @@ def allreduce(workers, test_failure, check_results, kill_node_fn, num_failed, ch
 
 def main(redis_address, test_single_node, num_workers, data_size,
          num_iterations, check_results, dump, test_failure, record_latency,
-         gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval):
          gcs_delay_ms, use_gcs_only, latency_file, checkpoint_interval,
          fail_at):
     if record_latency and latency_file is None:
@@ -652,8 +651,12 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     worker_ip,
                     str(int(use_gcs_only)),
                     str(args.gcs_delay_ms),
+                    '0',  # log_nondeterminism. 0 means deterministic execution.
+                    '1',  # max_failures. 1 means forward lineage once.
+                    str(args.object_store_memory_gb),
                     node_resource,
                     ]
+            print("KILL COMMAND", command)
             subprocess.Popen(command)
 
     # Don't check the results if the checkpoint to disk interval is set.
@@ -756,6 +759,11 @@ if __name__ == "__main__":
         default=-1,
         type=int,
         help='Number of iterations before checkpointing to disk')
+    parser.add_argument(
+        '--object-store-memory-gb',
+        type=int,
+        required=True,
+        help='Number of GB allocated to the object store.')
     args = parser.parse_args()
 
     main(args.redis_address, args.test_single_node, args.num_workers,

@@ -4,12 +4,14 @@ HEAD_IP=$1
 USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
 NONDETERMINISM=$4
-MAX_FAILURES=${5:-1}
-NODE_RESOURCE=${6:-'Node'$RANDOM}
-SLEEP_TIME=${7:-$(( $RANDOM % 5 ))}
+MAX_FAILURES=$5
+OBJECT_STORE_MEMORY_GB=$6
+PEG=$7
+OBJECT_MANAGER_THREADS=$8
+NODE_RESOURCE=${9:-'Node'$RANDOM}
+SLEEP_TIME=${10:-$(( $RANDOM % 5 ))}
 
-SEND_THREADS=1
-RECEIVE_THREADS=1
+OBJECT_MANAGER_THREADS=1
 
 
 #source activate tensorflow_p36
@@ -32,11 +34,23 @@ then
   MAX_FAILURES=-1
 fi
 
+hugepages_config=''
+if [[ $OBJECT_STORE_MEMORY_GB -gt 0 ]]
+then
+    # Turn on hugepages. Set object store capacity to be the number of
+    # allocated hugepages * 2MB/hugepage.
+    object_store_memory=$(( $OBJECT_STORE_MEMORY_GB * (10 ** 9) ))
+    hugepages_config='
+      --plasma-directory=/mnt/hugepages
+      --huge-pages
+      --object-store-memory '$object_store_memory
+    echo "Starting object store with hugepages enabled, $object_store_memory bytes"
+fi
 
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
-    --plasma-eviction-fraction 100 \
-    --object-store-memory 1000000000 \
+    --plasma-eviction-fraction 20 \
+    $hugepages_config \
     --num-cpus 4 \
     --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
@@ -48,8 +62,8 @@ ray start --redis-address=$HEAD_IP:6379 \
     "async_message_max_buffer_size": 100,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000,
-    "object_manager_send_threads": '$SEND_THREADS',
-    "object_manager_receive_threads": '$RECEIVE_THREADS'}'
+    "object_manager_send_threads": '$OBJECT_MANAGER_THREADS',
+    "object_manager_receive_threads": '$OBJECT_MANAGER_THREADS'}'
 
 sleep 5
 
@@ -63,10 +77,10 @@ sleep 5
 
 taskset -pc 0 `pgrep raylet`
 sudo renice -n -19 -p `pgrep raylet`
-#if [[ $# -ne 3 ]]; then
-#    yes > /dev/null &
-#    taskset -pc 0 $!
-#fi
+if [[ $PEG -ne 0 ]]; then
+    yes > /dev/null &
+    taskset -pc 0 $!
+fi
 
 #for i in `seq 0 7`; do
 #    yes > /dev/null &

@@ -35,7 +35,6 @@ ray start --head \
   --redis-max-memory 10000000000 \
   --num-cpus 4 \
   --num-redis-shards $NUM_REDIS_SHARDS \
-  --resources='{"Node_0": 100}' \
   --internal-config='{
     "initial_reconstruction_timeout_milliseconds": 200,
     "gcs_delay_ms": '$GCS_DELAY_MS',
@@ -59,12 +58,12 @@ sleep 5
 #    i=$(( $i + 1 ))
 #done
 
-taskset -pc 0 `pgrep -x raylet`
-sudo renice -n -19 -p `pgrep -x raylet`
-if [[ $# -ne 3 ]]; then
-    yes > /dev/null &
-    taskset -pc 0 $!
-fi
+#taskset -pc 0 `pgrep -x raylet`
+#sudo renice -n -19 -p `pgrep -x raylet`
+#if [[ $# -ne 3 ]]; then
+#    yes > /dev/null &
+#    taskset -pc 0 $!
+#fi
 
 #for i in `seq 0 7`; do
 #    yes > /dev/null &

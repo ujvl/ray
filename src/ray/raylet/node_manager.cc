@@ -75,7 +75,8 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           gcs_client_->task_lease_table()),
       lineage_cache_(gcs_client_->client_table().GetLocalClientId(),
                      gcs_client_->raylet_task_table(), gcs_client_->raylet_task_table(),
-                     config.max_lineage_size, use_gcs_only_ ? 0 : RayConfig::instance().lineage_stash_max_failures(),
+                     config.max_lineage_size,
+                     use_gcs_only_ ? 0 : RayConfig::instance().lineage_stash_max_failures(),
                      [this](){
                        io_service_.post([this]() {
                          HandleFlushAllCompleted();
