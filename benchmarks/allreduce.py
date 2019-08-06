@@ -421,6 +421,11 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
             all_out_oids = [out_oid for out_oids, _, _ in batch for out_oid in out_oids]
             all_outputs = ray.get(all_out_oids)
 
+            if j + batch_size < len(self.log):
+                next_batch = self.log[j+batch_size:j + (2*batch_size)]
+                next_out_oids = [out_oid for out_oids, _, _ in next_batch for out_oid in out_oids]
+                ray.wait(next_out_oids, num_returns=len(next_out_oids), timeout=0)
+
             for out_oids, final_oid, done_oid in batch:
                 with ray.profiling.profile("restore_log"):
                     debug("RESTORE", out_oids, final_oid)
@@ -654,9 +659,11 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     '0',  # log_nondeterminism. 0 means deterministic execution.
                     '1',  # max_failures. 1 means forward lineage once.
                     str(args.object_store_memory_gb),
+                    '0',  # Do not peg a process to keep raylet awake.
+                    '4',  # Use 4 object manager threads for sending and receiving.
                     node_resource,
                     ]
-            print("KILL COMMAND", command)
+            debug("KILL COMMAND", command)
             subprocess.Popen(command)
 
     # Don't check the results if the checkpoint to disk interval is set.

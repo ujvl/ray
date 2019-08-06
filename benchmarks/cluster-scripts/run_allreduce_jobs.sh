@@ -15,6 +15,14 @@ fi
 echo "Creating output directory $OUTPUT_DIR..."
 mkdir $OUTPUT_DIR
 
+# Run the failure experiment.
+NUM_FLOAT32=25000000
+GCS_DELAY_MS=0
+MAX_FAILURES=1
+CHECKPOINT_INTERVAL=150
+bash -x $DIR/run_allreduce_job.sh $HEAD_IP $NUM_RAYLETS $OUTPUT_DIR $NUM_FLOAT32 0 $MAX_FAILURES $GCS_DELAY_MS $CHECKPOINT_INTERVAL
+bash -x $DIR/run_allreduce_job.sh $HEAD_IP $NUM_RAYLETS $OUTPUT_DIR $NUM_FLOAT32 1 $MAX_FAILURES $GCS_DELAY_MS $CHECKPOINT_INTERVAL
+
 # Run latency experiments without failure.
 for NUM_NODES in 4 16 32 64; do
     if [[ $NUM_NODES -gt $NUM_RAYLETS ]]
@@ -37,9 +45,3 @@ for NUM_NODES in 4 16 32 64; do
         done
     done
 done
-
-## Run the failure experiment.
-#NUM_FLOAT32=25000000
-#GCS_DELAY_MS=0
-#bash -x $DIR/run_allreduce_job.sh $HEAD_IP $NUM_RAYLETS $OUTPUT_DIR $NUM_FLOAT32 0 $GCS_DELAY_MS 1
-#bash -x $DIR/run_allreduce_job.sh $HEAD_IP $NUM_RAYLETS $OUTPUT_DIR $NUM_FLOAT32 1 $GCS_DELAY_MS 1

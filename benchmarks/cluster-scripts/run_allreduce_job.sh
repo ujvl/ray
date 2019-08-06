@@ -10,12 +10,12 @@ NUM_FLOAT32=$4
 USE_GCS_ONLY=$5
 MAX_FAILURES=$6
 GCS_DELAY_MS=$7
-FAILURE=${8:-0}
+CHECKPOINT_INTERVAL=${8:-0}
 
 NUM_SHARDS=1
 NONDETERMINISM=0
 MAX_FAILURES=1
-OBJECT_STORE_MEMORY_GB=6
+OBJECT_STORE_MEMORY_GB=17
 PEG=0
 OBJECT_MANAGER_THREADS=4
 
@@ -23,17 +23,16 @@ if [[ $NUM_FLOAT32 -gt 25000000 ]]; then
   NUM_ITERATIONS=20
 fi
 
-latency_prefix=$OUTPUT_DIR"/latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NUM_FLOAT32"-bytes-"
+latency_prefix="latency-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$NUM_FLOAT32"-bytes-"
 FAILURE_ARG=""
-if [[ $FAILURE -ne 0 ]]
+if [[ $CHECKPOINT_INTERVAL -ne 0 ]]
 then
     latency_prefix=failure-$latency_prefix
-    #NUM_ITERATIONS=400
-    #FAILURE_ARG="--test-failure --checkpoint-interval 150 --fail-at 280"
-    NUM_ITERATIONS=200
-    FAILURE_ARG="--test-failure --checkpoint-interval 50 --fail-at 90"
+    NUM_ITERATIONS=$(( $CHECKPOINT_INTERVAL * 3 ))
+    FAILURE_ARG="--test-failure --checkpoint-interval $CHECKPOINT_INTERVAL --fail-at $(( $CHECKPOINT_INTERVAL + $CHECKPOINT_INTERVAL * 9 / 10))"
 fi
 
+latency_prefix=$OUTPUT_DIR"/"$latency_prefix
 if ls $latency_prefix* 1> /dev/null 2>&1
 then
     echo "Latency file with prefix $latency_prefix already found, skipping..."

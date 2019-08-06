@@ -11,9 +11,6 @@ OBJECT_MANAGER_THREADS=$8
 NODE_RESOURCE=${9:-'Node'$RANDOM}
 SLEEP_TIME=${10:-$(( $RANDOM % 5 ))}
 
-OBJECT_MANAGER_THREADS=1
-
-
 #source activate tensorflow_p36
 #export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
 export PATH=/home/ubuntu/anaconda3/bin/:$PATH

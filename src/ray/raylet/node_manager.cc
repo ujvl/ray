@@ -1043,10 +1043,12 @@ void NodeManager::ProcessFetchOrReconstructMessage(
   std::vector<ObjectID> required_object_ids;
   for (size_t i = 0; i < message->object_ids()->size(); ++i) {
     ObjectID object_id = from_flatbuf(*message->object_ids()->Get(i));
+    bool remote = !task_dependency_manager_.CheckObjectLocal(object_id);
+    RAY_LOG(DEBUG) << "Task called ray.get on " << object_id << " remote? " << static_cast<int>(remote);
     if (message->fetch_only()) {
       // If only a fetch is required, then do not subscribe to the
       // dependencies to the task dependency manager.
-      if (!task_dependency_manager_.CheckObjectLocal(object_id)) {
+      if (remote) {
         // Fetch the object if it's not already local.
         RAY_CHECK_OK(object_manager_.Pull(object_id));
       }
@@ -1074,9 +1076,11 @@ void NodeManager::ProcessWaitRequestMessage(
   uint64_t num_required_objects = static_cast<uint64_t>(message->num_ready_objects());
   bool wait_local = message->wait_local();
 
+  const TaskID &current_task_id = from_flatbuf(*message->task_id());
   std::vector<ObjectID> required_object_ids;
   for (auto const &object_id : object_ids) {
-    if (!task_dependency_manager_.CheckObjectLocal(object_id)) {
+    bool remote = !task_dependency_manager_.CheckObjectLocal(object_id);
+    if (remote) {
       // Add any missing objects to the list to subscribe to in the task
       // dependency manager. These objects will be pulled from remote node
       // managers and reconstructed if necessary.
@@ -1084,7 +1088,6 @@ void NodeManager::ProcessWaitRequestMessage(
     }
   }
 
-  const TaskID &current_task_id = from_flatbuf(*message->task_id());
   bool client_blocked = !required_object_ids.empty();
   bool suppress_reconstruction = message->suppress_reconstruction();
   bool request_once = message->request_once();
