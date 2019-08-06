@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 DEBUG = False
 WAIT_MS = 10
-PROGRESS_LOG_FREQUENCe = 500
+PROGRESS_LOG_FREQUENCY = 500
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 
@@ -39,21 +39,29 @@ class RingWorker(object):
         self.num_workers = num_workers
         self.token = token
         self.task_duration = task_duration
-        self.latencies = []
         self.receiver = None
+        self.reset()
+
+    def reset(self):
+        self.latencies = []
         self.iteration = 0
         self.tasks = 0
-        self.num_own_tokens_recv = 0
         _internal_kv_put(self.token, self.iteration, overwrite=True)
 
     def ip(self):
         return ray.services.get_node_ip_address()
 
+    def num_tasks(self):
+        return self.tasks
+
     def add_remote_worker(self, worker):
         self.receiver = worker
 
-    def num_tasks(self):
-        return self.tasks
+    def get_latencies(self):
+        # The first task doesn't count because the timestamp was assigned by the driver.
+        latencies = self.latencies[1:][:]
+        self.latencies.clear()
+        return latencies
 
     @ray.method(num_return_vals=0)
     def send(self, token, num_roundtrips_remaining, timestamp):
@@ -76,12 +84,6 @@ class RingWorker(object):
             self.iteration += 1
             _internal_kv_put(self.token, self.iteration, overwrite=True)
             debug("DONE", self.token, self.iteration)
-
-    def get_latencies(self):
-        # The first task doesn't count because the timestamp was assigned by the driver.
-        latencies = self.latencies[1:][:]
-        self.latencies.clear()
-        return latencies
 
 
 def step(iteration, workers, tokens, num_roundtrips, task_duration,
@@ -225,47 +227,67 @@ def main(args):
 
 
 def benchmark_throughput(workers, tokens, args):
-    i = 0
-
+    """
+    Benchmark throughput
+    """
     warmup_duration = args.thput_warmup_duration
+    measurement_duration = args.thput_measurement_duration
+    task_duration = args.task_duration
+    num_roundtrips = args.num_roundtrips
+
+    i = 0
     log.info("Warming up for %s s...", warmup_duration)
     warmup_end_ts = time.time() + warmup_duration
     while time.time() < warmup_end_ts:
-        step(i, workers, tokens, args.num_roundtrips, args.task_duration, False)
+        step(i, workers, tokens, num_roundtrips, task_duration, False)
         i += 1
-    num_warmup_iters = i
+
+    ray.get([w.reset.remote() for w in workers])
         
-    measurement_duration = args.thput_measurement_duration
+    i = 0
     log.info("Measuring for %s s...", measurement_duration)
     measurement_end_ts = time.time() + measurement_duration 
     while time.time() < measurement_end_ts:
-        step(i, workers, tokens, args.num_roundtrips, args.task_duration, False)
+        step(i, workers, tokens, num_roundtrips, task_duration, False)
         i += 1
 
-    num_measurement_iters = i - num_warmup_iters
-    # TODO figure out why this calculation is wrong
-    #tasks_per_worker = num_measurement_iters * args.num_roundtrips * args.num_workers
-    #tasks_per_worker_per_sec = tasks_per_worker / args.thput_measurement_duration
-    #tasks_sys_per_sec = tasks_per_worker_per_sec * args.num_workers
+    num_rt_per_worker = i * args.num_roundtrips
+    num_rt_sys = num_rt_per_worker * args.num_workers
+    sys_rt_throughput = int(num_rt_sys / measurement_duration)
+    avg_worker_rt_throughput = int(num_rt_per_worker / measurement_duration)
+    #log.info('yolo %s tasks/s', sys_rt_throughput * args.num_workers)
+
     num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
     sys_throughput = int(num_tasks / measurement_duration)
     avg_worker_throughput = int(sys_throughput / args.num_workers)
 
     log.info('Worker throughput (avg): %s tasks/s', avg_worker_throughput)
+    log.info('Worker throughput (avg): %s rt/s', avg_worker_rt_throughput)
     log.info('System throughput: %s tasks/s', sys_throughput)
-    log.info('Steps: %s', num_measurement_iters)
+    log.info('System throughput: %s rt/s', sys_rt_throughput) # TODO: verify
+    log.info('Steps: %s', i)
 
+    # Write throughput
+    if args.record_throughput:
+        if args.throughput_file is None:
+            throughput_file = "throughput-{}-workers-{}.txt".format(
+                len(workers),
+                str(datetime.datetime.now())
+            )
+        else:
+            throughput_file = args.throughput_file
+        log.info("Logging throughput to file %s", throughput_file)
+        with open(throughput_file, 'a+') as f:
+            f.write('{},{},{},{},{}\n'.format(args.gcs_delay_ms,
+                                              args.task_duration,
+                                              args.num_roundtrips,
+                                              sys_throughput,
+                                              sys_rt_throughput))
 
 def benchmark_latency(workers, tokens, args):
-    if args.record_latency:
-        if args.latency_file is None:
-            latency_file = "latency-{}-workers-{}.txt".format(
-                len(workers),
-                str(datetime.datetime.now()))
-        else:
-            latency_file = args.latency_file
-        log.info("Logging latency to file %s", latency_file)
-
+    """
+    Benchmark latency
+    """
     latencies = []
     for i in range(args.num_iterations):
         log.info("Starting iteration %d", i)
@@ -273,9 +295,15 @@ def benchmark_latency(workers, tokens, args):
         latencies.append(results)
     
     # Write latency
-    if latency_file is not None:
+    if args.record_latency:
+        if args.latency_file is None:
+            latency_file = "latency-{}-workers-{}.txt".format(
+                len(workers),
+                str(datetime.datetime.now()))
+        else:
+            latency_file = args.latency_file
+        log.info("Logging latencies to file %s", latency_file)
         with open(latency_file, 'a+') as f:
-            log.info('Writing to ', latency_file)
             for i, latency in enumerate(latencies):
                 for l in latency:
                     f.write('{},{}\n'.format(i, l))
@@ -289,7 +317,7 @@ if __name__ == "__main__":
          type=int,
          help='The # of workers to use.')
     parser.add_argument(
-        '--num_roundtrips',
+        '--num-roundtrips',
         default=100,
         type=int,
         help='The # of roundtrips a token takes per step.')
@@ -341,6 +369,10 @@ if __name__ == "__main__":
         action='store_true',
         help='Benchmark throughput instead of latency (throughput benchmark only)')
     parser.add_argument(
+        '--record-throughput',
+        action='store_true',
+        help='Whether to record the throughput (throughput benchmark only)')
+    parser.add_argument(
         '--thput-warmup-duration',
         default=10,
         type=int,
@@ -350,10 +382,10 @@ if __name__ == "__main__":
         default=50,
         type=int,
         help='Throughput measurement time in seconds (throughput benchmark only)')
-    #parser.add_argument(
-    #    '--throughput-file',
-    #    default=None,
-    #    help='File to record the throughput')
+    parser.add_argument(
+        '--throughput-file',
+        default=None,
+        help='File to record the throughput (throughput benchmark only)')
 
     args = parser.parse_args()
 
