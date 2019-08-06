@@ -21,7 +21,6 @@ from ray.experimental.internal_kv import _internal_kv_get, _internal_kv_put
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 
 DEBUG = True
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
@@ -35,6 +34,7 @@ def debug(*args):
             *args,
             flush=True)
 
+
 class RingWorker(object):
     def __init__(self, worker_index, num_workers, token, task_duration):
         self.worker_index = worker_index
@@ -44,6 +44,7 @@ class RingWorker(object):
         self.latencies = []
         self.receiver = None
         self.iteration = 0
+        self.num_own_tokens_recv = 0
         _internal_kv_put(self.token, self.iteration, overwrite=True)
 
     def ip(self):
@@ -81,6 +82,7 @@ class RingWorker(object):
         self.latencies.clear()
         return latencies
 
+
 @ray.remote
 class ProgressTracker(object):
     def __init__(self, tokens):
@@ -99,7 +101,9 @@ class ProgressTracker(object):
     def get_num_iterations(self):
         return self.num_iterations
 
-def step(iteration, workers, tokens, num_tasks, task_duration):
+
+def step(iteration, workers, tokens, num_tasks, task_duration, 
+        measure_latency=True):
     tasks = []
     for worker, token in zip(workers, tokens):
         tasks.append(worker.send.remote(token, num_tasks, time.time()))
@@ -107,39 +111,39 @@ def step(iteration, workers, tokens, num_tasks, task_duration):
     start = time.time()
     next_iteration = iteration + 1
     for token in tokens:
-        while True:
-            worker_iteration = _internal_kv_get(token)
-            if int(worker_iteration) != next_iteration:
-                time.sleep(1)
-                log.debug("Waiting for token %s", token)
-
-                clients = ray.global_state.client_table()
-                failed_clients = [client for client in clients if not client['IsInsertion']]
-                assert len(failed_clients) == 0, "Client failed {}".format(failed_clients[0]['NodeManagerAddress'])
-            else:
-                break
+        worker_iteration = int(_internal_kv_get(token))
+        log.debug('For token %s, worker_iter = %s', token, worker_iteration)
+        while worker_iteration != next_iteration:
+            time.sleep(0.1)
+            log.debug("Waiting for token %s", token)
+            clients = ray.global_state.client_table()
+            failed_clients = [client for client in clients if not client['IsInsertion']]
+            assert len(failed_clients) == 0, "Client failed {}".format(failed_clients[0]['NodeManagerAddress'])
+            worker_iteration = int(_internal_kv_get(token))
 
     log.debug("Round %d done after %f", iteration, time.time() - start)
-    start = time.time()
-    latencies = ray.get([worker.get_latencies.remote() for worker in workers])
-    log.debug("Got latencies for round %d after %f", iteration, time.time() - start)
 
-    latencies = np.array(latencies)
-    latencies -= task_duration * (len(workers))
-    latencies /= len(workers)
-    latencies = np.reshape(latencies, (num_tasks - 1) * len(workers))
-    log.info("Mean latency round %d: %f", iteration, np.mean(latencies))
-    log.info("Max latency round %d: %f", iteration, np.max(latencies))
-    log.info("Stddev latency round %d: %f", iteration, np.std(latencies))
+    if measure_latency:
+        start = time.time()
+        latencies = ray.get([worker.get_latencies.remote() for worker in workers])
+        log.debug("Got latencies for round %d after %f", iteration, time.time() - start)
+
+        latencies = np.array(latencies)
+        latencies -= task_duration * (len(workers))
+        latencies /= len(workers)
+        latencies = np.reshape(latencies, (num_tasks - 1) * len(workers))
+        log.info("Mean latency round %d: %f", iteration, np.mean(latencies))
+        log.info("Max latency round %d: %f", iteration, np.max(latencies))
+        log.info("Stddev latency round %d: %f", iteration, np.std(latencies))
+    else:
+        latencies = []
+
     return latencies
 
+
 def main(args):
-    if args.record_latency and args.latency_file is None:
-        latency_file = "latency-{}-workers-{}.txt".format(
-                num_workers,
-                str(datetime.datetime.now()))
-        log.info("Logging latency to file %s", latency_file)
-    latency_file = args.latency_file
+    if args.debug:
+        log.setLevel(logging.DEBUG)
 
     internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
@@ -193,6 +197,7 @@ def main(args):
         for token2 in token_str:
             tokens.append('{}{}'.format(token1, token2))
     tokens = tokens[:args.num_workers]
+    log.debug("Tokens generated: %s", tokens)
     assert len(tokens) == args.num_workers, "Need more tokens"
 
     workers = []
@@ -200,8 +205,7 @@ def main(args):
         actor_resources = {node_resources[worker_index]: 1}
         cls = ray.remote(resources=actor_resources)(RingWorker)
         token = tokens[worker_index]
-        workers.append(
-            cls.remote(worker_index, args.num_workers, token, args.task_duration))
+        workers.append(cls.remote(worker_index, args.num_workers, token, args.task_duration))
 
     # Exchange actor handles.
     waits = []
@@ -216,21 +220,13 @@ def main(args):
 
     # Ensure workers are assigned to unique nodes.
     if not test_local:
-        node_ips = ray.get(
-            [worker.ip.remote() for worker in workers])
-        assert (len(set(node_ips)) == args.num_workers)
+        node_ips = ray.get([worker.ip.remote() for worker in workers])
+        assert len(set(node_ips)) == args.num_workers
 
-    latencies = []
-    for i in range(args.num_iterations):
-        log.info("Starting iteration %d", i)
-        results = step(i, workers, tokens, args.num_tasks, args.task_duration)
-        latencies.append(results)
-
-    if latency_file is not None:
-        with open(latency_file, 'a+') as f:
-            for i, latency in enumerate(latencies):
-                for l in latency:
-                    f.write('{},{}\n'.format(i, l))
+    if args.benchmark_thput:
+        benchmark_throughput(workers, tokens, args)
+    else:
+        benchmark_latency(workers, tokens, args)
 
     if args.dump is not None:
         events = ray.global_state.chrome_tracing_dump()
@@ -242,12 +238,59 @@ def main(args):
         cluster.shutdown()
 
 
-if __name__ == "__main__":
+def benchmark_throughput(workers, tokens, args):
+    i = 0
+    log.info("Starting warmup...")
+    warmup_end_ts = time.time() + args.thput_warmup_time
+    while time.time() < warmup_end_ts:
+        log.debug("Starting warmup iteration %d", i)
+        step(i, workers, tokens, args.num_tasks, args.task_duration, False)
+        i += 1
+    num_warmup_iters = i
+        
+    log.info("Starting measurement...")
+    measurement_end_ts = time.time() + args.thput_measurement_time
+    while time.time() < measurement_end_ts:
+        log.debug("Starting measurement iteration %d", i)
+        step(i, workers, tokens, args.num_tasks, args.task_duration, False)
+        i += 1
 
+    num_measurement_iters = i - num_warmup_iters
+    total_tokens = num_measurement_iters * args.num_workers
+    tokens_processed_per_sec = total_tokens / args.thput_measurement_time
+    log.info("Overall throughput: %s tokens/s", tokens_processed_per_sec)
+
+
+def benchmark_latency(workers, tokens, args):
+    if args.record_latency:
+        if args.latency_file is None:
+            latency_file = "latency-{}-workers-{}.txt".format(
+                len(workers),
+                str(datetime.datetime.now()))
+        else:
+            latency_file = args.latency_file
+        log.info("Logging latency to file %s", latency_file)
+
+    latencies = []
+    for i in range(args.num_iterations):
+        log.info("Starting iteration %d", i)
+        results = step(i, workers, tokens, args.num_tasks, args.task_duration)
+        latencies.append(results)
+    
+    # Write latency
+    if latency_file is not None:
+        with open(latency_file, 'a+') as f:
+            log.debug('writing to file')
+            for i, latency in enumerate(latencies):
+                for l in latency:
+                    f.write('{},{}\n'.format(i, l))
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Benchmarks.')
     parser.add_argument(
          '--num-workers',
-         default=3,
+         default=4,
          type=int,
          help='The number of workers to use.')
     parser.add_argument(
@@ -280,9 +323,27 @@ if __name__ == "__main__":
         action='store_true',
         help='Whether to record the latency')
     parser.add_argument(
+        '--benchmark-thput',
+        action='store_true',
+        help='Benchmark throughput instead of latency')
+    parser.add_argument(
+        '--thput-warmup-time',
+        default=30,
+        type=int,
+        help='Warmup time (s)')
+    parser.add_argument(
+        '--thput-measurement-time',
+        default=30,
+        type=int,
+        help='Throughput measurement time (s)')
+    parser.add_argument(
         '--latency-file',
         default=None,
         help='File to record the latency')
+    parser.add_argument(
+        '--throughput-file',
+        default=None,
+        help='File to record the throughput')
     parser.add_argument(
         '--gcs-delay-ms',
         default=-1,
@@ -292,6 +353,9 @@ if __name__ == "__main__":
         action='store_true')
     parser.add_argument(
         '--nondeterminism',
+        action='store_true')
+    parser.add_argument(
+        '--debug',
         action='store_true')
     args = parser.parse_args()
 
