@@ -17,10 +17,11 @@ namespace raylet {
 class Worker {
  public:
   /// A constructor that initializes a worker object.
-  Worker(pid_t pid, const Language &language,
+  Worker(const WorkerID &worker_id, pid_t pid, const Language &language,
          std::shared_ptr<LocalClientConnection> connection);
   /// A destructor responsible for freeing all worker state.
   ~Worker() {}
+  WorkerID WorkerId() const;
   void MarkDead();
   bool IsDead() const;
   void MarkBlocked();
@@ -54,6 +55,7 @@ class Worker {
   void AcquireTaskCpuResources(const ResourceIdSet &cpu_resources);
 
  private:
+  WorkerID worker_id_;
   /// The worker's PID.
   pid_t pid_;
   /// The language type of this worker.

@@ -237,6 +237,7 @@ void NodeManager::HandleDriverTableUpdate(
         // Mark the worker as dead so further messages from it are ignored
         // (except DisconnectClient).
         worker->MarkDead();
+        task_dependency_manager_.UnsubscribeWaitDependencies(worker->WorkerId());
         // Then kill the worker process.
         KillWorker(worker);
       }
@@ -797,7 +798,7 @@ void NodeManager::ProcessRegisterClientRequestMessage(
   auto message = flatbuffers::GetRoot<protocol::RegisterClientRequest>(message_data);
   client->SetClientID(from_flatbuf(*message->client_id()));
   auto worker =
-      std::make_shared<Worker>(message->worker_pid(), message->language(), client);
+      std::make_shared<Worker>(WorkerID::from_random(), message->worker_pid(), message->language(), client);
   if (message->is_worker()) {
     // Register the new worker.
     worker_pool_.RegisterWorker(std::move(worker));
@@ -923,11 +924,7 @@ void NodeManager::ProcessDisconnectClientMessage(
         // not safe to pass in the iterator directly.
         const TaskID task_id = *worker->GetBlockedTaskIds().begin();
         HandleTaskUnblocked(client, task_id);
-        // TODO: This will only unsubscribe from the currently executing task.
-        // We should also unsubscribe from previous tasks that have an active
-        // ray.wait. Otherwise, these ray.wait calls may never be satisfied
-        // (e.g., because the driver has exited).
-        RAY_CHECK(task_dependency_manager_.UnsubscribeAllDependencies(task_id));
+        task_dependency_manager_.UnsubscribeWaitDependencies(worker->WorkerId());
       }
     }
   }
@@ -1113,10 +1110,9 @@ void NodeManager::ProcessWaitRequestMessage(
           // The client is unblocked now because the wait call has returned.
           if (client_blocked && !suppress_reconstruction) {
             HandleTaskUnblocked(client, current_task_id);
-            if (request_once) {
-              for (const auto &object_id : required_object_ids) {
-                task_dependency_manager_.UnsubscribeWaitDependency(current_task_id, object_id);
-              }
+            std::shared_ptr<Worker> worker = worker_pool_.GetRegisteredWorker(client);
+            if (worker && request_once) {
+              task_dependency_manager_.UnsubscribeWaitDependencies(worker->WorkerId());
             }
           }
         } else {
@@ -1411,7 +1407,7 @@ void NodeManager::TreatTaskAsFailed(const Task &task, const ErrorType &error_typ
   // here. However, we don't know at this point if the task was in the WAITING
   // or READY queue before, in which case we would not have been subscribed to
   // its dependencies.
-  task_dependency_manager_.UnsubscribeAllDependencies(spec.TaskId());
+  task_dependency_manager_.UnsubscribeGetDependencies(spec.TaskId());
 }
 
 void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
@@ -1658,9 +1654,8 @@ void NodeManager::_SubmitTask(const Task &task, const Lineage &uncommitted_linea
       // Once the actor has been created and this method removed from the
       // waiting queue, the caller must make the corresponding call to
       // UnsubscribeDependencies.
-      task_dependency_manager_.SubscribeDependencies(spec.TaskId(),
-                                                     {actor_creation_dummy_object},
-                                                     /*ray_get=*/true);
+      task_dependency_manager_.SubscribeGetDependencies(spec.TaskId(),
+                                                     {actor_creation_dummy_object});
       // Mark the task as pending. It will be canceled once we discover the
       // actor's location and either execute the task ourselves or forward it
       // to another node.
@@ -1749,11 +1744,17 @@ void NodeManager::HandleTaskBlocked(const std::shared_ptr<LocalClientConnection>
     local_queues_.AddBlockedTaskId(current_task_id);
   }
 
-  // Subscribe to the objects required by the ray.get. These objects will
-  // be fetched and/or reconstructed as necessary, until the objects become
-  // local or are unsubscribed.
-  task_dependency_manager_.SubscribeDependencies(current_task_id, required_object_ids,
-                                                 ray_get);
+
+  // Subscribe to the objects required by the task. These objects will be
+  // fetched and/or reconstructed as necessary, until the objects become local
+  // or are unsubscribed.
+  if (ray_get) {
+    task_dependency_manager_.SubscribeGetDependencies(current_task_id,
+                                                      required_object_ids);
+  } else {
+    task_dependency_manager_.SubscribeWaitDependencies(worker->WorkerId(),
+                                                       required_object_ids);
+  }
 }
 
 void NodeManager::HandleTaskUnblocked(
@@ -1824,17 +1825,15 @@ void NodeManager::EnqueuePlaceableTask(const Task &task, bool push) {
   // TODO(atumanov): add task lookup hashmap and change EnqueuePlaceableTask to take
   // a vector of TaskIDs. Trigger MoveTask internally.
   // Subscribe to the task's dependencies.
-  static_cast<void>(task_dependency_manager_.SubscribeDependencies(
+  static_cast<void>(task_dependency_manager_.SubscribeGetDependencies(
       task.GetTaskSpecification().TaskId(), task.GetImmutableDependencies(),
-      /*ray_get=*/true,
       /*delay_pull=*/push));
   // Assuming execution dependencies are only set for actor tasks, it is safe
   // to request fast reconstruction. This is because actor tasks are only
   // allowed to execute on the node where the actor lives.
-  bool args_ready = task_dependency_manager_.SubscribeDependencies(
+  bool args_ready = task_dependency_manager_.SubscribeGetDependencies(
       task.GetTaskSpecification().TaskId(),
       task.GetTaskExecutionSpec().ExecutionDependencies(),
-      /*ray_get=*/true,
       /*delay_pull=*/true,
       /*fast_reconstruction=*/true);
   // Enqueue the task. If all dependencies are available, then the task is queued
@@ -2243,6 +2242,10 @@ void NodeManager::FinishAssignedTasks(Worker &worker, const TaskID &last_exec_ta
     // If this was an actor or actor creation task, handle the actor's new state.
     if (is_actor_batch || is_actor_creation_task) {
       FinishAssignedActorTask(worker, task);
+    } else {
+      // If this was a non-actor task, then cancel any ray.wait calls that were
+      // made during the task execution.
+      task_dependency_manager_.UnsubscribeWaitDependencies(worker.WorkerId());
     }
     if (!task.GetTaskSpecification().IsActorCreationTask()) {
 			// Notify the task dependency manager that this task has finished execution.
@@ -2813,8 +2816,8 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
     uncommitted_lineage.SetEntry(task, GcsStatus::NONE);
   }
 
-  auto uncommitted_lineage_size = uncommitted_lineage.GetEntries().size() - 1;
-  RAY_LOG(INFO) << "UNCOMMITTED_LINEAGE:" << uncommitted_lineage_size;
+  //auto uncommitted_lineage_size = uncommitted_lineage.GetEntries().size() - 1;
+  //RAY_LOG(INFO) << "UNCOMMITTED_LINEAGE:" << uncommitted_lineage_size;
 
   auto entry = uncommitted_lineage.GetEntryMutable(task_id);
   Task &lineage_cache_entry_task = entry->TaskDataMutable();
