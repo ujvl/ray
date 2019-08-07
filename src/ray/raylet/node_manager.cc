@@ -1078,6 +1078,7 @@ void NodeManager::ProcessWaitRequestMessage(
   for (auto const &object_id : object_ids) {
     bool remote = !task_dependency_manager_.CheckObjectLocal(object_id);
     if (remote) {
+      RAY_CHECK_OK(object_manager_.Pull(object_id));
       // Add any missing objects to the list to subscribe to in the task
       // dependency manager. These objects will be pulled from remote node
       // managers and reconstructed if necessary.

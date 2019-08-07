@@ -28,7 +28,7 @@ FAILURE_ARG=""
 if [[ $CHECKPOINT_INTERVAL -ne 0 ]]
 then
     latency_prefix=failure-$latency_prefix
-    NUM_ITERATIONS=$(( $CHECKPOINT_INTERVAL * 3 ))
+    NUM_ITERATIONS=$(( $CHECKPOINT_INTERVAL * 5 / 2 ))
     FAILURE_ARG="--test-failure --checkpoint-interval $CHECKPOINT_INTERVAL --fail-at $(( $CHECKPOINT_INTERVAL + $CHECKPOINT_INTERVAL * 9 / 10))"
 fi
 
@@ -40,7 +40,7 @@ then
 fi
 latency_file=$latency_prefix`date +%y-%m-%d-%H-%M-%S`.txt
 
-bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES $OBJECT_STORE_MEMORY_GB $PEG
+bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES $OBJECT_STORE_MEMORY_GB $PEG $OBJECT_MANAGER_THREADS
 
 echo "Logging to file $latency_file..."
 cmd="python $DIR/../allreduce.py --num-workers $NUM_RAYLETS --size $NUM_FLOAT32 --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --object-store-memory-gb $OBJECT_STORE_MEMORY_GB --latency-file $latency_file $FAILURE_ARG"

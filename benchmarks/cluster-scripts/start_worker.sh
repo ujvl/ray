@@ -46,7 +46,7 @@ fi
 
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
-    --plasma-eviction-fraction 20 \
+    --plasma-eviction-fraction 100 \
     $hugepages_config \
     --num-cpus 4 \
     --internal-config='{

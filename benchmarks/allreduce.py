@@ -285,6 +285,7 @@ class RingAllReduceWorker(object):
             self.finish(self.out_oids, self.final_oid, self.done_oid)
             if self.checkpoint_interval > 0:
                 self.log.append((self.out_oids, self.final_oid, self.done_oid))
+                debug("GETTING", self.out_oids)
                 self.pinned.append(ray.get(self.out_oids))
             else:
                 self.log = [(self.out_oids, self.final_oid, self.done_oid)]
@@ -414,7 +415,7 @@ class CheckpointableRingAllReduceWorker(RingAllReduceWorker,
         for handle in self.workers.values():
             handle.reset_handle_id()
 
-        batch_size = 10
+        batch_size = 5
         for j in range(0, len(self.log), batch_size):
             batch = self.log[j:j+batch_size]
             debug("RESTORE batch", j, len(batch))

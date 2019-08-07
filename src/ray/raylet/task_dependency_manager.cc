@@ -103,6 +103,9 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectLocal(
         // to run.
         if (task_entry.num_missing_get_dependencies == 0) {
           ready_task_ids.push_back(dependent_task_id);
+          RAY_LOG(DEBUG) << "Task " << dependent_task_id << " now ready to run";
+        } else {
+          RAY_LOG(DEBUG) << "Task " << dependent_task_id << " still has dependencies " << task_entry.num_missing_get_dependencies;
         }
       }
       // Remove the dependency from all workers that called `ray.wait` on the
@@ -134,6 +137,7 @@ std::vector<TaskID> TaskDependencyManager::HandleObjectLocal(
 
 void TaskDependencyManager::HandleTaskResubmitted(
     const ray::TaskID &task_id) {
+  RAY_LOG(DEBUG) << "Task " << task_id << " resubmitted";
   auto creating_task_entry = required_tasks_.find(task_id);
   if (creating_task_entry == required_tasks_.end()) {
     return;
@@ -156,7 +160,7 @@ void TaskDependencyManager::HandleTaskResubmitted(
     if (required_object_it->second.Empty()) {
       required_object_it = creating_task_entry->second.required_objects.erase(required_object_it);
     } else {
-      required_object_it = creating_task_entry->second.required_objects.erase(required_object_it)++;
+      required_object_it++;
     }
   }
   if (creating_task_entry->second.required_objects.empty()) {
