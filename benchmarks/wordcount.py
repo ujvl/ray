@@ -24,7 +24,7 @@ from cython_examples import process_batch_reducer3 as cython_process_batch_reduc
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 SENTENCE_LENGTH = 100
 
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 
 WORDS = {
         }
@@ -790,7 +790,7 @@ def create_local_node(cluster, i, node_kwargs):
     return node, resource
 
 # Always on the head node.
-@ray.remote(resources={"Node_0": 1})
+@ray.remote(resources={"HEAD": 1})
 class CheckpointTracker(object):
     def __init__(self, sink_keys):
         self.sink_keys = sink_keys
@@ -916,7 +916,7 @@ if __name__ == '__main__':
         '--target-throughput',
         type=int,
         default=-1,
-        help='')
+        help='Target aggregate throughput across all nodes, in records/s.')
     parser.add_argument(
         '--gcs-delay-ms',
         default=0,
@@ -954,7 +954,7 @@ if __name__ == '__main__':
             "object_store_memory": 10**9,
             "_internal_config": internal_config,
             "resources": {
-                "Node_0": 100,
+                "HEAD": 100,
                 }
         }
 
@@ -988,7 +988,7 @@ if __name__ == '__main__':
         nodes = ray.global_state.client_table()
         for node in nodes:
             for resource in node['Resources']:
-                if 'Node' in resource and resource != 'Node_0':
+                if 'Node' in resource:
                     node_resources.append(resource)
         num_mapper_nodes = args.num_mappers // args.num_mappers_per_node
         num_reducer_nodes = args.num_reducers // args.num_reducers_per_node
@@ -1016,7 +1016,7 @@ if __name__ == '__main__':
         backpressure = False
         # No checkpoint set. Checkpoint every 30s.
         if checkpoint_interval == 0:
-            checkpoint_interval = args.target_throughput // 30
+            checkpoint_interval = args.target_throughput // len(source_keys) * 30
     if checkpoint_interval == 0:
         checkpoint_interval = 100000  # Default checkpoint interval is 100k records/source.
     print("Using a checkpoint interval of", checkpoint_interval, "records")
@@ -1140,7 +1140,14 @@ if __name__ == '__main__':
                     "/home/ubuntu/ray/benchmarks/cluster-scripts/kill_worker.sh",
                     head_ip,
                     worker_ip,
+                    '0',  # use_gcs_only, 0 for the lineage stash.
                     str(args.gcs_delay_ms),
+                    '1',  # log_nondeterminism. 1 means nondeterministic execution.
+                    '-1',  # max_failures.
+                    '0',  # Object store memory for hugepages.
+                    '100',  # Object store eviction fraction.
+                    '0',  # Do not peg a process to keep raylet awake.
+                    '1',  # 1 object manager thread.
                     node_resource,
                     ]
             subprocess.Popen(command)
