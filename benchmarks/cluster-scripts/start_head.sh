@@ -41,7 +41,6 @@ ray start --head \
     "use_gcs_only": '$USE_GCS_ONLY',
     "lineage_stash_max_failures": '$MAX_FAILURES',
     "log_nondeterminism": '$NONDETERMINISM',
-    "lineage_stash_max_failures": -1,
     "num_heartbeats_timeout": 20,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000,

@@ -6,10 +6,11 @@ GCS_DELAY_MS=$3
 NONDETERMINISM=$4
 MAX_FAILURES=$5
 OBJECT_STORE_MEMORY_GB=$6
-PEG=$7
-OBJECT_MANAGER_THREADS=$8
-NODE_RESOURCE=${9:-'Node'$RANDOM}
-SLEEP_TIME=${10:-$(( $RANDOM % 5 ))}
+OBJECT_STORE_EVICTION=$7
+PEG=$8
+OBJECT_MANAGER_THREADS=$9
+NODE_RESOURCE=${10:-'Node'$RANDOM}
+SLEEP_TIME=${11:-$(( $RANDOM % 5 ))}
 
 #source activate tensorflow_p36
 #export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
@@ -46,7 +47,7 @@ fi
 
 ray start --redis-address=$HEAD_IP:6379 \
     --resources='{"'$NODE_RESOURCE'": 100}' \
-    --plasma-eviction-fraction 30 \
+    --plasma-eviction-fraction $OBJECT_STORE_EVICTION \
     $hugepages_config \
     --num-cpus 4 \
     --internal-config='{

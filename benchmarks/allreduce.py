@@ -660,6 +660,7 @@ def main(redis_address, test_single_node, num_workers, data_size,
                     '0',  # log_nondeterminism. 0 means deterministic execution.
                     '1',  # max_failures. 1 means forward lineage once.
                     str(args.object_store_memory_gb),
+                    '30',  # Object store eviction fraction.
                     '0',  # Do not peg a process to keep raylet awake.
                     '4',  # Use 4 object manager threads for sending and receiving.
                     node_resource,

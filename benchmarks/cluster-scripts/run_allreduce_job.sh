@@ -16,6 +16,7 @@ NUM_SHARDS=1
 NONDETERMINISM=0
 MAX_FAILURES=1
 OBJECT_STORE_MEMORY_GB=17
+OBJECT_STORE_EVICTION=30
 PEG=0
 OBJECT_MANAGER_THREADS=4
 
@@ -40,7 +41,17 @@ then
 fi
 latency_file=$latency_prefix`date +%y-%m-%d-%H-%M-%S`.txt
 
-bash -x $DIR/start_cluster.sh $NUM_RAYLETS $NUM_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES $OBJECT_STORE_MEMORY_GB $PEG $OBJECT_MANAGER_THREADS
+bash -x $DIR/start_cluster.sh \
+    $NUM_RAYLETS \
+    $NUM_SHARDS \
+    $USE_GCS_ONLY \
+    $GCS_DELAY_MS \
+    $NONDETERMINISM \
+    $MAX_FAILURES \
+    $OBJECT_STORE_MEMORY_GB \
+    $OBJECT_STORE_EVICTION \
+    $PEG \
+    $OBJECT_MANAGER_THREADS
 
 echo "Logging to file $latency_file..."
 cmd="python $DIR/../allreduce.py --num-workers $NUM_RAYLETS --size $NUM_FLOAT32 --num-iterations $NUM_ITERATIONS --redis-address $HEAD_IP:6379 --object-store-memory-gb $OBJECT_STORE_MEMORY_GB --latency-file $latency_file $FAILURE_ARG"

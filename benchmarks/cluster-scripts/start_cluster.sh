@@ -11,13 +11,15 @@ MAX_FAILURES=${6:-1}
 # If this is more than 0, then hugepages should be used. Otherwise, hugepages
 # will be disabled and the default plasma capacity will be used.
 OBJECT_STORE_MEMORY_GB=${7:-0}
-PEG=${8:-0}
-OBJECT_MANAGER_THREADS=${9:-1}
+# When an object does not fit in object store, evict max(object size, total capacity / OBJECT_STORE_EVICTION).
+OBJECT_STORE_EVICTION=${8:-20}
+PEG=${9:-0}
+OBJECT_MANAGER_THREADS=${10:-1}
 
 HEAD_IP=$(head -n 1 ~/workers.txt)
 WORKER_IPS=$(tail -n $NUM_RAYLETS ~/workers.txt)
 
-if [[ $# -le 9 && $# -ge 1 ]]
+if [[ $# -le 10 && $# -ge 1 ]]
 then
 	echo "Starting cluster with $NUM_RAYLETS raylets, $NUM_REDIS_SHARDS Redis shards..."
 	echo "Testing with GCS: $USE_GCS_ONLY, GCS delay: $GCS_DELAY_MS, nondeterminism: $NONDETERMINISM"
@@ -60,7 +62,7 @@ bash $DIR/start_head.sh $NUM_REDIS_SHARDS $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERM
 echo "Done starting head"
 
 echo "Starting workers $WORKER_IPS with GCS delay $GCS_DELAY_MS and $NUM_RAYLETS raylets..."
-parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" -I 'bash -s - '$HEAD_IP $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES $OBJECT_STORE_MEMORY_GB $PEG $OBJECT_MANAGER_THREADS < $DIR/start_worker.sh
+parallel-ssh -t 0 -i -P -H "$WORKER_IPS" -x "-oStrictHostKeyChecking=no -i /home/ubuntu/ray_bootstrap_key.pem" -I 'bash -s - '$HEAD_IP $USE_GCS_ONLY $GCS_DELAY_MS $NONDETERMINISM $MAX_FAILURES $OBJECT_STORE_MEMORY_GB $OBJECT_STORE_EVICTION $PEG $OBJECT_MANAGER_THREADS < $DIR/start_worker.sh
 echo "Done starting workers"
 
 #sleep 10
