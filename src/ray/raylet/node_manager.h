@@ -187,11 +187,11 @@ class NodeManager {
   ///
   /// \param task The task in question.
   /// \return true, if tasks was assigned to a worker, false otherwise.
-  bool AssignTask(Task &task);
+  bool AssignTask(const Task &task);
   void AssignTasksToWorker(const std::vector<Task> &tasks, std::shared_ptr<Worker> worker);
   bool AssignActorTaskBatch(const ActorID &actor_id,
                             const ResourceSet &resource_set,
-                            std::vector<Task> &tasks);
+                            const std::vector<Task> &tasks);
   void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback);
   /// Handle a worker finishing its assigned task.
   ///
@@ -561,6 +561,8 @@ class NodeManager {
   std::list<std::pair<TaskID, bool>> gcs_submit_task_queue_;
   std::unordered_map<TaskID, bool> gcs_assign_tasks_committed_;
   std::list<std::pair<Task, std::shared_ptr<Worker>>> gcs_assign_task_queue_;
+  // Buffer of AssignTask messages that need to be sent to workers.
+  std::unordered_map<WorkerID, std::pair<const std::vector<uint8_t>, size_t>> gcs_assign_buffer_;
 };
 
 }  // namespace raylet

@@ -683,8 +683,8 @@ void NodeManager::DispatchTasks(
       }
     }
     // Assign task batches.
-    for (auto &batch_it : task_batches) {
-      auto &task_batch = batch_it.second;
+    for (const auto &batch_it : task_batches) {
+      const auto &task_batch = batch_it.second;
       if (task_batch.size() == 1) {
         if (AssignTask(task_batch.front())) {
           removed_task_ids.insert(task_batch.front().GetTaskSpecification().TaskId());
@@ -1475,6 +1475,7 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
     return;
   }
 
+  // TODO: Don't flush the task again on resubmission?
   if (use_gcs_only_) {
     if (!forwarded) {
       gcs::raylet::TaskTable::WriteCallback task_callback = [this](
@@ -1894,41 +1895,164 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
                                               fbb.CreateVector(resource_id_set_flatbuf));
   fbb.Finish(message);
 
-  worker->Connection()->WriteMessageAsync(
-      static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
-      fbb.GetBufferPointer(), [this, worker, task_ids, tasks](ray::Status status) {
-        if (status.ok()) {
-          // We successfully assigned the task to the worker.
-          const TaskSpecification &first_spec = tasks.front().GetTaskSpecification();
-          worker->AssignTaskIds(task_ids);
-          worker->AssignDriverId(first_spec.DriverId());
-
-          // Mark the task as running.
-          // (See design_docs/task_states.rst for the state transition diagram.)
-          std::unordered_set<TaskID> task_id_set;
-          for (const auto &task_id : task_ids) {
-            // Notify the task dependency manager that we no longer need this task's
-            // object dependencies.
-            RAY_CHECK(task_dependency_manager_.UnsubscribeGetDependencies(task_id));
-            task_id_set.insert(task_id);
-          }
-          local_queues_.RemoveTasks(task_id_set);
-          local_queues_.QueueTasks(tasks, TaskState::RUNNING);
-        } else {
-          RAY_LOG(WARNING) << "Failed to send task to worker, disconnecting client";
-          // We failed to send the task to the worker, so disconnect the worker.
-          ProcessDisconnectClientMessage(worker->Connection());
-          // Queue this task for future assignment. We need to do this since
-          // DispatchTasks() removed it from the ready queue. The task will be
-          // assigned to a worker once one becomes available.
-          // (See design_docs/task_states.rst for the state transition diagram.)
-          local_queues_.QueueTasks(tasks, TaskState::READY);
-          DispatchTasks(MakeTasksWithResources(tasks));
+  const TaskSpecification &first_spec = tasks.front().GetTaskSpecification();
+  std::vector<Task> assigned_tasks = tasks;
+  if (first_spec.IsActorTask()) {
+    auto actor_entry = actor_registry_.find(first_spec.ActorId());
+    auto execution_dependency = actor_entry->second.GetExecutionDependency();
+    int64_t num_tasks_executed = actor_entry->second.NumTasksExecuted();
+    for (auto &assigned_task : assigned_tasks) {
+      RAY_LOG(DEBUG) << "Assigning task " << assigned_task.GetTaskSpecification().TaskId()
+                     << " to worker with pid " << worker->Pid()
+                     << " in a batch of size " << tasks.size();
+      // If the task was an actor task, then record this execution to
+      // guarantee consistency in the case of reconstruction.
+      auto spec = assigned_task.GetTaskSpecification();
+      // Actor tasks require extra accounting to track the actor's state.
+      if (spec.IsActorTask()) {
+        // Process any new actor handles that were created since the
+        // previous task on this handle was executed. The first task
+        // submitted on a new actor handle will depend on the dummy object
+        // returned by the previous task, so the dependency will not be
+        // released until this first task is submitted.
+        for (auto &new_handle_id : spec.NewActorHandles()) {
+          // Get the execution dependency for the first task submitted on the new
+          // actor handle. Since the new actor handle was created after this task
+          // began and before this task finished, it must have the same execution
+          // dependency.
+          const auto &execution_dependencies =
+              assigned_task.GetTaskExecutionSpec().ExecutionDependencies();
+          // TODO(swang): We expect this task to have exactly 1 execution dependency,
+          // the dummy object returned by the previous actor task. However, this
+          // leaks information about the TaskExecutionSpecification implementation.
+          RAY_CHECK(execution_dependencies.size() == 1);
+          const ObjectID &execution_dependency = execution_dependencies.front();
+          // Add the new handle and give it a reference to the finished task's
+          // execution dependency.
+          actor_entry->second.AddHandle(new_handle_id, execution_dependency);
         }
-      });
+
+        // The execution dependency is initialized to the actor creation task's
+        // return value, and is subsequently updated to the assigned tasks'
+        // return values, so it should never be nil.
+        RAY_CHECK(!execution_dependency.is_nil());
+        // Update the task's execution dependencies to reflect the actual
+        // execution order, to support deterministic reconstruction.
+        // NOTE(swang): The update of an actor task's execution dependencies is
+        // performed asynchronously. This means that if this node manager dies,
+        // we may lose updates that are in flight to the task table. We only
+        // guarantee deterministic reconstruction ordering for tasks whose
+        // updates are reflected in the task table.
+        // (SetExecutionDependencies takes a non-const so copy task in a
+        //  on-const variable.)
+        assigned_task.SetExecutionDependencies({execution_dependency});
+        execution_dependency = spec.ActorDummyObject();
+        num_tasks_executed++;
+      } else {
+        RAY_CHECK(spec.NewActorHandles().empty());
+      }
+    }
+  }
+
+  for (auto &assigned_task : assigned_tasks) {
+    assigned_task.IncrementNumExecutions();
+  }
+
+  // Callback for after the tasks have been assigned to the worker.
+  const auto assign_callback = [this, worker, task_ids, assigned_tasks](ray::Status status) {
+    if (status.ok()) {
+      // We successfully assigned the task to the worker.
+      const TaskSpecification &first_spec = assigned_tasks.front().GetTaskSpecification();
+      worker->AssignTaskIds(task_ids);
+      worker->AssignDriverId(first_spec.DriverId());
+
+      // Mark the task as running.
+      // (See design_docs/task_states.rst for the state transition diagram.)
+      std::unordered_set<TaskID> task_id_set;
+      for (const auto &task_id : task_ids) {
+        // Notify the task dependency manager that we no longer need this task's
+        // object dependencies.
+        RAY_CHECK(task_dependency_manager_.UnsubscribeGetDependencies(task_id));
+        task_id_set.insert(task_id);
+      }
+      local_queues_.RemoveTasks(task_id_set);
+      local_queues_.QueueTasks(assigned_tasks, TaskState::RUNNING);
+    } else {
+      RAY_LOG(WARNING) << "Failed to send task to worker, disconnecting client";
+      // We failed to send the task to the worker, so disconnect the worker.
+      ProcessDisconnectClientMessage(worker->Connection());
+      // Queue this task for future assignment. We need to do this since
+      // DispatchTasks() removed it from the ready queue. The task will be
+      // assigned to a worker once one becomes available.
+      // (See design_docs/task_states.rst for the state transition diagram.)
+      local_queues_.QueueTasks(assigned_tasks, TaskState::READY);
+      DispatchTasks(MakeTasksWithResources(assigned_tasks));
+    }
+  };
+
+  if (use_gcs_only_) {
+    if (RayConfig::instance().log_nondeterminism()) {
+      // Record the message to be sent to the worker and the number of tasks
+      // that must be logged to the GCS before we can send the message.
+      const std::vector<uint8_t> message(fbb.GetBufferPointer(), fbb.GetBufferPointer() + fbb.GetSize());
+      auto inserted = gcs_assign_buffer_.insert({worker->WorkerId(), {message, tasks.size()}});
+      RAY_CHECK(inserted.second);
+      // Log the tasks' nondeterministic execution order before executing the
+      // tasks.
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this, assign_callback](
+          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
+        gcs_assign_tasks_committed_[id] = true;
+        // Loop through the tasks that we have flushed so far. Pop the longest
+        // prefix of tasks in the queue that have been committed.
+        while (!gcs_assign_task_queue_.empty()) {
+          const Task &task = gcs_assign_task_queue_.front().first;
+          const TaskID &task_id = task.GetTaskSpecification().TaskId();
+          if (!gcs_assign_tasks_committed_[task_id]) {
+            break;
+          } 
+          std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
+          const auto it = gcs_assign_buffer_.find(worker->WorkerId());
+          RAY_CHECK(it != gcs_assign_buffer_.end());
+          it->second.second--;
+          const auto &message = it->second.first;
+          if (it->second.second == 0) {
+            worker->Connection()->WriteMessageAsync(
+                static_cast<int64_t>(protocol::MessageType::ExecuteTask), message.size(),
+                message.data(), assign_callback);
+            gcs_assign_buffer_.erase(it);
+          }
+          gcs_assign_task_queue_.pop_front();
+          gcs_assign_tasks_committed_.erase(task_id);
+        }
+      };
+      for (const auto &assigned_task : assigned_tasks) {
+        gcs_assign_tasks_committed_[assigned_task.GetTaskSpecification().TaskId()] = false;
+        // Assign the original task to the worker, but log the updated task.
+        gcs_assign_task_queue_.push_back({assigned_task, worker});
+        lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
+      }
+    } else {
+      // The task execution order is deterministic, so assign the tasks
+      // immediately.
+      worker->Connection()->WriteMessageAsync(
+          static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
+          fbb.GetBufferPointer(), assign_callback);
+    }
+  } else {
+    if (RayConfig::instance().log_nondeterminism()) {
+      // Log the tasks' nondeterministic execution order asynchronously.
+      for (const auto &assigned_task : assigned_tasks) {
+        lineage_cache_.AddReadyTask(assigned_task);
+      }
+    }
+    // Assign the original tasks to the worker.
+    worker->Connection()->WriteMessageAsync(
+        static_cast<int64_t>(protocol::MessageType::ExecuteTask), fbb.GetSize(),
+        fbb.GetBufferPointer(), assign_callback);
+  }
 }
 
-bool NodeManager::AssignTask(Task &task) {
+bool NodeManager::AssignTask(const Task &task) {
   const TaskSpecification &spec = task.GetTaskSpecification();
 
   // If this is an actor task, check that the new task has the correct counter.
@@ -1985,101 +2109,13 @@ bool NodeManager::AssignTask(Task &task) {
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
-
-  // Make a copy of the task so that we can update it.
-  Task assigned_task(task);
-  if (spec.IsActorTask()) {
-    // Must log the order of execution for actor tasks that are running for
-    // the first time.
-    const auto actor_entry = actor_registry_.find(spec.ActorId());
-    RAY_CHECK(actor_entry != actor_registry_.end());
-    if (spec.IsActorTask()) {
-      // Process any new actor handles that were created since the
-      // previous task on this handle was executed. The first task
-      // submitted on a new actor handle will depend on the dummy object
-      // returned by the previous task, so the dependency will not be
-      // released until this first task is submitted.
-      for (auto &new_handle_id : spec.NewActorHandles()) {
-        // Get the execution dependency for the first task submitted on the new
-        // actor handle. Since the new actor handle was created after this task
-        // began and before this task finished, it must have the same execution
-        // dependency.
-        const auto &execution_dependencies =
-            task.GetTaskExecutionSpec().ExecutionDependencies();
-        // TODO(swang): We expect this task to have exactly 1 execution dependency,
-        // the dummy object returned by the previous actor task. However, this
-        // leaks information about the TaskExecutionSpecification implementation.
-        RAY_CHECK(execution_dependencies.size() == 1);
-        const ObjectID &execution_dependency = execution_dependencies.front();
-        // Add the new handle and give it a reference to the finished task's
-        // execution dependency.
-        actor_entry->second.AddHandle(new_handle_id, execution_dependency);
-      }
-    }
-
-    // If the task was an actor task, then record this execution to
-    // guarantee consistency in the case of reconstruction.
-    auto execution_dependency = actor_entry->second.GetExecutionDependency();
-    // The execution dependency is initialized to the actor creation task's
-    // return value, and is subsequently updated to the assigned tasks'
-    // return values, so it should never be nil.
-    RAY_CHECK(!execution_dependency.is_nil());
-    // Update the task's execution dependencies to reflect the actual
-    // execution order, to support deterministic reconstruction.
-    // NOTE(swang): The update of an actor task's execution dependencies is
-    // performed asynchronously. This means that if this node manager dies,
-    // we may lose updates that are in flight to the task table. We only
-    // guarantee deterministic reconstruction ordering for tasks whose
-    // updates are reflected in the task table.
-    // (SetExecutionDependencies takes a non-const so copy task in a
-    //  on-const variable.)
-    assigned_task.SetExecutionDependencies({execution_dependency});
-    if (task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
-      assigned_task.IncrementNumExecutions();
-    }
-  }
-
-  if (use_gcs_only_) {
-    if (RayConfig::instance().log_nondeterminism()) {
-      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
-          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-        gcs_assign_tasks_committed_[id] = true;
-        // Loop through the tasks that we have flushed so far. Pop the longest
-        // prefix of tasks in the queue that have been committed, and assign
-        // them.
-        while (!gcs_assign_task_queue_.empty()) {
-          const Task &task = gcs_assign_task_queue_.front().first;
-          const TaskID &task_id = task.GetTaskSpecification().TaskId();
-          if (gcs_assign_tasks_committed_[task_id]) {
-            std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
-            AssignTasksToWorker({task}, worker);
-            gcs_assign_task_queue_.pop_front();
-            gcs_assign_tasks_committed_.erase(task_id);
-          } else {
-            break;
-          }
-        }
-      };
-      gcs_assign_tasks_committed_[spec.TaskId()] = false;
-      gcs_assign_task_queue_.push_back({assigned_task, worker});
-
-      lineage_cache_.FlushTask(assigned_task, task_callback, gcs_delay_ms_);
-    } else {
-      AssignTasksToWorker({assigned_task}, worker);
-    }
-  } else {
-    if (RayConfig::instance().log_nondeterminism()) {
-      // We started running the task, so the task is ready to write to GCS.
-      lineage_cache_.AddReadyTask(assigned_task);
-    }
-    AssignTasksToWorker({assigned_task}, worker);
-  }
+  AssignTasksToWorker({task}, worker);
   return true;
 }
 
 bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
                                        const ResourceSet &resource_set,
-                                       std::vector<Task> &tasks) {
+                                       const std::vector<Task> &tasks) {
   RAY_CHECK(tasks.size() > 0);
   RAY_CHECK(!actor_id.is_nil());
   const TaskSpecification &first_spec = tasks.front().GetTaskSpecification();
@@ -2103,123 +2139,16 @@ bool NodeManager::AssignActorTaskBatch(const ActorID &actor_id,
     return false;
   }
 
-  if (first_spec.IsActorTask()) {
-    auto actor_entry = actor_registry_.find(first_spec.ActorId());
-    auto execution_dependency = actor_entry->second.GetExecutionDependency();
-    for (auto &task : tasks) {
-      RAY_LOG(DEBUG) << "Assigning task " << task.GetTaskSpecification().TaskId()
-                     << " to worker with pid " << worker->Pid()
-                     << " in a batch of size " << tasks.size();
-      // If the task was an actor task, then record this execution to
-      // guarantee consistency in the case of reconstruction.
-      auto spec = task.GetTaskSpecification();
-      // Actor tasks require extra accounting to track the actor's state.
-      if (spec.IsActorTask()) {
-        // Process any new actor handles that were created since the
-        // previous task on this handle was executed. The first task
-        // submitted on a new actor handle will depend on the dummy object
-        // returned by the previous task, so the dependency will not be
-        // released until this first task is submitted.
-        for (auto &new_handle_id : spec.NewActorHandles()) {
-          // Get the execution dependency for the first task submitted on the new
-          // actor handle. Since the new actor handle was created after this task
-          // began and before this task finished, it must have the same execution
-          // dependency.
-          const auto &execution_dependencies =
-              task.GetTaskExecutionSpec().ExecutionDependencies();
-          // TODO(swang): We expect this task to have exactly 1 execution dependency,
-          // the dummy object returned by the previous actor task. However, this
-          // leaks information about the TaskExecutionSpecification implementation.
-          RAY_CHECK(execution_dependencies.size() == 1);
-          const ObjectID &execution_dependency = execution_dependencies.front();
-          // Add the new handle and give it a reference to the finished task's
-          // execution dependency.
-          actor_entry->second.AddHandle(new_handle_id, execution_dependency);
-        }
-
-        // The execution dependency is initialized to the actor creation task's
-        // return value, and is subsequently updated to the assigned tasks'
-        // return values, so it should never be nil.
-        RAY_CHECK(!execution_dependency.is_nil());
-        // Update the task's execution dependencies to reflect the actual
-        // execution order, to support deterministic reconstruction.
-        // NOTE(swang): The update of an actor task's execution dependencies is
-        // performed asynchronously. This means that if this node manager dies,
-        // we may lose updates that are in flight to the task table. We only
-        // guarantee deterministic reconstruction ordering for tasks whose
-        // updates are reflected in the task table.
-        // (SetExecutionDependencies takes a non-const so copy task in a
-        //  on-const variable.)
-        task.SetExecutionDependencies({execution_dependency});
-        if (task.GetTaskExecutionSpec().Version() == 0 && RayConfig::instance().log_nondeterminism()) {
-          task.IncrementNumExecutions();
-        }
-        execution_dependency = spec.ActorDummyObject();
-      } else {
-        RAY_CHECK(spec.NewActorHandles().empty());
-      }
-    }
-  }
-
   // Resource accounting: acquire resources only once for the assigned task batch.
   auto acquired_resources = local_available_resources_.Acquire(resource_set);
   const auto &my_client_id = gcs_client_->client_table().GetLocalClientId();
   RAY_CHECK(cluster_resource_map_[my_client_id].Acquire(resource_set));
   worker->SetTaskResourceIds(acquired_resources);
 
-  if (use_gcs_only_) {
-    if (RayConfig::instance().log_nondeterminism()) {
-      // Log the tasks' nondeterministic execution order before executing the
-      // tasks.
-      auto batch = std::make_shared<std::vector<Task>>();
-      const auto num_tasks = tasks.size();
-      gcs::raylet::TaskTable::WriteCallback task_callback = [this, batch, num_tasks](
-          ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
-        gcs_assign_tasks_committed_[id] = true;
-        // Loop through the tasks that we have flushed so far. Pop the longest
-        // prefix of tasks in the queue that have been committed, and assign
-        // them.
-        while (!gcs_assign_task_queue_.empty()) {
-          const Task &task = gcs_assign_task_queue_.front().first;
-          const TaskID &task_id = task.GetTaskSpecification().TaskId();
-          if (gcs_assign_tasks_committed_[task_id]) {
-            std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
-            batch->push_back(task);
-            gcs_assign_task_queue_.pop_front();
-            gcs_assign_tasks_committed_.erase(task_id);
-
-            // All tasks in the batch have been logged. Execute the tasks.
-            if (batch->size() == num_tasks) {
-              AssignTasksToWorker(*batch, worker);
-            }
-          } else {
-            break;
-          }
-        }
-      };
-      for (const auto &task : tasks) {
-        gcs_assign_tasks_committed_[task.GetTaskSpecification().TaskId()] = false;
-        gcs_assign_task_queue_.push_back({task, worker});
-        lineage_cache_.FlushTask(task, task_callback, gcs_delay_ms_);
-      }
-    } else {
-      // The task execution order is deterministic, so assign the tasks
-      // immediately.
-      AssignTasksToWorker(tasks, worker);
-    }
-  } else {
-    if (RayConfig::instance().log_nondeterminism()) {
-      // Log the tasks' nondeterministic execution order asynchronously.
-      for (const auto &task : tasks) {
-        lineage_cache_.AddReadyTask(task);
-      }
-    }
-    AssignTasksToWorker(tasks, worker);
-  }
-
   // We assigned this task to a worker.
   // (Note this means that we sent the task to the worker. The assignment
   //  might still fail if the worker fails in the meantime, for instance.)
+  AssignTasksToWorker(tasks, worker);
   return true;
 }
 
