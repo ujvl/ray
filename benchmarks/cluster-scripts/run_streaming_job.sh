@@ -24,8 +24,8 @@ CHECKPOINT_DURATION=30
 FAILURE_ARGS=""
 if [[ $TEST_FAILURE -ne 0 ]]
 then
-    DURATION=$(( CHECKPOINT_DURATION * 5 / 2  ))
-    FAILURE_ARGS="--num-mapper-failures 1 --fail-at $(( CHECKPOINT_DURATION * 3 / 2 ))"
+    DURATION=$(( CHECKPOINT_DURATION * 3  ))
+    FAILURE_ARGS="--num-mapper-failures 1 --fail-at $(( CHECKPOINT_DURATION * 4 / 3 ))"
     latency_prefix=failure-$latency_prefix$CHECKPOINT_DURATION-checkpoint-
     throughput_prefix=failure-$throughput_prefix$CHECKPOINT_DURATION-checkpoint-
 fi

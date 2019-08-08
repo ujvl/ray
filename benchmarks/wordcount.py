@@ -1141,6 +1141,7 @@ if __name__ == '__main__':
     target_throughput = args.target_throughput // len(sources)
     generators = [source.generate.remote(num_records, args.batch_size, target_throughput=target_throughput) for source in sources]
 
+    worker_ip = None
     def kill_node():
         if args.redis_address is None:
             # Kill and restart mappers and reducers.
@@ -1175,12 +1176,13 @@ if __name__ == '__main__':
                     node_resource,
                     ]
             subprocess.Popen(command)
+        return worker_ip
 
 
     if args.num_mapper_failures > 0 or args.num_reducer_failures > 0:
         print("Sleeping for {}s".format(args.fail_at))
         time.sleep(args.fail_at)
-        kill_node()
+        worker_ip = kill_node()
 
     throughputs = ray.get(generators)
     end = time.time()
@@ -1188,6 +1190,8 @@ if __name__ == '__main__':
 
     if args.dump is not None:
         events = ray.global_state.chrome_tracing_dump()
+        if worker_ip is not None:
+            events = [event for event in events if event["pid"] == worker_ip]
         with open(args.dump, "w") as outfile:
             json.dump(events, outfile)
 
