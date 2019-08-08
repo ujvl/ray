@@ -1900,7 +1900,6 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
   if (first_spec.IsActorTask()) {
     auto actor_entry = actor_registry_.find(first_spec.ActorId());
     auto execution_dependency = actor_entry->second.GetExecutionDependency();
-    int64_t num_tasks_executed = actor_entry->second.NumTasksExecuted();
     for (auto &assigned_task : assigned_tasks) {
       RAY_LOG(DEBUG) << "Assigning task " << assigned_task.GetTaskSpecification().TaskId()
                      << " to worker with pid " << worker->Pid()
@@ -1947,7 +1946,6 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
         //  on-const variable.)
         assigned_task.SetExecutionDependencies({execution_dependency});
         execution_dependency = spec.ActorDummyObject();
-        num_tasks_executed++;
       } else {
         RAY_CHECK(spec.NewActorHandles().empty());
       }
