@@ -213,6 +213,7 @@ class WordSource(object):
         start_time = time.time()
         if self.record_timestamp is None:
             self.record_timestamp = start_time
+        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
         while self.num_records_seen < num_records:
             start = time.time()
             batch = self.get_batch(batch_size)
@@ -263,8 +264,10 @@ class WordSource(object):
             # Save a checkpoint if we have passed the checkpoint interval.
             self.records_since_checkpoint += len(batch)
             if self.records_since_checkpoint >= self.checkpoint_interval:
-                self.records_since_checkpoint -= self.checkpoint_interval
-                self.save_checkpoint()
+                # If there are no recovering actors, then take the checkpoint.
+                if not ray.get(checkpoint_tracker.get_recovering_actors.remote()):
+                    self.records_since_checkpoint = 0
+                    self.save_checkpoint()
 
         done = [handle.push.remote(self.operator_id, 0, [], self.checkpoint_epoch) for handle in self.handles]
         self.logger.debug("Waiting for done objects %s", done)
@@ -330,6 +333,9 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 "_ray_upstream_actor_handle_ids",
                 ]
 
+        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        self.recovering = False
+
     def register_self_handle(self, self_handle):
         self.self_handle = self_handle
 
@@ -347,6 +353,9 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         if submit_log is not None:
             self.replay_push(upstream_id, timestamp, records, checkpoint_epoch, submit_log)
         else:
+            if self.recovering:
+                self.checkpoint_tracker.notify_actor_recovered.remote(self.operator_id)
+                self.recovering = False
             self.log_push(upstream_id, timestamp, records, checkpoint_epoch)
 
     def replay_push(self, upstream_id, timestamp, records, checkpoint_epoch, submit_log):
@@ -627,10 +636,13 @@ class NondeterministicOperator(ray.actor.Checkpointable):
     def load_checkpoint(self, actor_id, available_checkpoints):
         self.logger.debug("Available checkpoints %s", available_checkpoints)
 
+        # Notify the CheckpointTracker that we're recovering so that we don't try to checkpoint.
+        self.recovering = True
+        self.checkpoint_tracker.notify_actor_recovering.remote(self.operator_id)
+
         # Get the latest checkpoint that completed.
-        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
-        self.logger.debug("XXX CHECKPOINT counter is %d %s", checkpoint_tracker._ray_actor_counter, checkpoint_tracker._ray_actor_handle_id.hex())
-        latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
+        self.logger.debug("XXX CHECKPOINT counter is %d %s", self.checkpoint_tracker._ray_actor_counter, self.checkpoint_tracker._ray_actor_handle_id.hex())
+        latest_checkpoint_interval = ray.get(self.checkpoint_tracker.get_current_epoch.remote())
         self.logger.debug("Latest checkpoint is %d", latest_checkpoint_interval)
         assert latest_checkpoint_interval >= 0, "Actor died before its first checkpoint was taken"
         # Read the latest checkpoint from disk.
@@ -769,19 +781,19 @@ class Sink(NondeterministicOperator):
         if timestamp > 0:
             now = time.time()
             latency = now - timestamp
-            self.logger.info("LATENCY sink %s;timestamp:%f,cur_time:%f,latency:%f", self.operator_id, timestamp, time.time(), latency)
+            self.logger.info("LATENCY sink %s,%f,%f,%f", self.operator_id, timestamp, time.time(), latency)
             self.latencies.append(latency)
             self.num_timestamps_seen += 1
 
             # Log a throughput measurement every 1s.
-            if now - self.last_batch_timestamp > 1:
+            if now - self.last_batch_timestamp > 0.5:
                 # Each timestamp represents self.timestamp_interval records.
                 # Each timestamp went to self.num_reducers reducers, so divide
                 # by that amount to get the total records seen.
                 records_seen = self.num_timestamps_seen * self.timestamp_interval / self.num_reducers
                 # Divide by the time since the last throughput computation.
-                throughput = records_seen / (time.time() - self.last_batch_timestamp)
-                self.logger.info("THROUGHPUT sink %s;timestamp:%f,cur_time:%f,throughput:%f", self.operator_id, timestamp, time.time(), throughput)
+                throughput = records_seen / (now - self.last_batch_timestamp)
+                self.logger.info("THROUGHPUT sink %s,%f,%f,%f", self.operator_id, timestamp, now, throughput)
                 # Reset state to compute the next throughput.
                 self.num_timestamps_seen = 0
                 self.last_batch_timestamp = now
@@ -823,6 +835,8 @@ class CheckpointTracker(object):
         self.logger = logging.getLogger(__name__)
         self.logger.info("CHECKPOINT_TRACKER")
 
+        self.recovering_actors = set()
+
     def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
         self.logger.info("Received checkpoint %d from %s, on %d", checkpoint_epoch, sink_key, self.checkpoint_epoch)
         assert checkpoint_epoch == self.checkpoint_epoch + 1
@@ -838,6 +852,17 @@ class CheckpointTracker(object):
     def get_current_epoch(self):
         self.logger.info("get current epoch returns %d", self.checkpoint_epoch)
         return self.checkpoint_epoch
+
+    def notify_actor_recovering(self, key):
+        self.logger.debug("Operator %s recovering", key)
+        self.recovering_actors.add(key)
+
+    def notify_actor_recovered(self, key):
+        self.logger.debug("Operator %s recovered", key)
+        self.recovering_actors.remove(key)
+
+    def get_recovering_actors(self):
+        return self.recovering_actors
 
 
 if __name__ == '__main__':
@@ -1190,7 +1215,7 @@ if __name__ == '__main__':
 
     if args.dump is not None:
         events = ray.global_state.chrome_tracing_dump()
-        if worker_ip is not None:
+        if worker_ip is not None and args.num_mapper_failures > 8:
             events = [event for event in events if event["pid"] == worker_ip]
         with open(args.dump, "w") as outfile:
             json.dump(events, outfile)
@@ -1204,10 +1229,6 @@ if __name__ == '__main__':
     all_latencies = [latency for latencies in all_latencies for latency in latencies]
     print("FINAL Mean latency:", np.mean(all_latencies), "max latency:", np.max(all_latencies),
             "len latencies:", len(all_latencies))
-    with open(args.latency_file, 'w+') as f:
-        for latency in all_latencies:
-            f.write('{}\n'.format(latency))
-
 
     all_counts = ray.get([reducer.get_counts.remote() for reducer in reducers])
     counts = Counter()

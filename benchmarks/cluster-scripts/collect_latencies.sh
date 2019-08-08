@@ -3,6 +3,10 @@
 LATENCY_FILENAME=$1
 THROUGHPUT_FILENAME=$2
 
+# Write CSV headers.
+echo "sink_id,timestamp,cur_time,latency" >> $LATENCY_FILENAME
+echo "sink_id,timestamp,cur_time,throughput" >> $THROUGHPUT_FILENAME
+
 num_workers=$(( `wc -l ~/workers.txt | awk '{ print $1 }'` - 1 ))
 for worker in `tail -n $num_workers ~/workers.txt`; do
     echo $worker
