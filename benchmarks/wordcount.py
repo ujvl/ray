@@ -213,7 +213,10 @@ class WordSource(object):
         start_time = time.time()
         if self.record_timestamp is None:
             self.record_timestamp = start_time
+
         checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        checkpoint_prepared = False
+
         while self.num_records_seen < num_records:
             start = time.time()
             batch = self.get_batch(batch_size)
@@ -264,10 +267,15 @@ class WordSource(object):
             # Save a checkpoint if we have passed the checkpoint interval.
             self.records_since_checkpoint += len(batch)
             if self.records_since_checkpoint >= self.checkpoint_interval:
+                if not checkpoint_prepared:
+                    checkpoint_tracker.prepare_checkpoint.remote(self.operator_id)
+                    checkpoint_prepared = True
+
                 # If there are no recovering actors, then take the checkpoint.
-                if not ray.get(checkpoint_tracker.get_recovering_actors.remote()):
+                if ray.get(checkpoint_tracker.checkpoint_ready.remote()):
                     self.records_since_checkpoint = 0
                     self.save_checkpoint()
+                    checkpoint_prepared = False
 
         done = [handle.push.remote(self.operator_id, 0, [], self.checkpoint_epoch) for handle in self.handles]
         self.logger.debug("Waiting for done objects %s", done)
@@ -333,8 +341,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
                 "_ray_upstream_actor_handle_ids",
                 ]
 
-        self.checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
-        self.recovering = False
 
     def register_self_handle(self, self_handle):
         self.self_handle = self_handle
@@ -353,9 +359,6 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         if submit_log is not None:
             self.replay_push(upstream_id, timestamp, records, checkpoint_epoch, submit_log)
         else:
-            if self.recovering:
-                self.checkpoint_tracker.notify_actor_recovered.remote(self.operator_id)
-                self.recovering = False
             self.log_push(upstream_id, timestamp, records, checkpoint_epoch)
 
     def replay_push(self, upstream_id, timestamp, records, checkpoint_epoch, submit_log):
@@ -636,13 +639,10 @@ class NondeterministicOperator(ray.actor.Checkpointable):
     def load_checkpoint(self, actor_id, available_checkpoints):
         self.logger.debug("Available checkpoints %s", available_checkpoints)
 
-        # Notify the CheckpointTracker that we're recovering so that we don't try to checkpoint.
-        self.recovering = True
-        self.checkpoint_tracker.notify_actor_recovering.remote(self.operator_id)
-
         # Get the latest checkpoint that completed.
-        self.logger.debug("XXX CHECKPOINT counter is %d %s", self.checkpoint_tracker._ray_actor_counter, self.checkpoint_tracker._ray_actor_handle_id.hex())
-        latest_checkpoint_interval = ray.get(self.checkpoint_tracker.get_current_epoch.remote())
+        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        self.logger.debug("XXX CHECKPOINT counter is %d %s", checkpoint_tracker._ray_actor_counter, checkpoint_tracker._ray_actor_handle_id.hex())
+        latest_checkpoint_interval = ray.get(checkpoint_tracker.get_current_epoch.remote())
         self.logger.debug("Latest checkpoint is %d", latest_checkpoint_interval)
         assert latest_checkpoint_interval >= 0, "Actor died before its first checkpoint was taken"
         # Read the latest checkpoint from disk.
@@ -826,7 +826,10 @@ def create_local_node(cluster, i, node_kwargs):
 # Always on the head node.
 @ray.remote(resources={"HEAD": 1})
 class CheckpointTracker(object):
-    def __init__(self, sink_keys):
+    def __init__(self, source_keys, sink_keys):
+        self.source_keys = source_keys
+        self.sources_pending = set(self.source_keys)
+
         self.sink_keys = sink_keys
         self.sinks_pending = set(self.sink_keys)
         self.checkpoint_epoch = -1
@@ -834,8 +837,6 @@ class CheckpointTracker(object):
         logging.basicConfig(level=LOG_LEVEL)
         self.logger = logging.getLogger(__name__)
         self.logger.info("CHECKPOINT_TRACKER")
-
-        self.recovering_actors = set()
 
     def notify_checkpoint_complete(self, sink_key, checkpoint_epoch):
         self.logger.info("Received checkpoint %d from %s, on %d", checkpoint_epoch, sink_key, self.checkpoint_epoch)
@@ -846,6 +847,7 @@ class CheckpointTracker(object):
         # checkpoint is complete.
         if len(self.sinks_pending) == 0:
             self.checkpoint_epoch += 1
+            self.sources_pending = set(self.source_keys)
             self.sinks_pending = set(self.sink_keys)
             self.logger.info("Global checkpoint complete %d", self.checkpoint_epoch)
 
@@ -853,16 +855,12 @@ class CheckpointTracker(object):
         self.logger.info("get current epoch returns %d", self.checkpoint_epoch)
         return self.checkpoint_epoch
 
-    def notify_actor_recovering(self, key):
-        self.logger.debug("Operator %s recovering", key)
-        self.recovering_actors.add(key)
+    def prepare_checkpoint(self, source_key):
+        self.logger.debug("Source %s ready for checkpoint %d", source_key, self.checkpoint_epoch)
+        self.sources_pending.erase(source_key)
 
-    def notify_actor_recovered(self, key):
-        self.logger.debug("Operator %s recovered", key)
-        self.recovering_actors.remove(key)
-
-    def get_recovering_actors(self):
-        return self.recovering_actors
+    def checkpoint_ready(self):
+        return len(self.sources_pending) == 0
 
 
 if __name__ == '__main__':
@@ -1054,7 +1052,7 @@ if __name__ == '__main__':
     # One sink.
     sink_keys = [operator_ids.pop(0) for _ in range(args.num_reducers)]
 
-    checkpoint_tracker = CheckpointTracker.remote(sink_keys)
+    checkpoint_tracker = CheckpointTracker.remote(source_keys, sink_keys)
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
     backpressure = True
