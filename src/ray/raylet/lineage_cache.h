@@ -178,6 +178,9 @@ class Lineage {
   /// \return A const reference to the lineage entries.
   const std::unordered_map<const TaskID, LineageEntry> &GetEntries() const;
 
+  /// Get the number of entries in the lineage.
+  const size_t Size() const;
+
   /// Serialize this lineage to a ForwardTaskRequest flatbuffer.
   ///
   /// \param entry_id The task ID to include in the ForwardTaskRequest
@@ -228,12 +231,18 @@ class LineageCache {
   /// TODO(swang): Pass in the policy (interface?).
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
-               gcs::PubsubInterface<TaskID> &task_pubsub, uint64_t max_lineage_size,
+               gcs::PubsubInterface<TaskID> &task_pubsub, 
+               std::function<void()> reclaimed_space_handler,
+               uint64_t max_lineage_size,
                int64_t max_failures,
                boost::asio::io_service *io_service,
                int gcs_delay_ms);
 
   void HandleClientRemoved(const ClientID &node_id);
+
+
+  // This is determined by a soft cap.
+  bool IsFull();
 
   /// Add a task that is waiting for execution and its uncommitted lineage.
   /// These entries will not be written to the GCS until set to ready.
@@ -346,6 +355,9 @@ class LineageCache {
   /// The pubsub storage system for task information. This can be used to
   /// request notifications for the commit of a task entry.
   gcs::PubsubInterface<TaskID> &task_pubsub_;
+  /// Callback for reclaimed space
+  const std::function<void()> reclaimed_space_handler_;
+  /// Maximum lineage size
   uint64_t max_lineage_size_;
   int64_t max_failures_;
   /// The set of tasks that have been committed but not evicted.

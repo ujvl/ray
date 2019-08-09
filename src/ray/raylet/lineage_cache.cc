@@ -96,6 +96,10 @@ boost::optional<const LineageEntry &> Lineage::GetEntry(const TaskID &task_id) c
   }
 }
 
+const size_t Lineage::Size() const {
+  return entries_.size();
+}
+
 boost::optional<LineageEntry &> Lineage::GetEntryMutable(const TaskID &task_id) {
   auto entry = entries_.find(task_id);
   if (entry != entries_.end()) {
@@ -231,15 +235,19 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 }
 
 LineageCache::LineageCache(const ClientID &client_id,
-                           gcs::TableInterface<TaskID, protocol::Task> &task_storage,
+                           gcs::TableInterface<TaskID, 
+                           protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size, int64_t max_failures,
+                           std::function<void()> reclaimed_space_handler,
+                           uint64_t max_lineage_size, 
+                           int64_t max_failures,
                            boost::asio::io_service *io_service,
                            int gcs_delay_ms)
     : disabled_(max_failures == 0),
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
+      reclaimed_space_handler_(reclaimed_space_handler),
       max_lineage_size_(max_lineage_size),
       max_failures_(max_failures),
       io_service_(io_service),
@@ -280,10 +288,15 @@ void LineageCache::AddUncommittedLineage(const TaskID &task_id,
   }
 }
 
+bool LineageCache::IsFull() {
+  return lineage_.Size() >= max_lineage_size_;
+}
+
 bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_lineage) {
   if (disabled_) {
     return true;
   }
+  RAY_CHECK(!IsFull());
 
   auto task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "Add waiting task " << task_id << " on " << client_id_;
@@ -543,6 +556,7 @@ void LineageCache::EvictTask(const TaskID &task_id) {
   // Evict the task.
   RAY_LOG(DEBUG) << "Evicting task " << task_id << " on " << client_id_;
   lineage_.PopEntry(task_id);
+
   //evicted_pool_.insert(task_id);
   //evicted_queue_.push_back(task_id);
   //committed_tasks_.erase(commit_it);
@@ -571,15 +585,16 @@ void LineageCache::HandleEntryCommitted(const TaskID &task_id, int version) {
   // Record the commit acknowledgement and attempt to evict the task.
   //committed_tasks_.insert(task_id);
   entry->SetStatus(GcsStatus::COMMITTED);
+  size_t pre_eviction_size = lineage_.Size();
   EvictTask(task_id);
+  size_t post_eviction_size = lineage_.Size();
   // We got the notification about the task's commit, so no longer need any
   // more notifications.
   UnsubscribeTask(task_id);
 
-  //while (evicted_queue_.size() > max_lineage_size_) {
-  //  evicted_pool_.erase(evicted_queue_.front());
-  //  evicted_queue_.pop_front();
-  //}
+  if (pre_eviction_size >= max_lineage_size_ && post_eviction_size < max_lineage_size_) {
+    reclaimed_space_handler_();
+  }
 }
 
 const Task &LineageCache::GetTaskOrDie(const TaskID &task_id) const {

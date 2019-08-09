@@ -2,6 +2,8 @@
 #define RAY_RAYLET_NODE_MANAGER_H
 
 #include <boost/asio/steady_timer.hpp>
+#include <tuple>
+#include <queue>
 
 // clang-format off
 #include "ray/raylet/task.h"
@@ -168,6 +170,8 @@ class NodeManager {
   /// \param task The task to potentially fail.
   /// \return Void.
   void TreatTaskAsFailedIfLost(const Task &task);
+  /// Submit queued tasks forwarded to the local node manager.
+  void SubmitQueuedForwardedTasks();
   /// Handle specified task's submission to the local node manager.
   ///
   /// \param task The task being submitted.
@@ -478,6 +482,8 @@ class NodeManager {
   WorkerPool worker_pool_;
   /// A set of queues to maintain tasks.
   SchedulingQueue local_queues_;
+  /// Forwarded task buffer
+  std::queue<std::tuple<Task, Lineage, bool>> forwarded_task_buffer_;
   /// The scheduling policy in effect for this local scheduler.
   SchedulingPolicy scheduling_policy_;
   /// The reconstruction policy for deciding when to re-execute a task.
