@@ -108,7 +108,6 @@ class WordSource(object):
         self.checkpoint_epoch = 0
         # Number of records in an epoch.
         self.checkpoint_interval = checkpoint_interval
-        self.records_since_checkpoint = 0
         self.num_records_seen = 0
         self.num_records_since_timestamp = 0
         self.num_flushes = 0
@@ -124,7 +123,6 @@ class WordSource(object):
         self.checkpoint_attrs = [
                 "handles",
                 "checkpoint_epoch",
-                "records_since_checkpoint",
                 "num_records_seen",
                 "num_records_since_timestamp",
                 "num_flushes",
@@ -140,7 +138,7 @@ class WordSource(object):
 
     def save_checkpoint(self):
         with ray.profiling.profile("save_checkpoint"):
-            self.logger.debug("Saving checkpoint %d", self.checkpoint_epoch)
+            self.logger.debug("Saving checkpoint %d at %f", self.checkpoint_epoch, time.time())
 
             checkpoint = {
                     attr: getattr(self, attr) for attr in self.checkpoint_attrs
@@ -214,8 +212,9 @@ class WordSource(object):
         if self.record_timestamp is None:
             self.record_timestamp = start_time
 
-        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
         checkpoint_prepared = False
+        checkpoint_tracker = named_actors.get_actor("checkpoint_tracker")
+        last_checkpoint_timestamp = time.time()
 
         while self.num_records_seen < num_records:
             start = time.time()
@@ -250,7 +249,7 @@ class WordSource(object):
                 backpressure = False
 
             args = [self.operator_id, timestamp, batch_id, self.checkpoint_epoch]
-            self.logger.debug("Pushing record timestamp %f", self.record_timestamp)
+            self.logger.debug("Pushing record timestamp %f at %f", self.record_timestamp, time.time())
             if self.backpressure and backpressure:
                 backpressured_push(self.logger, handle, self.queue, self.num_flushes, self.max_queue_length, args)
             else:
@@ -265,15 +264,16 @@ class WordSource(object):
             handle = self.handles[self.num_flushes % len(self.handles)]
 
             # Save a checkpoint if we have passed the checkpoint interval.
-            self.records_since_checkpoint += len(batch)
-            if self.records_since_checkpoint >= self.checkpoint_interval:
+            now = time.time()
+            if now - last_checkpoint_timestamp >= self.checkpoint_interval:
                 if not checkpoint_prepared:
+                    self.logger.debug("Source %s sending prepare_checkpoint %d", self.operator_id, self.checkpoint_epoch)
                     checkpoint_tracker.prepare_checkpoint.remote(self.operator_id)
                     checkpoint_prepared = True
 
                 # If there are no recovering actors, then take the checkpoint.
                 if ray.get(checkpoint_tracker.checkpoint_ready.remote()):
-                    self.records_since_checkpoint = 0
+                    last_checkpoint_timestamp = now
                     self.save_checkpoint()
                     checkpoint_prepared = False
 
@@ -281,7 +281,7 @@ class WordSource(object):
         self.logger.debug("Waiting for done objects %s", done)
         ray.get(done)
         throughput = self.num_records_seen / (time.time() - start_time)
-        return throughput
+        return throughput, self.num_records_seen
 
     def ping(self):
         return
@@ -600,7 +600,7 @@ class NondeterministicOperator(ray.actor.Checkpointable):
         with ray.profiling.profile("save_checkpoint"):
             assert len(self.task_buffer) == 0, (self.operator_id, self.task_buffer)
             start = time.time()
-            self.logger.info("Saving checkpoint %d %s", self.checkpoint_epoch, checkpoint_id)
+            self.logger.info("Saving checkpoint %d %s at %f", self.checkpoint_epoch, checkpoint_id, time.time())
             assert len(self.checkpoints_pending) == 0
 
             checkpoint = {
@@ -857,7 +857,7 @@ class CheckpointTracker(object):
 
     def prepare_checkpoint(self, source_key):
         self.logger.debug("Source %s ready for checkpoint %d", source_key, self.checkpoint_epoch)
-        self.sources_pending.erase(source_key)
+        self.sources_pending.remove(source_key)
 
     def checkpoint_ready(self):
         return len(self.sources_pending) == 0
@@ -907,9 +907,9 @@ if __name__ == '__main__':
         help='')
     parser.add_argument(
         '--checkpoint-interval',
-        default=0,
+        default=30,
         type=int,
-        help='The number of records to process per source in one checkpoint epoch.')
+        help='The number of seconds between checkpoints. Default is 30s')
     parser.add_argument(
         '--words-file',
         type=str,
@@ -1056,15 +1056,9 @@ if __name__ == '__main__':
     named_actors.register_actor("checkpoint_tracker", checkpoint_tracker)
 
     backpressure = True
-    checkpoint_interval = args.checkpoint_interval
     if args.target_throughput > 0:
         backpressure = False
-        # No checkpoint set. Checkpoint every 30s.
-        if checkpoint_interval == 0:
-            checkpoint_interval = args.target_throughput // len(source_keys) * 30
-    if checkpoint_interval == 0:
-        checkpoint_interval = 100000  # Default checkpoint interval is 100k records/source.
-    print("Using a checkpoint interval of", checkpoint_interval, "records")
+    print("Using a checkpoint interval of", args.checkpoint_interval, "seconds")
 
     # Create the sink.
     #sink_args = [args.latency_file, sink_key, [], args.max_queue_length, [], checkpoint_dir, args.batch_size]
@@ -1147,7 +1141,7 @@ if __name__ == '__main__':
             max_queue_length = args.max_queue_length
         else:
             max_queue_length = 0
-        source_args = [i, source_key, handles, max_queue_length, checkpoint_dir, checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
+        source_args = [i, source_key, handles, max_queue_length, checkpoint_dir, args.checkpoint_interval, args.words_file, args.timestamp_interval, backpressure, [1]]
         print("Starting source", source_key, "resource:", resource)
         sources.append(WordSource._remote(
             args=source_args,
@@ -1207,13 +1201,13 @@ if __name__ == '__main__':
         time.sleep(args.fail_at)
         worker_ip = kill_node()
 
-    throughputs = ray.get(generators)
+    throughputs, num_records_generated = zip(*ray.get(generators))
     end = time.time()
     print("Elapsed time:", end - start)
 
     if args.dump is not None:
         events = ray.global_state.chrome_tracing_dump()
-        if worker_ip is not None and args.num_mapper_failures > 8:
+        if worker_ip is not None and args.num_mappers > 8:
             events = [event for event in events if event["pid"] == worker_ip]
         with open(args.dump, "w") as outfile:
             json.dump(events, outfile)
@@ -1233,5 +1227,9 @@ if __name__ == '__main__':
     for i, count in enumerate(all_counts):
         print("Reducer", i, "had", len(count), "words", sum(value for value in count.values()), "records")
         counts.update(count)
-    print("Total counts had", len(counts), "words", sum(value for value in counts.values()), "records")
-    #print("Final count is", counts)
+    total_counts = sum(value for value in counts.values())
+    print("Total counts had", len(counts), "unique words,", total_counts, "words")
+
+    # Make sure all inputs made it to the reducers exactly once.
+    expected_count = sum(num_records_generated) * SENTENCE_LENGTH
+    assert expected_count == total_counts, "Expected {} words, but got {}".format(expected_count, total_counts)

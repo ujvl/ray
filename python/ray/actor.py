@@ -682,7 +682,7 @@ class ActorHandle(object):
             # same actor is likely a performance bug. We should consider
             # logging a warning in these cases.
             actor_handle_id = compute_actor_handle_id_non_forked(
-                state["actor_handle_id"], worker.current_task_id)
+                state["actor_handle_id"], TaskID(_random_string()))
 
         self.__init__(
             state["actor_id"],

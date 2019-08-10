@@ -24,7 +24,7 @@ CHECKPOINT_DURATION=30
 FAILURE_ARGS=""
 if [[ $TEST_FAILURE -ne 0 ]]
 then
-    DURATION=$(( CHECKPOINT_DURATION * 3  ))
+    DURATION=$(( CHECKPOINT_DURATION * 4 ))
     FAILURE_ARGS="--num-mapper-failures 1 --fail-at $(( CHECKPOINT_DURATION * 3 / 2 ))"
     latency_prefix=failure-$latency_prefix$CHECKPOINT_DURATION-checkpoint-
     throughput_prefix=failure-$throughput_prefix$CHECKPOINT_DURATION-checkpoint-
@@ -80,7 +80,7 @@ python $DIR/../wordcount.py \
     --mapper-submit-batch-size $(( $NUM_RAYLETS / 2 )) \
     --target-throughput $TOTAL_THROUGHPUT \
     --latency-file $DIR/$latency_file \
-    --checkpoint-interval $(( $TOTAL_THROUGHPUT / $NUM_RAYLETS * $CHECKPOINT_DURATION )) \
+    --checkpoint-interval $CHECKPOINT_DURATION \
     $FAILURE_ARGS
 
 bash $DIR/collect_latencies.sh $DIR/$latency_file $DIR/$throughput_file
