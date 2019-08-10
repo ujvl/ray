@@ -24,7 +24,7 @@ from cython_examples import process_batch_reducer3 as cython_process_batch_reduc
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 SENTENCE_LENGTH = 100
 
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 
 WORDS = {
         }

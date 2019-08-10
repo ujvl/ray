@@ -84,3 +84,4 @@ python $DIR/../wordcount.py \
     $FAILURE_ARGS
 
 bash $DIR/collect_latencies.sh $DIR/$latency_file $DIR/$throughput_file
+ray stop
