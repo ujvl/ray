@@ -16,6 +16,7 @@ for host in $(cat ~/workers.txt); do
 done
 
 parallel-ssh -t 0 -i -P -h ~/workers.txt -x "-o StrictHostKeyChecking=no -i ~/ray_bootstrap_key.pem" -I < $DIR/enable_hugepages.sh
+parallel-ssh -t 0 -i -P -h ~/workers.txt -O "StrictHostKeyChecking=no" "sudo apt install -y scala pdsh"
 
 pushd .
 git clone git@github.com:stephanie-wang/mpi-bench.git ~/mpi-bench
