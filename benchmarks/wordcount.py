@@ -222,8 +222,8 @@ class WordSource(object):
             assert(len(batch) > 0), len(batch)
             timestamp = 0
             if self.num_records_since_timestamp > self.timestamp_interval:
-                # Timestamp a record in the middle of the batch.
-                timestamp = self.record_timestamp + (time_slice / 2)
+                # Timestamp a random record in the batch.
+                timestamp = self.record_timestamp + (np.random.random() * time_slice)
                 self.num_records_since_timestamp -= self.timestamp_interval
             batch_id = ray.put(batch)
 
