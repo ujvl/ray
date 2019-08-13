@@ -2744,8 +2744,8 @@ void NodeManager::ForwardTask(const Task &task, const ClientID &node_id,
     uncommitted_lineage.SetEntry(task, GcsStatus::NONE);
   }
 
-  //auto uncommitted_lineage_size = uncommitted_lineage.GetEntries().size() - 1;
-  //RAY_LOG(INFO) << "UNCOMMITTED_LINEAGE:" << uncommitted_lineage_size;
+  auto uncommitted_lineage_size = uncommitted_lineage.GetEntries().size() - 1;
+  RAY_LOG(INFO) << "UNCOMMITTED_LINEAGE:" << uncommitted_lineage_size;
 
   auto entry = uncommitted_lineage.GetEntryMutable(task_id);
   Task &lineage_cache_entry_task = entry->TaskDataMutable();
