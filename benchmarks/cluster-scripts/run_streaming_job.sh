@@ -2,23 +2,23 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-if [[ $# -gt 5 || $# -lt 2 ]]
+if [[ $# -gt 4 || $# -lt 2 ]]
 then
-    echo "Usage: ./run_streaming_job.sh <head ip> <num raylets> <batch size> <target tput> <failure?> <num stragglers?>"
+    echo "Usage: ./run_streaming_job.sh <head ip> <num raylets> <target tput> <failure?>"
     exit
 fi
 
 HEAD_IP=$1
 NUM_RAYLETS=$2
-BATCH_SIZE=${3:-1000}
-TOTAL_THROUGHPUT=${4:-$(( 12500 * $NUM_RAYLETS ))}
-TEST_FAILURE=${5:-0}
+TOTAL_THROUGHPUT=${3:-$(( 12500 * $NUM_RAYLETS ))}
+TEST_FAILURE=${4:-0}
+BATCH_SIZE=1000
 NUM_SHARDS=8
 
 
 latency_prefix=latency-$NUM_RAYLETS-workers-$NUM_SHARDS-shards-$BATCH_SIZE-batch-$TOTAL_THROUGHPUT-tput-
 throughput_prefix=throughput-$NUM_RAYLETS-workers-$NUM_SHARDS-shards-$BATCH_SIZE-batch-$TOTAL_THROUGHPUT-tput-
-DURATION=60
+DURATION=120
 
 CHECKPOINT_DURATION=30
 FAILURE_ARGS=""
