@@ -352,53 +352,60 @@ void NodeManager::ClientAdded(const ClientTableDataT &client_data) {
     return;
   }
 
-  // Establish a new NodeManager connection to this GCS client.
-  auto status = ConnectRemoteNodeManager(client_id, client_data.node_manager_address,
-                                         client_data.node_manager_port);
-  if (!status.ok()) {
-    // This is not a fatal error for raylet, but it should not happen.
-    // We need to broadcase this message.
-    std::string type = "raylet_connection_error";
-    std::ostringstream error_message;
-    error_message << "Failed to connect to ray node " << client_id
-                  << " with status: " << status.ToString()
-                  << ". This may be since the node was recently removed.";
-    // We use the nil JobID to broadcast the message to all drivers.
-    RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
-        JobID::nil(), type, error_message.str(), current_time_ms()));
-    return;
-  }
 
-  ResourceSet resources_total(client_data.resources_total_label,
-                              client_data.resources_total_capacity);
-  cluster_resource_map_.emplace(client_id, SchedulingResources(resources_total));
-}
-
-ray::Status NodeManager::ConnectRemoteNodeManager(const ClientID &client_id,
-                                                  const std::string &client_address,
-                                                  int32_t client_port) {
   // Establish a new NodeManager connection to this GCS client.
   RAY_LOG(INFO) << "[ConnectClient] Trying to connect to client " << client_id << " at "
-                << client_address << ":" << client_port;
+                << client_data.node_manager_address << ":" << client_data.node_manager_port;
 
-  boost::asio::ip::tcp::socket socket(io_service_);
-  RAY_RETURN_NOT_OK(TcpConnect(socket, client_address, client_port));
+  auto socket = std::make_shared<boost::asio::ip::tcp::socket>(io_service_);
+  TcpAsyncConnect(*socket, client_data.node_manager_address, client_data.node_manager_port,
+      [this, client_id, client_data, socket](const ray::Status &status) {
+      if (!status.ok()) {
+        // This is not a fatal error for raylet, but it should not happen.
+        // We need to broadcase this message.
+        std::string type = "raylet_connection_error";
+        std::ostringstream error_message;
+        error_message << "Failed to connect to ray node " << client_id
+                      << " with status: " << status.ToString()
+                      << ". This may be since the node was recently removed.";
+        // We use the nil JobID to broadcast the message to all drivers.
+        RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
+            JobID::nil(), type, error_message.str(), current_time_ms()));
+        return;
+      }
 
-  // The client is connected, now send a connect message to remote node manager.
-  auto server_conn = TcpServerConnection::Create(std::move(socket));
+      // The client is connected, now send a connect message to remote node manager.
+      auto server_conn = TcpServerConnection::Create(std::move(*socket));
 
-  // Prepare client connection info buffer
-  flatbuffers::FlatBufferBuilder fbb;
-  auto message = protocol::CreateConnectClient(fbb, to_flatbuf(fbb, client_id_));
-  fbb.Finish(message);
-  // Send synchronously.
-  // TODO(swang): Make this a WriteMessageAsync.
-  RAY_RETURN_NOT_OK(server_conn->WriteMessage(
-      static_cast<int64_t>(protocol::MessageType::ConnectClient), fbb.GetSize(),
-      fbb.GetBufferPointer()));
+      // Prepare client connection info buffer
+      flatbuffers::FlatBufferBuilder fbb;
+      auto message = protocol::CreateConnectClient(fbb, to_flatbuf(fbb, client_id_));
+      fbb.Finish(message);
+      // Send synchronously.
+      // TODO(swang): Make this a WriteMessageAsync.
+      server_conn->WriteMessageAsync(
+          static_cast<int64_t>(protocol::MessageType::ConnectClient), fbb.GetSize(),
+          fbb.GetBufferPointer(), [this, client_id, client_data, server_conn](const ray::Status &status) {
+          if (!status.ok()) {
+            // This is not a fatal error for raylet, but it should not happen.
+            // We need to broadcase this message.
+            std::string type = "raylet_connection_error";
+            std::ostringstream error_message;
+            error_message << "Failed to connect to ray node " << client_id
+                          << " with status: " << status.ToString()
+                          << ". This may be since the node was recently removed.";
+            // We use the nil JobID to broadcast the message to all drivers.
+            RAY_CHECK_OK(gcs_client_->error_table().PushErrorToDriver(
+                JobID::nil(), type, error_message.str(), current_time_ms()));
+            return;
+          }
+          remote_server_connections_.emplace(client_id, std::move(server_conn));
 
-  remote_server_connections_.emplace(client_id, std::move(server_conn));
-  return ray::Status::OK();
+          ResourceSet resources_total(client_data.resources_total_label,
+                                      client_data.resources_total_capacity);
+          cluster_resource_map_.emplace(client_id, SchedulingResources(resources_total));
+          });
+      });
 }
 
 void NodeManager::ClientRemoved(const ClientTableDataT &client_data) {

@@ -42,8 +42,8 @@ bash $DIR/stop_cluster.sh
 
 # 2MB per hugepage.
 NUM_HUGEPAGES=$(( $OBJECT_STORE_MEMORY_GB * 1000 / 2))
-# Allocate 30% more hugepages than requested in case of fragmentation.
-NR_HUGEPAGES=$(awk "BEGIN {print int($NUM_HUGEPAGES * 1.3)}")
+# Allocate 10% more hugepages than requested in case of fragmentation.
+NR_HUGEPAGES=$(awk "BEGIN {print int($NUM_HUGEPAGES * 1.1)}")
 echo "$NR_HUGEPAGES"
 if [[ `cat /proc/sys/vm/nr_hugepages` -ne $NR_HUGEPAGES ]]
 then

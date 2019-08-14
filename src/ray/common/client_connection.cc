@@ -30,6 +30,23 @@ ray::Status TcpConnect(boost::asio::ip::tcp::socket &socket,
   return status;
 }
 
+void TcpAsyncConnect(boost::asio::ip::tcp::socket &socket,
+                       const std::string &ip_address_string, int port,
+                       const std::function<void(const ray::Status &)> &handler) {
+  socket.open(boost::asio::ip::tcp::v4());
+  boost::asio::ip::tcp::no_delay option(true);
+  socket.set_option(option);
+
+  boost::asio::ip::address ip_address =
+      boost::asio::ip::address::from_string(ip_address_string);
+  boost::asio::ip::tcp::endpoint endpoint(ip_address, port);
+  boost::system::error_code error;
+  socket.async_connect(endpoint, [handler](const boost::system::error_code &error) {
+          auto status = boost_to_ray_status(error);
+          handler(status);
+          });
+}
+
 template <class T>
 std::shared_ptr<ServerConnection<T>> ServerConnection<T>::Create(
     boost::asio::basic_stream_socket<T> &&socket) {

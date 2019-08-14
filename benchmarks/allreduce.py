@@ -20,7 +20,7 @@ import ray.cloudpickle as pickle
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-DEBUG = True
+DEBUG = False
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 

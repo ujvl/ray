@@ -22,6 +22,10 @@ namespace ray {
 ray::Status TcpConnect(boost::asio::ip::tcp::socket &socket,
                        const std::string &ip_address, int port);
 
+void TcpAsyncConnect(boost::asio::ip::tcp::socket &socket,
+                       const std::string &ip_address_string, int port,
+                       const std::function<void(const ray::Status &)> &handler);
+
 /// \typename ServerConnection
 ///
 /// A generic type representing a client connection to a server. This typename
