@@ -24,6 +24,12 @@ cd ~/mpi-bench
 bash -x ./build.sh
 popd
 
+pushd .
+cd ~/flink-wordcount
+git fetch
+git checkout origin/flink-wordcount
+popd
+
 num_workers=$(( `wc -l ~/workers.txt | awk '{ print $1 }'` - 1 ))
 for worker in `tail -n $num_workers ~/workers.txt`; do
     echo $worker

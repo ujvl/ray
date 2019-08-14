@@ -1993,11 +1993,11 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
       // Record the message to be sent to the worker and the number of tasks
       // that must be logged to the GCS before we can send the message.
       const std::vector<uint8_t> message(fbb.GetBufferPointer(), fbb.GetBufferPointer() + fbb.GetSize());
-      auto inserted = gcs_assign_buffer_.insert({worker->WorkerId(), {message, tasks.size()}});
+      auto inserted = gcs_assign_buffer_.insert({worker->WorkerId(), AssignTaskCallback{message, tasks.size(), assign_callback}});
       RAY_CHECK(inserted.second);
       // Log the tasks' nondeterministic execution order before executing the
       // tasks.
-      gcs::raylet::TaskTable::WriteCallback task_callback = [this, assign_callback](
+      gcs::raylet::TaskTable::WriteCallback task_callback = [this](
           ray::gcs::AsyncGcsClient *client, const TaskID &id, const protocol::TaskT &data) {
         gcs_assign_tasks_committed_[id] = true;
         // Loop through the tasks that we have flushed so far. Pop the longest
@@ -2011,12 +2011,12 @@ void NodeManager::AssignTasksToWorker(const std::vector<Task> &tasks, std::share
           std::shared_ptr<Worker> worker = gcs_assign_task_queue_.front().second;
           const auto it = gcs_assign_buffer_.find(worker->WorkerId());
           RAY_CHECK(it != gcs_assign_buffer_.end());
-          it->second.second--;
-          const auto &message = it->second.first;
-          if (it->second.second == 0) {
+          it->second.num_tasks--;
+          const auto &message = it->second.message;
+          if (it->second.num_tasks == 0) {
             worker->Connection()->WriteMessageAsync(
                 static_cast<int64_t>(protocol::MessageType::ExecuteTask), message.size(),
-                message.data(), assign_callback);
+                message.data(), it->second.callback);
             gcs_assign_buffer_.erase(it);
           }
           gcs_assign_task_queue_.pop_front();

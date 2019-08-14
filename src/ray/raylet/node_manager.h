@@ -562,7 +562,12 @@ class NodeManager {
   std::unordered_map<TaskID, bool> gcs_assign_tasks_committed_;
   std::list<std::pair<Task, std::shared_ptr<Worker>>> gcs_assign_task_queue_;
   // Buffer of AssignTask messages that need to be sent to workers.
-  std::unordered_map<WorkerID, std::pair<const std::vector<uint8_t>, size_t>> gcs_assign_buffer_;
+  struct AssignTaskCallback {
+    const std::vector<uint8_t> message;
+    size_t num_tasks;
+    std::function<void(ray::Status)> callback;
+  };
+  std::unordered_map<WorkerID, AssignTaskCallback> gcs_assign_buffer_;
 };
 
 }  // namespace raylet

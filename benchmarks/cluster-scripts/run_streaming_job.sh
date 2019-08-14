@@ -2,9 +2,9 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-if [[ $# -gt 4 || $# -lt 2 ]]
+if [[ $# -gt 5 || $# -lt 2 ]]
 then
-    echo "Usage: ./run_streaming_job.sh <head ip> <num raylets> <target tput> <failure?>"
+    echo "Usage: ./run_streaming_job.sh <head ip> <num raylets> <target tput> <failure?> <use lineage stash?>"
     exit
 fi
 
@@ -12,6 +12,7 @@ HEAD_IP=$1
 NUM_RAYLETS=$2
 TOTAL_THROUGHPUT=${3:-$(( 12500 * $NUM_RAYLETS ))}
 TEST_FAILURE=${4:-0}
+LINEAGE_STASH=${5:-1}
 BATCH_SIZE=1000
 NUM_SHARDS=8
 
@@ -41,16 +42,23 @@ fi
 #    echo "Latency file with prefix $latency_prefix already found, skipping..."
 #    continue
 #fi
-date=`date +%h-%d-%M-%S`.csv
+date=`date +%h-%d-%H-%M-%S`.csv
 latency_file=$latency_prefix$date
 throughput_file=$throughput_prefix$date
 echo "Logging to file $latency_file..."
 
 
 USE_GCS_ONLY=0
+MAX_FAILURES=-1
+if [[ $LINEAGE_STASH -ne 1 ]]
+then
+    USE_GCS_ONLY=1
+    MAX_FAILURES=1
+    latency_file="writefirst-"$latency_file
+    throughput_file="writefirst-"$latency_file
+fi
 GCS_DELAY_MS=0
 NONDETERMINISM=1
-MAX_FAILURES=-1
 OBJECT_STORE_MEMORY_GB=0
 OBJECT_STORE_EVICTION=100
 
