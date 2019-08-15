@@ -232,7 +232,7 @@ class LineageCache {
   LineageCache(const ClientID &client_id,
                gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                gcs::PubsubInterface<TaskID> &task_pubsub, 
-               std::function<void()> reclaimed_space_handler,
+               //std::function<void()> reclaimed_space_handler,
                uint64_t max_lineage_size,
                int64_t max_failures,
                boost::asio::io_service *io_service,
@@ -347,6 +347,7 @@ class LineageCache {
                              std::unordered_set<TaskID> &subscribe_tasks);
 
   bool disabled_;
+  bool flush_disabled_;
   /// The client ID, used to request notifications for specific tasks.
   /// TODO(swang): Move the ClientID into the generic Table implementation.
   ClientID client_id_;
@@ -356,7 +357,7 @@ class LineageCache {
   /// request notifications for the commit of a task entry.
   gcs::PubsubInterface<TaskID> &task_pubsub_;
   /// Callback for reclaimed space
-  const std::function<void()> reclaimed_space_handler_;
+  //const std::function<void()> reclaimed_space_handler_;
   /// Maximum lineage size
   uint64_t max_lineage_size_;
   int64_t max_failures_;

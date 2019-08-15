@@ -77,7 +77,7 @@ NodeManager::NodeManager(boost::asio::io_service &io_service,
           gcs_client_->client_table().GetLocalClientId(),
           gcs_client_->raylet_task_table(),
           gcs_client_->raylet_task_table(),
-          [this]() { SubmitQueuedForwardedTasks(); },
+      //    [this]() { SubmitQueuedForwardedTasks(); },
           config.max_lineage_size,
           use_gcs_only_ ? 0 : RayConfig::instance().lineage_stash_max_failures(),
           &io_service_,
@@ -1337,13 +1337,13 @@ void NodeManager::TreatTaskAsFailedIfLost(const Task &task) {
 }
 
 void NodeManager::SubmitQueuedForwardedTasks() {
-  auto s = forwarded_task_buffer_.size();
+  //auto s = forwarded_task_buffer_.size();
   while (!forwarded_task_buffer_.empty() && !lineage_cache_.IsFull()) {
     auto tup = forwarded_task_buffer_.front();
     SubmitTask(std::get<0>(tup), std::get<1>(tup), /* forwarded = */ true, std::get<2>(tup));
     forwarded_task_buffer_.pop();
   }
-  RAY_LOG(INFO) << "LS2" << forwarded_task_buffer_.size() << " vs " << s << " tasks in queue";
+  //RAY_LOG(INFO) << "[LS2] " << forwarded_task_buffer_.size() << " vs " << s << " tasks in queue";
 }
 
 void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineage,
@@ -1406,11 +1406,11 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
                          << " This is most likely due to reconstruction.";
       }
     } else {
-      if (lineage_cache_.IsFull()) {
-          RAY_LOG(INFO) << "[LS] queueing" << task_id;
-          forwarded_task_buffer_.push(std::make_tuple(task, uncommitted_lineage, push));
-          return;
-      }
+      //if (lineage_cache_.IsFull()) {
+      //    RAY_LOG(INFO) << "[LS] queueing" << task_id;
+      //    forwarded_task_buffer_.push(std::make_tuple(task, uncommitted_lineage, push));
+      //    return;
+      //}
       // Add the task and its uncommitted lineage to the lineage cache.
       if (!lineage_cache_.AddWaitingTask(task, uncommitted_lineage)) {
         RAY_LOG(WARNING)

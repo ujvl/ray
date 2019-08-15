@@ -238,20 +238,22 @@ LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, 
                            protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           std::function<void()> reclaimed_space_handler,
+                           //std::function<void()> reclaimed_space_handler,
                            uint64_t max_lineage_size, 
                            int64_t max_failures,
                            boost::asio::io_service *io_service,
                            int gcs_delay_ms)
     : disabled_(max_failures == 0),
+      flush_disabled_(max_failures == -2), // TODO fix: use different param
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
-      reclaimed_space_handler_(reclaimed_space_handler),
+      //reclaimed_space_handler_(reclaimed_space_handler),
       max_lineage_size_(max_lineage_size),
       max_failures_(max_failures),
       io_service_(io_service),
       gcs_delay_ms_(gcs_delay_ms) {
+  RAY_LOG(INFO) << "[LS] Disabled: " << disabled_ << ", Flush Disabled: " << flush_disabled_;
   if (gcs_delay_ms_ > 0) {
     // If a delay for the GCS was specified, then make sure that either the
     // lineage stash is disabled, or an event loop to instantiate deadline
@@ -296,7 +298,7 @@ bool LineageCache::AddWaitingTask(const Task &task, const Lineage &uncommitted_l
   if (disabled_) {
     return true;
   }
-  RAY_CHECK(!IsFull());
+  //RAY_CHECK(!IsFull());
 
   auto task_id = task.GetTaskSpecification().TaskId();
   RAY_LOG(DEBUG) << "Add waiting task " << task_id << " on " << client_id_;
@@ -458,6 +460,9 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
 }
 
 void LineageCache::FlushTask(const TaskID &task_id) {
+  if (flush_disabled_) {
+    return;
+  }
   auto entry = lineage_.GetEntryMutable(task_id);
   RAY_CHECK(entry);
   RAY_CHECK(entry->GetStatus() == GcsStatus::UNCOMMITTED_READY);
@@ -585,16 +590,16 @@ void LineageCache::HandleEntryCommitted(const TaskID &task_id, int version) {
   // Record the commit acknowledgement and attempt to evict the task.
   //committed_tasks_.insert(task_id);
   entry->SetStatus(GcsStatus::COMMITTED);
-  size_t pre_eviction_size = lineage_.Size();
+  //size_t pre_eviction_size = lineage_.Size();
   EvictTask(task_id);
-  size_t post_eviction_size = lineage_.Size();
+  //size_t post_eviction_size = lineage_.Size();
   // We got the notification about the task's commit, so no longer need any
   // more notifications.
   UnsubscribeTask(task_id);
 
-  if (pre_eviction_size >= max_lineage_size_ && post_eviction_size < max_lineage_size_) {
-    reclaimed_space_handler_();
-  }
+  //if (pre_eviction_size >= max_lineage_size_ && post_eviction_size < max_lineage_size_) {
+  //  reclaimed_space_handler_();
+  //}
 }
 
 const Task &LineageCache::GetTaskOrDie(const TaskID &task_id) const {

@@ -24,7 +24,7 @@ logging.basicConfig(format='%(asctime)s %(levelname)-4s %(message)s',
 log = logging.getLogger(__name__)
 
 DEBUG = False
-WAIT_MS = 10.0
+WAIT_MS = 1.0
 PROGRESS_LOG_FREQUENCY = 500
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
@@ -131,6 +131,8 @@ def main(args):
     if args.debug:
         log.setLevel(logging.DEBUG)
 
+    max_failures_flag = -2 if args.disable_flush else -1  # TODO fix
+
     internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
@@ -138,7 +140,7 @@ def main(args):
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": args.gcs_delay_ms,
         "use_gcs_only": int(args.gcs_only),
-        "lineage_stash_max_failures": -1 if args.nondeterminism else 1,
+        "lineage_stash_max_failures": max_failures_flag if args.nondeterminism else 1,
         "log_nondeterminism": int(args.nondeterminism),
         "max_lineage_size": args.max_lineage_size,
     })
@@ -280,14 +282,17 @@ def benchmark_throughput(workers, tokens, args):
             throughput_file = args.throughput_file
         log.info("Logging throughput to file %s", throughput_file)
         with open(throughput_file, 'a+') as f:
-            f.write('{},{},{},{},{},{}\n'.format(args.gcs_delay_ms,
-                                                 args.num_workers,
-                                                 args.max_lineage_size,
-                                                 args.task_duration,
-                                                 args.num_roundtrips,
-                                                 int(args.gcs_only),
-                                                 sys_throughput,
-                                                 sys_rt_throughput))
+            f.write('{},{},{},{},{},{},{},{},{},{},{}\n'.format(args.num_workers,
+                                                                args.num_roundtrips,
+                                                                args.task_duration,
+                                                                args.gcs_delay_ms,
+                                                                args.max_lineage_size,
+                                                                args.gcs_only,
+                                                                args.disable_flush,
+                                                                args.nondeterminism,
+                                                                int(args.gcs_only),
+                                                                sys_throughput,
+                                                                sys_rt_throughput))
 
 
 def benchmark_latency(workers, tokens, args):
@@ -353,6 +358,9 @@ if __name__ == "__main__":
         help='Max lineage size')
     parser.add_argument(
         '--gcs-only',
+        action='store_true')
+    parser.add_argument(
+        '--disable-flush',
         action='store_true')
     parser.add_argument(
         '--nondeterminism',
