@@ -19,11 +19,12 @@ from ray.tests.cluster_utils import Cluster
 import ray.cloudpickle as pickle
 from ray.experimental.internal_kv import _internal_kv_get, _internal_kv_put
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(format='%(asctime)s %(levelname)-4s %(message)s',
+                    level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
 log = logging.getLogger(__name__)
 
 DEBUG = False
-WAIT_MS = 10
+WAIT_MS = 10.0
 PROGRESS_LOG_FREQUENCY = 500
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
@@ -223,7 +224,7 @@ def main(args):
 
     if test_local:
         log.info("Shutting down...")
-        time.sleep(5)
+        time.sleep(args.num_workers * 2)
         cluster.shutdown()
 
 
@@ -279,11 +280,15 @@ def benchmark_throughput(workers, tokens, args):
             throughput_file = args.throughput_file
         log.info("Logging throughput to file %s", throughput_file)
         with open(throughput_file, 'a+') as f:
-            f.write('{},{},{},{},{}\n'.format(args.gcs_delay_ms,
-                                              args.task_duration,
-                                              args.num_roundtrips,
-                                              sys_throughput,
-                                              sys_rt_throughput))
+            f.write('{},{},{},{},{},{}\n'.format(args.gcs_delay_ms,
+                                                 args.num_workers,
+                                                 args.max_lineage_size,
+                                                 args.task_duration,
+                                                 args.num_roundtrips,
+                                                 int(args.gcs_only),
+                                                 sys_throughput,
+                                                 sys_rt_throughput))
+
 
 def benchmark_latency(workers, tokens, args):
     """
@@ -394,5 +399,6 @@ if __name__ == "__main__":
         help='File to record the throughput (throughput benchmark only)')
 
     args = parser.parse_args()
+    print(args)
 
     main(args)
