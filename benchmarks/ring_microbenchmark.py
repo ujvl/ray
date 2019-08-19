@@ -131,8 +131,6 @@ def main(args):
     if args.debug:
         log.setLevel(logging.DEBUG)
 
-    max_failures_flag = -2 if args.disable_flush else -1  # TODO fix
-
     internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
         "num_heartbeats_timeout": 20,
@@ -140,9 +138,9 @@ def main(args):
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": args.gcs_delay_ms,
         "use_gcs_only": int(args.gcs_only),
-        "lineage_stash_max_failures": max_failures_flag if args.nondeterminism else 1,
+        "lineage_stash_max_failures": args.max_failures if args.nondeterminism else 1,
         "log_nondeterminism": int(args.nondeterminism),
-        "max_lineage_size": args.max_lineage_size,
+        "max_lineage_size": 1 if args.disable_flush else args.max_lineage_size, # TODO: fix
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.
@@ -247,23 +245,25 @@ def benchmark_throughput(workers, tokens, args):
         i += 1
 
     ray.get([w.reset.remote() for w in workers])
-        
+
     i = 0
     log.info("Measuring for %s s...", measurement_duration)
-    measurement_end_ts = time.time() + measurement_duration 
+    measurement_end_ts = time.time() + measurement_duration
     while time.time() < measurement_end_ts:
         step(i, workers, tokens, num_roundtrips, task_duration, False)
         i += 1
+
+    log.info("Computing thput...")
+    num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
+
+    sys_throughput = int(num_tasks / measurement_duration)
+    avg_worker_throughput = int(sys_throughput / args.num_workers)
 
     num_rt_per_worker = i * args.num_roundtrips
     num_rt_sys = num_rt_per_worker * args.num_workers
     sys_rt_throughput = int(num_rt_sys / measurement_duration)
     avg_worker_rt_throughput = int(num_rt_per_worker / measurement_duration)
-    #log.info('yolo %s tasks/s', sys_rt_throughput * args.num_workers)
-
-    num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
-    sys_throughput = int(num_tasks / measurement_duration)
-    avg_worker_throughput = int(sys_throughput / args.num_workers)
+    #log.info('%s tasks/s', sys_rt_throughput * args.num_workers)
 
     log.info('Worker throughput (avg): %s tasks/s', avg_worker_throughput)
     log.info('Worker throughput (avg): %s rt/s', avg_worker_rt_throughput)
@@ -287,10 +287,10 @@ def benchmark_throughput(workers, tokens, args):
                                                                 args.task_duration,
                                                                 args.gcs_delay_ms,
                                                                 args.max_lineage_size,
+                                                                args.max_failures,
                                                                 args.gcs_only,
                                                                 args.disable_flush,
                                                                 args.nondeterminism,
-                                                                int(args.gcs_only),
                                                                 sys_throughput,
                                                                 sys_rt_throughput))
 
@@ -304,7 +304,7 @@ def benchmark_latency(workers, tokens, args):
         log.info("Starting iteration %d", i)
         results = step(i, workers, tokens, args.num_roundtrips, args.task_duration)
         latencies.append(results)
-    
+
     # Write latency
     if args.record_latency:
         if args.latency_file is None:
@@ -351,6 +351,11 @@ if __name__ == "__main__":
         '--gcs-delay-ms',
         default=-1,
         help='Delay when writing back to GCS. The default is to use the lineage stash.')
+    parser.add_argument(
+        '--max-failures',
+        default=-1,
+        type=int,
+        help='Max failures')
     parser.add_argument(
         '--max-lineage-size',
         default=10000000,
