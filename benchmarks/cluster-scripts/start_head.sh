@@ -5,6 +5,7 @@ USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
 NONDETERMINISM=$4
 MAX_FAILURES=${5:-1}
+MAX_LINEAGE_SIZE=${6:-1}
 
 #source activate tensorflow_p36
 #export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
@@ -42,6 +43,7 @@ ray start --head \
     "gcs_delay_ms": '$GCS_DELAY_MS',
     "use_gcs_only": '$USE_GCS_ONLY',
     "lineage_stash_max_failures": '$MAX_FAILURES',
+    "max_lineage_size": '$MAX_LINEAGE_SIZE',
     "log_nondeterminism": '$NONDETERMINISM',
     "num_heartbeats_timeout": 20,
     "object_manager_repeated_push_delay_ms": 1000,

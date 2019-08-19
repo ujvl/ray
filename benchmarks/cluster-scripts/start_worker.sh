@@ -5,12 +5,13 @@ USE_GCS_ONLY=$2
 GCS_DELAY_MS=$3
 NONDETERMINISM=$4
 MAX_FAILURES=$5
-OBJECT_STORE_MEMORY_GB=$6
-OBJECT_STORE_EVICTION=$7
-PEG=$8
-OBJECT_MANAGER_THREADS=$9
-NODE_RESOURCE=${10:-'Node'$RANDOM}
-SLEEP_TIME=${11:-$(( $RANDOM % 5 ))}
+MAX_LINEAGE_SIZE=$6
+OBJECT_STORE_MEMORY_GB=$7
+OBJECT_STORE_EVICTION=$8
+PEG=$9
+OBJECT_MANAGER_THREADS=${10}
+NODE_RESOURCE=${11:-'Node'$RANDOM}
+SLEEP_TIME=${12:-$(( $RANDOM % 5 ))}
 
 #source activate tensorflow_p36
 #export PATH=/home/ubuntu/anaconda3/envs/tensorflow_p36/bin/:$PATH
@@ -55,6 +56,7 @@ ray start --redis-address=$HEAD_IP:6379 \
     "use_gcs_only": '$USE_GCS_ONLY',
     "gcs_delay_ms": '$GCS_DELAY_MS',
     "lineage_stash_max_failures": '$MAX_FAILURES',
+    "max_lineage_size": '$MAX_LINEAGE_SIZE',
     "log_nondeterminism": '$NONDETERMINISM',
     "num_heartbeats_timeout": 20,
     "async_message_max_buffer_size": 100,
