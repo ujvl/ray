@@ -103,7 +103,7 @@ def step(iteration, workers, tokens, num_roundtrips, task_duration,
             time.sleep(WAIT_MS / 1000)
             clients = ray.global_state.client_table()
             failed_clients = [client for client in clients if not client['IsInsertion']]
-            assert len(failed_clients) == 0, "Client failed {}".format(failed_clients[0]['NodeManagerAddress'])
+            assert len(failed_clients) == 0, "Clients failed {}".format(failed_clients)
             worker_iteration = int(_internal_kv_get(token))
 
     if iteration % PROGRESS_LOG_FREQUENCY == 0:
@@ -249,27 +249,40 @@ def benchmark_throughput(workers, tokens, args):
     i = 0
     log.info("Measuring for %s s...", measurement_duration)
     measurement_end_ts = time.time() + measurement_duration
+
+    a = time.time()
     while time.time() < measurement_end_ts:
         step(i, workers, tokens, num_roundtrips, task_duration, False)
         i += 1
+    b = time.time()
 
-    log.info("Computing thput...")
-    num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
-
-    sys_throughput = int(num_tasks / measurement_duration)
-    avg_worker_throughput = int(sys_throughput / args.num_workers)
+    actual_measurement_duration = b - a
+    log.info("Actually measured for %s s", actual_measurement_duration)
 
     num_rt_per_worker = i * args.num_roundtrips
     num_rt_sys = num_rt_per_worker * args.num_workers
     sys_rt_throughput = int(num_rt_sys / measurement_duration)
     avg_worker_rt_throughput = int(num_rt_per_worker / measurement_duration)
-    #log.info('%s tasks/s', sys_rt_throughput * args.num_workers)
+    sys_throughput_est = sys_rt_throughput * args.num_workers
+    log.info('Throughput est: %s tasks/s', sys_throughput_est)
 
-    log.info('Worker throughput (avg): %s tasks/s', avg_worker_throughput)
-    log.info('Worker throughput (avg): %s rt/s', avg_worker_rt_throughput)
-    log.info('System throughput: %s tasks/s', sys_throughput)
-    log.info('System throughput: %s rt/s', sys_rt_throughput) # TODO: verify
-    log.info('Steps: %s', i)
+    sys_rt_throughput_2 = int(num_rt_sys / actual_measurement_duration)
+    sys_throughput_est_2 = sys_rt_throughput_2 * args.num_workers
+    log.info('Throughput est #2: %s tasks/s', sys_throughput_est_2)
+
+    #log.info("Getting remote num_tasks...")
+    #a = time.time()
+    #num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
+    #b = time.time()
+    #log.info("Took %s s", (b-a))
+
+    #sys_throughput = int(num_tasks / measurement_duration)
+    #avg_worker_throughput = int(sys_throughput / args.num_workers)
+    #log.info('Worker throughput (avg): %s tasks/s', avg_worker_throughput)
+    #log.info('Worker throughput (avg): %s rt/s', avg_worker_rt_throughput)
+    #log.info('System throughput: %s tasks/s', sys_throughput)
+    #log.info('System throughput: %s rt/s', sys_rt_throughput)
+    #log.info('Steps: %s', i)
 
     # Write throughput
     if args.record_throughput:
@@ -291,8 +304,10 @@ def benchmark_throughput(workers, tokens, args):
                                                                 args.gcs_only,
                                                                 args.disable_flush,
                                                                 args.nondeterminism,
-                                                                sys_throughput,
-                                                                sys_rt_throughput))
+                                                                sys_throughput_est,
+                                                                sys_throughput_est_2))
+                                                                #sys_throughput,
+                                                                #sys_rt_throughput))
 
 
 def benchmark_latency(workers, tokens, args):
