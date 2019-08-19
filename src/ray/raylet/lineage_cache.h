@@ -341,6 +341,7 @@ class LineageCache {
                              std::unordered_set<TaskID> &subscribe_tasks);
 
   bool disabled_;
+  bool flush_disabled_;
   /// The client ID, used to request notifications for specific tasks.
   /// TODO(swang): Move the ClientID into the generic Table implementation.
   ClientID client_id_;

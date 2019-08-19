@@ -233,11 +233,13 @@ const std::unordered_set<TaskID> &Lineage::GetChildren(const TaskID &task_id) co
 LineageCache::LineageCache(const ClientID &client_id,
                            gcs::TableInterface<TaskID, protocol::Task> &task_storage,
                            gcs::PubsubInterface<TaskID> &task_pubsub,
-                           uint64_t max_lineage_size, int64_t max_failures,
+                           uint64_t max_lineage_size, 
+                           int64_t max_failures,
                            const std::function<void()> &flush_all_callback,
                            boost::asio::io_service *io_service,
                            int gcs_delay_ms)
     : disabled_(max_failures == 0),
+      flush_disabled_(max_lineage_size == 1),
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
@@ -246,6 +248,18 @@ LineageCache::LineageCache(const ClientID &client_id,
       flush_all_callback_(flush_all_callback),
       io_service_(io_service),
       gcs_delay_ms_(gcs_delay_ms) {
+  if (flush_disabled_) {
+    RAY_LOG(INFO) << "[LS] Flush disabled";
+  } else {
+    RAY_LOG(INFO) << "[LS] Flush NOT disabled";
+  }
+  if (disabled_) {
+    RAY_LOG(INFO) << "[LS] GCS-only";
+  } else {
+    RAY_LOG(INFO) << "[LS] Lineage Stash enabled";
+  }
+  RAY_LOG(INFO) << "[LS] max lineage size: " << max_lineage_size_;
+  RAY_LOG(INFO) << "[LS] max failures: " << max_failures_;
   if (gcs_delay_ms_ > 0) {
     // If a delay for the GCS was specified, then make sure that either the
     // lineage stash is disabled, or an event loop to instantiate deadline
@@ -447,6 +461,9 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
 }
 
 void LineageCache::FlushTask(const TaskID &task_id) {
+  if (flush_disabled_) {
+    return;
+  }
   auto entry = lineage_.GetEntryMutable(task_id);
   RAY_CHECK(entry);
   RAY_CHECK(entry->GetStatus() <= GcsStatus::UNCOMMITTED_READY);
