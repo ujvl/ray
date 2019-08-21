@@ -20,7 +20,7 @@ else
     echo "Usage: $0 <num raylets> <head IP address> <use gcs only> <GCS delay ms> <num shards> <task duration> <num failures> <output dir>"
     exit
 fi
-output_prefix=$OUTPUT_DIR"/thput-"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$TASK_DURATION"-task-"$MAX_FAILURES"-failures-"$MAX_LINEAGE_SIZE"-lineagesize"
+output_prefix=$OUTPUT_DIR"/"$NUM_RAYLETS"-workers-"$NUM_SHARDS"-shards-"$USE_GCS_ONLY"-gcs-"$GCS_DELAY_MS"-gcsdelay-"$TASK_DURATION"-task-"$MAX_FAILURES"-failures-"$MAX_LINEAGE_SIZE"-lineagesize"
 
 if ls $output_prefix* 1> /dev/null 2>&1; then
     echo "Throughput file with prefix $output_prefix already found, skipping..."
@@ -28,8 +28,9 @@ if ls $output_prefix* 1> /dev/null 2>&1; then
 fi
 
 output_prefix=$output_prefix`date +%y-%m-%d-%H-%M-%S`
-thput_file=thput.txt
-output_file=$output_prefix.txt
+thput_file=thput.txt  # log row to this file
+lat_file=lat-$output_prefix.txt
+output_file=thput-$output_prefix.txt
 raylet_log_file=$output_prefix.out
 
 exit_code=1
@@ -47,7 +48,9 @@ while [[ $exit_code -ne 0 ]]; do
     cmd="python $HOME_DIR/../ring_microbenchmark.py 
     --benchmark-thput
     --record-throughput 
+    --record-latency
     --throughput-file $thput_file
+    --latency-file $lat_file
     --thput-measurement-duration 120
     --num-workers $NUM_RAYLETS 
     --num-roundtrips $NUM_RTS  

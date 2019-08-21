@@ -250,9 +250,11 @@ def benchmark_throughput(workers, tokens, args):
     log.info("Measuring for %s s...", measurement_duration)
     measurement_end_ts = time.time() + measurement_duration
 
+    latencies = []
     a = time.time()
     while time.time() < measurement_end_ts:
-        step(i, workers, tokens, num_roundtrips, task_duration, False)
+        results = step(i, workers, tokens, num_roundtrips, task_duration, args.record_latency)
+        latencies.append(results)
         i += 1
     b = time.time()
 
@@ -269,20 +271,6 @@ def benchmark_throughput(workers, tokens, args):
     sys_rt_throughput_2 = int(num_rt_sys / actual_measurement_duration)
     sys_throughput_est_2 = sys_rt_throughput_2 * args.num_workers
     log.info('Throughput est #2: %s tasks/s', sys_throughput_est_2)
-
-    #log.info("Getting remote num_tasks...")
-    #a = time.time()
-    #num_tasks = sum(ray.get([worker.num_tasks.remote() for worker in workers]))
-    #b = time.time()
-    #log.info("Took %s s", (b-a))
-
-    #sys_throughput = int(num_tasks / measurement_duration)
-    #avg_worker_throughput = int(sys_throughput / args.num_workers)
-    #log.info('Worker throughput (avg): %s tasks/s', avg_worker_throughput)
-    #log.info('Worker throughput (avg): %s rt/s', avg_worker_rt_throughput)
-    #log.info('System throughput: %s tasks/s', sys_throughput)
-    #log.info('System throughput: %s rt/s', sys_rt_throughput)
-    #log.info('Steps: %s', i)
 
     # Write throughput
     if args.record_throughput:
@@ -306,8 +294,8 @@ def benchmark_throughput(workers, tokens, args):
                                                                 args.nondeterminism,
                                                                 sys_throughput_est,
                                                                 sys_throughput_est_2))
-                                                                #sys_throughput,
-                                                                #sys_rt_throughput))
+    if args.record_latency:
+        record_latencies(latencies, args.latency_file)
 
 
 def benchmark_latency(workers, tokens, args):
@@ -319,20 +307,21 @@ def benchmark_latency(workers, tokens, args):
         log.info("Starting iteration %d", i)
         results = step(i, workers, tokens, args.num_roundtrips, args.task_duration)
         latencies.append(results)
-
     # Write latency
     if args.record_latency:
-        if args.latency_file is None:
-            latency_file = "latency-{}-workers-{}.txt".format(
+        record_latencies(latencies, args.latency_file)
+
+
+def record_latencies(latencies, latency_file_name):
+    if latency_file_name is None:
+        latency_file_name = "latency-{}-workers-{}.txt".format(
                 len(workers),
                 str(datetime.datetime.now()))
-        else:
-            latency_file = args.latency_file
-        log.info("Logging latencies to file %s", latency_file)
-        with open(latency_file, 'a+') as f:
-            for i, latency in enumerate(latencies):
-                for l in latency:
-                    f.write('{},{}\n'.format(i, l))
+    log.info("Logging latencies to file %s", latency_file)
+    with open(latency_file_name, 'a+') as f:
+        for i, latency in enumerate(latencies):
+            for l in latency:
+                f.write('{},{}\n'.format(i, l))
 
 
 if __name__ == "__main__":
@@ -388,11 +377,11 @@ if __name__ == "__main__":
     parser.add_argument(
         '--debug',
         action='store_true')
-    # Latency benchmark options
     parser.add_argument(
         '--record-latency',
         action='store_true',
-        help='Whether to record the latency (latency benchmark only)')
+        help='Whether to record the latency')
+    # Latency benchmark options
     parser.add_argument(
         '--latency-file',
         default=None,
