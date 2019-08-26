@@ -239,7 +239,7 @@ LineageCache::LineageCache(const ClientID &client_id,
                            boost::asio::io_service *io_service,
                            int gcs_delay_ms)
     : disabled_(max_failures == 0),
-      flush_disabled_(max_lineage_size == 1),
+      flush_policy_(max_lineage_size),
       client_id_(client_id),
       task_storage_(task_storage),
       task_pubsub_(task_pubsub),
@@ -248,12 +248,8 @@ LineageCache::LineageCache(const ClientID &client_id,
       flush_all_callback_(flush_all_callback),
       io_service_(io_service),
       gcs_delay_ms_(gcs_delay_ms) {
-  if (flush_disabled_) {
-    RAY_LOG(INFO) << "[LS] Flush disabled";
-  } else {
-    RAY_LOG(INFO) << "[LS] Flush NOT disabled";
-  }
-  if (disabled_) {
+  RAY_LOG(INFO) << "[LS] Flush policy: " << flush_policy_;
+  if (disabled_) { 
     RAY_LOG(INFO) << "[LS] GCS-only";
   } else {
     RAY_LOG(INFO) << "[LS] Lineage Stash enabled";
@@ -461,7 +457,7 @@ Lineage LineageCache::GetUncommittedLineageOrDie(const TaskID &task_id,
 }
 
 void LineageCache::FlushTask(const TaskID &task_id) {
-  if (flush_disabled_) {
+  if (flush_policy_ == 2) {
     return;
   }
   auto entry = lineage_.GetEntryMutable(task_id);
@@ -630,6 +626,8 @@ bool LineageCache::ContainsTask(const TaskID &task_id) const {
 const Lineage &LineageCache::GetLineage() const { return lineage_; }
 
 bool LineageCache::Disabled() const { return disabled_; }
+
+uint64_t LineageCache::FlushPolicy() const { return flush_policy_; }
 
 void LineageCache::FlushAll() {
   size_t num_flushed = 0;

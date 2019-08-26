@@ -45,7 +45,7 @@ ray start --head \
     "lineage_stash_max_failures": '$MAX_FAILURES',
     "max_lineage_size": '$MAX_LINEAGE_SIZE',
     "log_nondeterminism": '$NONDETERMINISM',
-    "num_heartbeats_timeout": 20,
+    "num_heartbeats_timeout": 200,
     "object_manager_repeated_push_delay_ms": 1000,
     "object_manager_pull_timeout_ms": 1000,
     "object_manager_send_threads": '$SEND_THREADS',

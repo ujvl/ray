@@ -13,6 +13,9 @@ HOME_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )
 
 NUM_RTS=100
 NONDETERMINISM=1
+RECORD_LATENCY=1
+DEBUG=0
+DURATION=60
 
 if [[ $# -eq 8 || $# -eq 9 ]]; then
     echo "Running with $NUM_RAYLETS workers, use gcs only? $USE_GCS_ONLY, $GCS_DELAY_MS ms GCS delay"
@@ -29,16 +32,17 @@ fi
 
 output_prefix=$output_prefix`date +%y-%m-%d-%H-%M-%S`
 thput_file=thput.txt  # log row to this file
-lat_file=lat-$output_prefix.txt
-output_file=thput-$output_prefix.txt
+lat_file="$output_prefix"-lat.txt
+output_file="$output_prefix"-out.txt
 raylet_log_file=$output_prefix.out
 
 exit_code=1
 i=0
+max_attempts=3
 while [[ $exit_code -ne 0 ]]; do
     echo "Attempt #$i"
-    if [[ $i -eq 3 ]]; then
-        echo "Failed 3 attempts " >> $output_file
+    if [[ $i -eq $max_attempts ]]; then
+        echo "Failed $max_attempts attempts " >> $output_file
         exit
     fi
 
@@ -48,25 +52,30 @@ while [[ $exit_code -ne 0 ]]; do
     cmd="python $HOME_DIR/../ring_microbenchmark.py 
     --benchmark-thput
     --record-throughput 
-    --record-latency
     --throughput-file $thput_file
     --latency-file $lat_file
-    --thput-measurement-duration 120
+    --thput-measurement-duration $DURATION
     --num-workers $NUM_RAYLETS 
     --num-roundtrips $NUM_RTS  
     --redis-address $HEAD_IP:6379 
     --gcs-delay-ms $GCS_DELAY_MS 
-    --task-duration 0.$TASK_DURATION
+    --task-duration $TASK_DURATION
     --max-failures $MAX_FAILURES
     --max-lineage-size $MAX_LINEAGE_SIZE"
 
     if [[ $NONDETERMINISM -eq 1 ]]; then
       cmd=$cmd" --nondeterminism"
     fi
+    if [[ $RECORD_LATENCY -eq 1 ]]; then
+      cmd=$cmd" --record-latency"
+    fi
     if [[ $USE_GCS_ONLY -eq 1 ]]; then
       cmd=$cmd" --gcs-only"
     fi
-    if [[ $MAX_LINEAGE_SIZE -eq 1 ]]; then
+    if [[ $DEBUG -eq 1 ]]; then
+      cmd=$cmd" --debug"
+    fi
+    if [[ $MAX_LINEAGE_SIZE -eq 2 ]]; then
       cmd=$cmd" --disable-flush"
     fi
 

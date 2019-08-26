@@ -1513,7 +1513,8 @@ void NodeManager::SubmitTask(const Task &task, const Lineage &uncommitted_lineag
       _SubmitTask(task, uncommitted_lineage, forwarded, push);
     }
   } else {
-    if (!forwarded) {
+    // 0 = both flush, 1 = no flush, 2 = receiver flush, we should only flush at the sender for 0.
+    if (!forwarded && lineage_cache_.FlushPolicy() == 0) { 
       // We started running the task, so the task is ready to write to GCS.
       if (!lineage_cache_.AddReadyTask(task)) {
         RAY_LOG(WARNING) << "Task " << spec.TaskId() << " already in lineage cache."

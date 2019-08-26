@@ -39,7 +39,7 @@ if [[ $USE_GCS_ONLY -eq 1 && $MAX_FAILURES -ne 1 ]]; then
   exit
 fi
 
-if [[ $USE_GCS_ONLY -eq 1 && $MAX_LINEAGE_SIZE -eq 1 ]]; then
+if [[ $USE_GCS_ONLY -eq 1 && $MAX_LINEAGE_SIZE -ne 0 ]]; then
   echo "Specified GCS only, but max lineage size set to $MAX_FAILURES"
   exit
 fi

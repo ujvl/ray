@@ -319,6 +319,8 @@ class LineageCache {
 
   bool Disabled() const;
 
+  uint64_t FlushPolicy() const;
+
   void FlushTask(const Task &task, const gcs::raylet::TaskTable::WriteCallback &task_callback, int64_t gcs_delay_ms);
 
  private:
@@ -341,7 +343,7 @@ class LineageCache {
                              std::unordered_set<TaskID> &subscribe_tasks);
 
   bool disabled_;
-  bool flush_disabled_;
+  uint64_t flush_policy_;
   /// The client ID, used to request notifications for specific tasks.
   /// TODO(swang): Move the ClientID into the generic Table implementation.
   ClientID client_id_;

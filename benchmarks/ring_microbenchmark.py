@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 DEBUG = False
 WAIT_MS = 1.0
-PROGRESS_LOG_FREQUENCY = 500
+PROGRESS_LOG_FREQUENCY = 5
 CHECKPOINT_DIR = '/tmp/ray-checkpoints'
 
 
@@ -39,7 +39,7 @@ class RingWorker(object):
         self.worker_index = worker_index
         self.num_workers = num_workers
         self.token = token
-        self.task_duration = task_duration
+        self.task_duration = task_duration / 1000.0
         self.receiver = None
         self.reset()
 
@@ -67,7 +67,7 @@ class RingWorker(object):
     @ray.method(num_return_vals=0)
     def send(self, token, num_roundtrips_remaining, timestamp):
         self.tasks += 1
-        #debug("send", token, num_roundtrips_remaining, timestamp)
+        debug("send", token, num_roundtrips_remaining, timestamp, (time.time() - timestamp) * 1000, "ms")
         if self.task_duration > 0:
             time.sleep(self.task_duration)
 
@@ -113,14 +113,6 @@ def step(iteration, workers, tokens, num_roundtrips, task_duration,
         start = time.time()
         latencies = ray.get([worker.get_latencies.remote() for worker in workers])
         log.debug("Got latencies for step %d after %f", iteration, time.time() - start)
-
-        latencies = np.array(latencies)
-        latencies -= task_duration * (len(workers))
-        latencies /= len(workers)
-        latencies = np.reshape(latencies, (num_roundtrips - 1) * len(workers))
-        log.info("Mean latency step %d: %f", iteration, np.mean(latencies))
-        log.info("Max latency step %d: %f", iteration, np.max(latencies))
-        log.info("Stddev latency step %d: %f", iteration, np.std(latencies))
     else:
         latencies = []
 
@@ -133,14 +125,14 @@ def main(args):
 
     internal_config = json.dumps({
         "initial_reconstruction_timeout_milliseconds": 200,
-        "num_heartbeats_timeout": 20,
+        "num_heartbeats_timeout": 200,
         "object_manager_repeated_push_delay_ms": 1000,
         "object_manager_pull_timeout_ms": 1000,
         "gcs_delay_ms": args.gcs_delay_ms,
         "use_gcs_only": int(args.gcs_only),
         "lineage_stash_max_failures": args.max_failures if args.nondeterminism else 1,
         "log_nondeterminism": int(args.nondeterminism),
-        "max_lineage_size": 1 if args.disable_flush else args.max_lineage_size, # TODO: fix
+        "max_lineage_size": 2 if args.disable_flush else args.max_lineage_size, # TODO: fix
     })
     plasma_store_memory_gb = 5
     # Start the Ray processes.
@@ -238,18 +230,16 @@ def benchmark_throughput(workers, tokens, args):
     num_roundtrips = args.num_roundtrips
 
     i = 0
-    log.info("Warming up for %s s...", warmup_duration)
-    warmup_end_ts = time.time() + warmup_duration
-    while time.time() < warmup_end_ts:
-        step(i, workers, tokens, num_roundtrips, task_duration, False)
-        i += 1
-
-    ray.get([w.reset.remote() for w in workers])
+    #log.info("Warming up for %s s...", warmup_duration)
+    #warmup_end_ts = time.time() + warmup_duration
+    #while time.time() < warmup_end_ts:
+    #    step(i, workers, tokens, num_roundtrips, task_duration, False)
+    #    i += 1
+    #ray.get([w.reset.remote() for w in workers])
 
     i = 0
     log.info("Measuring for %s s...", measurement_duration)
     measurement_end_ts = time.time() + measurement_duration
-
     latencies = []
     a = time.time()
     while time.time() < measurement_end_ts:
@@ -259,6 +249,7 @@ def benchmark_throughput(workers, tokens, args):
     b = time.time()
 
     actual_measurement_duration = b - a
+    log.info('# of steps completed: %s', i)
     log.info("Actually measured for %s s", actual_measurement_duration)
 
     num_rt_per_worker = i * args.num_roundtrips
@@ -295,7 +286,12 @@ def benchmark_throughput(workers, tokens, args):
                                                                 sys_throughput_est,
                                                                 sys_throughput_est_2))
     if args.record_latency:
-        record_latencies(latencies, args.latency_file)
+        # Pre-process each latency array
+        processed_latencies = []
+        for i in range(len(latencies)):
+            processed_latencies.append(process_latencies(i, latencies[i], args))
+        # record the latencies
+        record_latencies(processed_latencies, args.latency_file)
 
 
 def benchmark_latency(workers, tokens, args):
@@ -306,10 +302,21 @@ def benchmark_latency(workers, tokens, args):
     for i in range(args.num_iterations):
         log.info("Starting iteration %d", i)
         results = step(i, workers, tokens, args.num_roundtrips, args.task_duration)
-        latencies.append(results)
+        latencies.append(process_latencies(i, results, args))
     # Write latency
     if args.record_latency:
         record_latencies(latencies, args.latency_file)
+
+
+def process_latencies(i, latencies, args):
+    latencies = np.array(latencies)
+    latencies -= (args.task_duration / 1000.0) * (args.num_workers)
+    latencies /= args.num_workers
+    latencies = np.reshape(latencies, (args.num_roundtrips - 1) * args.num_workers)
+    log.info("Mean latency step %d: %f", i, np.mean(latencies))
+    log.info("Max latency step %d: %f", i, np.max(latencies))
+    log.info("Stddev latency step %d: %f", i, np.std(latencies))
+    return latencies
 
 
 def record_latencies(latencies, latency_file_name):
@@ -317,7 +324,7 @@ def record_latencies(latencies, latency_file_name):
         latency_file_name = "latency-{}-workers-{}.txt".format(
                 len(workers),
                 str(datetime.datetime.now()))
-    log.info("Logging latencies to file %s", latency_file)
+    log.info("Logging latencies to file %s", latency_file_name)
     with open(latency_file_name, 'a+') as f:
         for i, latency in enumerate(latencies):
             for l in latency:
@@ -416,6 +423,4 @@ if __name__ == "__main__":
         help='File to record the throughput (throughput benchmark only)')
 
     args = parser.parse_args()
-    print(args)
-
     main(args)
